@@ -1,0 +1,23 @@
+{
+  "algo_name": "VWAP + MACD Crossover",
+  "enabled": true,
+  "paper_mode": true,
+  "quote_currency": "INR",
+  "symbols": ["GOLD", "SILVER", "CRUDEOIL", "NATURALGAS"],
+  "timeframe": "15m",
+  "indicators": {
+    "macd": {
+      "fast": 12,
+      "slow": 26,
+      "signal": 9
+    },
+    "vwap": {
+      "enabled": true
+    }
+  },
+  "trading_hours": {
+    "start": "09:00",
+    "end": "23:25"
+  },
+  "notes": "MCX hours. Bullion trades 9AM-11:30PM. Agri has different hours."
+}

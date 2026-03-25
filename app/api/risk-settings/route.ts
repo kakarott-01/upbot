@@ -1,0 +1,76 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { auth } from '@/lib/auth'
+import { db } from '@/lib/db'
+import { riskSettings } from '@/lib/schema'
+import { eq } from 'drizzle-orm'
+import { z } from 'zod'
+
+const schema = z.object({
+  maxPositionPct: z.number().min(0.1).max(100),
+  stopLossPct: z.number().min(0.1).max(100),
+  takeProfitPct: z.number().min(0.1).max(100),
+  maxDailyLossPct: z.number().min(0.1).max(100),
+  maxOpenTrades: z.number().int().min(1).max(20),
+  cooldownSeconds: z.number().int().min(0).max(86400),
+  trailingStop: z.boolean(),
+})
+
+export async function GET(req: NextRequest) {
+  const session = await auth()
+
+  // ✅ FIX
+  if (!session?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const settings = await db.query.riskSettings.findFirst({
+    where: eq(riskSettings.userId, session.id),
+  })
+
+  return NextResponse.json(settings ?? {})
+}
+
+export async function POST(req: NextRequest) {
+  const session = await auth()
+
+  // ✅ FIX
+  if (!session?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const body = await req.json()
+  const parsed = schema.safeParse(body)
+
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
+  }
+
+  const d = parsed.data
+
+  await db.insert(riskSettings)
+    .values({
+      userId: session.id,
+      maxPositionPct: String(d.maxPositionPct),
+      stopLossPct: String(d.stopLossPct),
+      takeProfitPct: String(d.takeProfitPct),
+      maxDailyLossPct: String(d.maxDailyLossPct),
+      maxOpenTrades: d.maxOpenTrades,
+      cooldownSeconds: d.cooldownSeconds,
+      trailingStop: d.trailingStop,
+    })
+    .onConflictDoUpdate({
+      target: riskSettings.userId,
+      set: {
+        maxPositionPct: String(d.maxPositionPct),
+        stopLossPct: String(d.stopLossPct),
+        takeProfitPct: String(d.takeProfitPct),
+        maxDailyLossPct: String(d.maxDailyLossPct),
+        maxOpenTrades: d.maxOpenTrades,
+        cooldownSeconds: d.cooldownSeconds,
+        trailingStop: d.trailingStop,
+        updatedAt: new Date(),
+      },
+    })
+
+  return NextResponse.json({ success: true })
+}

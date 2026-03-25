@@ -1,0 +1,26 @@
+{
+  "algo_name": "EMA Crossover + RSI + Volume",
+  "enabled": true,
+  "paper_mode": true,
+  "quote_currency": "INR",
+  "symbols": ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"],
+  "timeframe": "5m",
+  "indicators": {
+    "ema_fast": { "period": 9 },
+    "ema_slow": { "period": 21 },
+    "rsi": {
+      "period": 14,
+      "threshold": 50
+    },
+    "volume": {
+      "avg_period": 20,
+      "spike_multiplier": 1.5
+    }
+  },
+  "trading_hours": {
+    "start": "09:20",
+    "end": "15:15",
+    "square_off": "15:15"
+  },
+  "notes": "Auto square-off at 15:15 IST. No trades in first 5 mins after open."
+}

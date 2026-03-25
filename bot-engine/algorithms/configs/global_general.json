@@ -1,0 +1,21 @@
+{
+  "algo_name": "Universal Trend Follower",
+  "enabled": true,
+  "paper_mode": true,
+  "quote_currency": "USDT",
+  "symbols": ["BTC/USDT", "ETH/USDT"],
+  "timeframe": "1h",
+  "indicators": {
+    "ema_fast": { "period": 50 },
+    "ema_slow": { "period": 200 },
+    "rsi": {
+      "period": 14,
+      "buy_zone_low": 40,
+      "buy_zone_high": 55,
+      "sell_zone_low": 45,
+      "sell_zone_high": 60
+    },
+    "atr": { "period": 14 }
+  },
+  "notes": "Universal algo. Works on any market. Uses EMA 50/200 regime + RSI pullback entry."
+}

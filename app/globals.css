@@ -1,0 +1,76 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #030712;
+  color: #f9fafb;
+  font-family: system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.card {
+  background: #0f172a;
+  border: 1px solid #1f2937;
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+
+@media (min-width: 768px) {
+  .card { padding: 1.25rem; }
+}
+
+.stat-card {
+  background: rgba(15, 23, 42, 0.8);
+  border: 1px solid #1f2937;
+  border-radius: 0.75rem;
+  padding: 0.9rem;
+  min-height: 120px;
+}
+
+.stat-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+  text-transform: uppercase;
+}
+
+.stat-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: #f8fafc;
+  margin-bottom: 0.15rem;
+}
+
+.stat-sub {
+  color: #94a3b8;
+  font-size: 0.75rem;
+}
+
+.badge-gray {
+  background: rgba(148, 163, 184, 0.18);
+  color: #cbd5e1;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-radius: 9999px;
+  padding: 0.2rem 0.55rem;
+}
+
+.pnl-positive {
+  color: #34d399;
+}
+
+.pnl-negative {
+  color: #f87171;
+}
+
+@media (max-width: 640px) {
+  .stat-card { min-height: auto; padding: 0.85rem; }
+  .card { padding: 0.85rem; }
+}
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #111827; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 99px; }
