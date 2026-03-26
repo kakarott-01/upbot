@@ -19,7 +19,7 @@ def _get_fernet() -> Fernet:
 
 def decrypt_field(ciphertext: str) -> str:
     try:
-        from Cryptodome.Cipher import AES
+        from Crypto.Cipher import AES
         import base64, hashlib
 
         key = os.getenv("ENCRYPTION_KEY", "").encode()[:32]
