@@ -5,16 +5,25 @@ from typing import Optional, Dict, List
 
 logger = logging.getLogger(__name__)
 
-# Exchange mapping
+# ccxt exchange IDs for each exchange name used in the UI
 EXCHANGE_MAP = {
-    "bingx": "bingx",
-    "coindcx": "coindcx",
-    "coinswitch": "coinswitch",
-    "delta": "delta",
-    "binance": "binance",
-    "kraken": "kraken",
+    "bingx":       "bingx",
+    "coindcx":     "coindcx",
+    "coinswitch":  "coinswitch",
+    "delta":       "delta",
+    "deltaexch":   "delta",
+    "binance":     "binance",
+    "kraken":      "kraken",
+    "ibkr":        "ibkr",
     "interactive": "ibkr",
+    # Indian brokers supported by ccxt (limited):
+    # Zerodha, Dhan, Upstox, Fyers use proprietary SDKs —
+    # map them to a passthrough so the error is clear.
 }
+
+# Which markets trade futures/swaps vs spot
+FUTURES_MARKETS = {"crypto", "commodities", "global"}
+SPOT_MARKETS    = {"indian"}
 
 
 class ExchangeConnector:
@@ -24,35 +33,42 @@ class ExchangeConnector:
         api_key: str,
         api_secret: str,
         extra: Optional[Dict] = None,
+        market_type: str = "crypto",
     ):
         self.exchange_name = exchange_name.lower()
-        self.extra = extra or {}
+        self.extra         = extra or {}
+        self.market_type   = market_type
 
         if not api_key or not api_secret:
-            raise Exception("❌ API keys missing in ExchangeConnector")
+            raise ValueError("❌ API keys missing in ExchangeConnector")
 
-        ccxt_id = EXCHANGE_MAP.get(self.exchange_name, self.exchange_name)
-        ExClass = getattr(ccxt, ccxt_id, None)
+        ccxt_id  = EXCHANGE_MAP.get(self.exchange_name, self.exchange_name)
+        ExClass  = getattr(ccxt, ccxt_id, None)
 
         if not ExClass:
-            raise ValueError(f"Exchange '{exchange_name}' not supported")
+            raise ValueError(
+                f"Exchange '{exchange_name}' (ccxt id: '{ccxt_id}') is not supported by ccxt. "
+                f"For Indian brokers (Zerodha, Dhan, Upstox, Fyers) you need their proprietary SDK."
+            )
 
-        # 🔥 Important for BingX
-        options = {
-            "defaultType": "swap",   # futures
-        }
+        # ── Set correct trading mode based on market type ──────────────────
+        # Spot for Indian equities; swap/futures for crypto/commodities/global
+        if market_type in FUTURES_MARKETS:
+            options = {"defaultType": "swap"}
+        else:
+            options = {"defaultType": "spot"}
 
-        logger.info(f"🔌 Initializing exchange: {ccxt_id}")
+        logger.info(f"🔌 Initializing {ccxt_id} in {options['defaultType']} mode for market={market_type}")
 
         self.exchange = ExClass({
-            "apiKey": api_key,
-            "secret": api_secret,
+            "apiKey":          api_key,
+            "secret":          api_secret,
             "enableRateLimit": True,
-            "options": options,
+            "options":         options,
             **self.extra,
         })
 
-    # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def fetch_ohlcv(
         self,
@@ -63,48 +79,43 @@ class ExchangeConnector:
         try:
             raw = await self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
 
+            if not raw:
+                raise ValueError(f"Empty OHLCV response for {symbol}")
+
             df = pd.DataFrame(
                 raw,
                 columns=["timestamp", "open", "high", "low", "close", "volume"],
             )
-
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             df.set_index("timestamp", inplace=True)
-
             return df.astype(float)
 
         except Exception as e:
-            logger.error(f"❌ OHLCV fetch failed: {e}", exc_info=True)
+            logger.error(f"❌ OHLCV fetch failed for {symbol}: {e}", exc_info=True)
             raise
 
-    # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def get_balance(self, currency: str = "USDT") -> float:
         try:
             balance = await self.exchange.fetch_balance()
-
-            free_balance = balance.get("free", {})
-            value = float(free_balance.get(currency, 0))
-
+            value   = float(balance.get("free", {}).get(currency, 0))
             logger.info(f"💰 Balance {currency}: {value}")
-
             return value
-
         except Exception as e:
             logger.error(f"❌ Balance fetch failed: {e}", exc_info=True)
             raise
 
-    # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def fetch_ticker(self, symbol: str) -> Dict:
         try:
-            ticker = await self.exchange.fetch_ticker(symbol)
-            return ticker
+            return await self.exchange.fetch_ticker(symbol)
         except Exception as e:
-            logger.error(f"❌ Ticker fetch failed: {e}", exc_info=True)
+            logger.error(f"❌ Ticker fetch failed for {symbol}: {e}", exc_info=True)
             raise
 
-    # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def place_order(
         self,
@@ -115,39 +126,31 @@ class ExchangeConnector:
         price: Optional[float] = None,
     ) -> Dict:
         try:
-            side = side.lower()  # 🔥 IMPORTANT
-
-            logger.info(f"📤 Placing order: {side} {quantity} {symbol}")
+            side = side.lower()
+            logger.info(f"📤 Placing {order_type} {side} order: {quantity} {symbol}")
 
             if order_type == "market":
-                order = await self.exchange.create_order(
-                    symbol, "market", side, quantity
-                )
+                order = await self.exchange.create_order(symbol, "market", side, quantity)
             else:
-                order = await self.exchange.create_order(
-                    symbol, "limit", side, quantity, price
-                )
+                order = await self.exchange.create_order(symbol, "limit", side, quantity, price)
 
-            logger.info(f"✅ Order placed: {order.get('id')}")
+            logger.info(f"✅ Order placed: id={order.get('id')}")
             return order
 
         except Exception as e:
             logger.error(f"❌ Order failed: {e}", exc_info=True)
             raise
 
-    # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
-    async def fetch_open_orders(
-        self,
-        symbol: Optional[str] = None,
-    ) -> List[Dict]:
+    async def fetch_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
         try:
             return await self.exchange.fetch_open_orders(symbol)
         except Exception as e:
             logger.error(f"❌ Fetch open orders failed: {e}", exc_info=True)
             return []
 
-    # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def cancel_order(self, order_id: str, symbol: str) -> Dict:
         try:
@@ -156,7 +159,7 @@ class ExchangeConnector:
             logger.error(f"❌ Cancel order failed: {e}", exc_info=True)
             raise
 
-    # ─────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
     async def close(self):
         try:

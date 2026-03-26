@@ -1,27 +1,32 @@
 'use client'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Play, Square, TrendingUp, TrendingDown, Activity, DollarSign } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { TrendingUp, Activity, DollarSign } from 'lucide-react'
 import { PnlChart } from '@/components/charts/pnl-chart'
 import { TradeTable } from '@/components/dashboard/trade-table'
 import { BotControls } from '@/components/dashboard/bot-controls'
-import { formatCurrency, formatPct } from '@/lib/utils'
+import { formatCurrency } from '@/lib/utils'
 
 export default function DashboardPage() {
-  const qc = useQueryClient()
-
   const { data: tradesData } = useQuery({
     queryKey: ['trades'],
     queryFn:  () => fetch('/api/trades?limit=50').then(r => r.json()),
   })
 
-  const { data: botData } = useQuery({
-    queryKey: ['bot-status'],
-    queryFn:  () => fetch('/api/bot/status').then(r => r.json()),
+  const { data: botData, isLoading: botLoading } = useQuery({
+    queryKey:        ['bot-status'],
+    queryFn:         () => fetch('/api/bot/status').then(r => r.json()),
     refetchInterval: 5000,
+    // Never flash back to empty while re-fetching — carry previous value
+    placeholderData: (prev) => prev,
   })
 
-  const summary = tradesData?.summary ?? { totalPnl: 0, winRate: 0, total: 0, closed: 0 }
+  const summary      = tradesData?.summary ?? { totalPnl: 0, winRate: 0, total: 0, closed: 0 }
   const recentTrades = tradesData?.trades?.slice(0, 10) ?? []
+
+  // Bot status card values — show skeleton while the very first fetch is in flight
+  const botStatus        = botData?.status ?? 'stopped'
+  const botIsRunning     = botStatus === 'running'
+  const botActiveMarkets = botData?.activeMarkets ?? []
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto px-3 sm:px-4">
@@ -31,14 +36,16 @@ export default function DashboardPage() {
         <div>
           <h1 className="text-xl font-semibold text-gray-100">Dashboard</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            {new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long' })}
+            {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
         </div>
+        {/* botData passed directly — BotControls reads the live query internally */}
         <BotControls botData={botData} />
       </div>
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+
         <div className="stat-card">
           <div className="flex items-center justify-between mb-1">
             <span className="stat-label">Total P&L</span>
@@ -70,24 +77,42 @@ export default function DashboardPage() {
           <span className="stat-sub">Since inception</span>
         </div>
 
+        {/* Bot Status card — skeleton while loading, never flickers to stale state */}
         <div className="stat-card">
           <div className="flex items-center justify-between mb-1">
             <span className="stat-label">Bot Status</span>
-            <span className={`w-2 h-2 rounded-full ${
-              botData?.status === 'running' ? 'bg-brand-500 animate-pulse' : 'bg-gray-700'
-            }`} />
+            {botLoading && !botData ? (
+              // First-load skeleton dot
+              <span className="w-2 h-2 rounded-full bg-gray-700 animate-pulse" />
+            ) : (
+              <span className={`w-2 h-2 rounded-full ${
+                botIsRunning ? 'bg-brand-500 animate-pulse' : 'bg-gray-700'
+              }`} />
+            )}
           </div>
-          <div className={`stat-value text-base font-medium ${
-            botData?.status === 'running' ? 'text-brand-500' : 'text-gray-500'
-          }`}>
-            {botData?.status === 'running' ? 'Running' : 'Stopped'}
-          </div>
-          <span className="stat-sub">
-            {botData?.activeMarkets?.length
-              ? botData.activeMarkets.join(' · ')
-              : 'No active markets'}
-          </span>
+
+          {botLoading && !botData ? (
+            // First-load skeleton text
+            <>
+              <div className="h-5 w-20 bg-gray-800 rounded animate-pulse mb-1" />
+              <div className="h-3 w-28 bg-gray-800 rounded animate-pulse" />
+            </>
+          ) : (
+            <>
+              <div className={`stat-value text-base font-medium ${
+                botIsRunning ? 'text-brand-500' : 'text-gray-500'
+              }`}>
+                {botIsRunning ? 'Running' : 'Stopped'}
+              </div>
+              <span className="stat-sub">
+                {botActiveMarkets.length
+                  ? botActiveMarkets.join(' · ')
+                  : 'No active markets'}
+              </span>
+            </>
+          )}
         </div>
+
       </div>
 
       {/* P&L Chart */}
@@ -109,6 +134,7 @@ export default function DashboardPage() {
         </div>
         <TradeTable trades={recentTrades} compact />
       </div>
+
     </div>
   )
 }

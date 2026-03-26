@@ -1,7 +1,8 @@
 'use client'
+
 import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Play, Square, AlertTriangle } from 'lucide-react'
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query'
+import { Play, Square, AlertTriangle, Loader2 } from 'lucide-react'
 
 const MARKETS = [
   { id: 'indian',      label: '🇮🇳 Indian' },
@@ -11,23 +12,74 @@ const MARKETS = [
 ]
 
 export function BotControls({ botData }: { botData: any }) {
-  const qc               = useQueryClient()
+  const qc = useQueryClient()
   const [selectedMarkets, setSelected] = useState<string[]>(['crypto'])
-  const isRunning        = botData?.status === 'running'
-  const [showPaperWarning, setShowPaperWarning] = useState(false)
+  const [actionError, setActionError]  = useState<string | null>(null)
 
+  const isRunning = botData?.status === 'running'
+
+  // ── Start ──────────────────────────────────────────────────────────────────
   const startMut = useMutation({
-    mutationFn: () => fetch('/api/bot/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ markets: selectedMarkets }),
-    }).then(r => r.json()),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['bot-status'] }),
+    mutationFn: async () => {
+      const res  = await fetch('/api/bot/start', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ markets: selectedMarkets }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Failed to start bot')
+      return data
+    },
+    onMutate: async () => {
+      setActionError(null)
+      // Optimistically flip the status pill to "running" immediately
+      await qc.cancelQueries({ queryKey: ['bot-status'] })
+      const prev = qc.getQueryData(['bot-status'])
+      qc.setQueryData(['bot-status'], (old: any) => ({
+        ...old,
+        status:        'running',
+        activeMarkets: selectedMarkets,
+        startedAt:     new Date().toISOString(),
+      }))
+      return { prev }
+    },
+    onError: (err: Error, _vars, ctx) => {
+      // Roll back the optimistic update
+      if (ctx?.prev) qc.setQueryData(['bot-status'], ctx.prev)
+      setActionError(err.message)
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['bot-status'] })
+    },
   })
 
+  // ── Stop ───────────────────────────────────────────────────────────────────
   const stopMut = useMutation({
-    mutationFn: () => fetch('/api/bot/stop', { method: 'POST' }).then(r => r.json()),
-    onSuccess:  () => qc.invalidateQueries({ queryKey: ['bot-status'] }),
+    mutationFn: async () => {
+      const res  = await fetch('/api/bot/stop', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Failed to stop bot')
+      return data
+    },
+    onMutate: async () => {
+      setActionError(null)
+      // Optimistically flip to "stopped" so the button disables immediately
+      await qc.cancelQueries({ queryKey: ['bot-status'] })
+      const prev = qc.getQueryData(['bot-status'])
+      qc.setQueryData(['bot-status'], (old: any) => ({
+        ...old,
+        status:        'stopped',
+        activeMarkets: [],
+      }))
+      return { prev }
+    },
+    onError: (err: Error, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['bot-status'], ctx.prev)
+      setActionError(err.message)
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['bot-status'] })
+    },
   })
 
   function toggleMarket(id: string) {
@@ -35,6 +87,8 @@ export function BotControls({ botData }: { botData: any }) {
       prev.includes(id) ? prev.filter(m => m !== id) : [...prev, id]
     )
   }
+
+  const isBusy = startMut.isPending || stopMut.isPending
 
   return (
     <div className="flex flex-col items-end gap-2">
@@ -44,7 +98,8 @@ export function BotControls({ botData }: { botData: any }) {
         Paper Mode Active — no real trades
       </div>
 
-      {!isRunning && (
+      {/* Market selector (only shown when stopped and not mid-action) */}
+      {!isRunning && !isBusy && (
         <div className="flex flex-wrap gap-1.5 justify-end">
           {MARKETS.map(m => (
             <button
@@ -62,26 +117,47 @@ export function BotControls({ botData }: { botData: any }) {
         </div>
       )}
 
+      {/* Error message */}
+      {actionError && (
+        <p className="text-xs text-red-400 max-w-xs text-right">{actionError}</p>
+      )}
+
+      {/* Action button */}
       <div className="flex gap-2">
         {isRunning ? (
           <button
-            onClick={() => stopMut.mutate()}
-            disabled={stopMut.isPending}
-            className="btn-danger"
+            onClick={() => {
+              // Guard against double-click — if already pending, do nothing
+              if (isBusy) return
+              stopMut.mutate()
+            }}
+            disabled={isBusy}
+            className={`btn-danger flex items-center gap-1.5 transition-opacity ${
+              isBusy ? 'opacity-60 cursor-not-allowed' : ''
+            }`}
           >
-            <Square className="w-3.5 h-3.5" />
-            Stop Bot
+            {stopMut.isPending
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <Square className="w-3.5 h-3.5" />
+            }
+            {stopMut.isPending ? 'Stopping…' : 'Stop Bot'}
           </button>
         ) : (
           <button
-            onClick={() => startMut.mutate()}
-            disabled={startMut.isPending || selectedMarkets.length === 0}
-            className="btn-primary"
+            onClick={() => {
+              if (isBusy) return
+              startMut.mutate()
+            }}
+            disabled={isBusy || selectedMarkets.length === 0}
+            className={`btn-primary flex items-center gap-1.5 transition-opacity ${
+              isBusy || selectedMarkets.length === 0 ? 'opacity-60 cursor-not-allowed' : ''
+            }`}
           >
             {startMut.isPending
-              ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              : <Play className="w-3.5 h-3.5" />}
-            Start Bot
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <Play className="w-3.5 h-3.5" />
+            }
+            {startMut.isPending ? 'Starting…' : 'Start Bot'}
           </button>
         )}
       </div>
