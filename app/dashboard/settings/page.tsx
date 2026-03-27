@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Save, AlertTriangle } from 'lucide-react'
+import { ModeControls } from '@/components/dashboard/mode-controls'
 
 const defaults = {
   maxPositionPct:  2,
@@ -79,7 +80,10 @@ export default function SettingsPage() {
     <div className="space-y-5 max-w-2xl mx-auto">
       <h1 className="text-xl font-semibold text-gray-100">Bot Settings</h1>
 
-      {/* Risk Manager */}
+      {/* ── Trading Mode Controls (NEW) ──────────────────────────────────── */}
+      <ModeControls />
+
+      {/* ── Risk Manager ─────────────────────────────────────────────────── */}
       <div className="card space-y-5">
         <div className="flex items-center gap-2 pb-3 border-b border-gray-800">
           <Shield className="w-4 h-4 text-brand-500" />

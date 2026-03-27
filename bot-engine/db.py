@@ -37,7 +37,7 @@ def decrypt_field(ciphertext: str) -> Optional[str]:
         raw = base64.b64decode(ciphertext)
 
         if raw[:8] != b"Salted__":
-            return ciphertext  # plain text fallback (unencrypted legacy value)
+            return ciphertext  # plain text fallback
 
         salt      = raw[8:16]
         encrypted = raw[16:]
@@ -98,7 +98,6 @@ class Database:
                     logger.error(f"❌ Failed to decrypt API keys for market={row['market_type']}")
                     continue
 
-                # Decrypt extra fields (e.g. TOTP secret for Angel One)
                 extra = {}
                 if row["extra_fields_enc"]:
                     try:
@@ -119,6 +118,43 @@ class Database:
 
             except Exception as e:
                 logger.error(f"❌ Failed to load API for market={row['market_type']}: {e}")
+
+        return result
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # NEW: fetch the authoritative paper_mode flag from market_configs in the DB.
+    #
+    # Returns a dict keyed by market_type:
+    #   { "crypto": True, "indian": False, ... }
+    #
+    # True  = paper mode (simulate trades)
+    # False = live mode  (real orders)
+    #
+    # Falls back to True (paper) for any market not found in the DB — safe default.
+    # ─────────────────────────────────────────────────────────────────────────
+    async def get_market_modes(self, user_id: str) -> Dict[str, bool]:
+        pool = await self._get_pool()
+
+        rows = await pool.fetch(
+            """SELECT market_type, mode, paper_mode
+               FROM market_configs
+               WHERE user_id = $1 AND is_active = true""",
+            user_id,
+        )
+
+        result: Dict[str, bool] = {}
+        for row in rows:
+            market = row["market_type"]
+            # `mode` column is authoritative; fall back to legacy paper_mode boolean
+            if row["mode"] is not None:
+                result[market] = (row["mode"] == "paper")
+            else:
+                result[market] = bool(row["paper_mode"])
+
+            logger.info(
+                f"📋 market_mode loaded: market={market} "
+                f"mode={row['mode']} paper={result[market]}"
+            )
 
         return result
 
@@ -150,7 +186,7 @@ class Database:
             user_id,
             market_type,
             symbol,
-            signal.lower(),   # schema uses lowercase enum values
+            signal.lower(),
             algo_name,
             json.dumps(indicators or {}),
             datetime.utcnow(),

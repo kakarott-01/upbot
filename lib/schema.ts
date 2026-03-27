@@ -21,6 +21,9 @@ export const botStatusEnum = pgEnum('bot_status_enum', [
 
 export const signalEnum = pgEnum('signal_type', ['buy', 'sell', 'hold'])
 
+// NEW: trading mode enum used by market_configs and audit logs
+export const tradingModeEnum = pgEnum('trading_mode', ['paper', 'live'])
+
 // ─── Users ────────────────────────────────────────────────────────────────────
 export const users = pgTable('users', {
   id:            uuid('id').defaultRandom().primaryKey(),
@@ -39,9 +42,9 @@ export const users = pgTable('users', {
 // ─── Access Codes ─────────────────────────────────────────────────────────────
 export const accessCodes = pgTable('access_codes', {
   id:          uuid('id').defaultRandom().primaryKey(),
-  code:        varchar('code', { length: 64 }).notNull().unique(), // stored as bcrypt hash
-  label:       varchar('label', { length: 100 }),                  // e.g. "For Rahul"
-  createdBy:   varchar('created_by', { length: 255 }).notNull(),   // admin email
+  code:        varchar('code', { length: 64 }).notNull().unique(),
+  label:       varchar('label', { length: 100 }),
+  createdBy:   varchar('created_by', { length: 255 }).notNull(),
   expiresAt:   timestamp('expires_at').notNull(),
   isBurned:    boolean('is_burned').default(false).notNull(),
   burnedAt:    timestamp('burned_at'),
@@ -54,7 +57,7 @@ export const accessCodes = pgTable('access_codes', {
 export const sessions = pgTable('sessions', {
   id:                uuid('id').defaultRandom().primaryKey(),
   userId:            uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
-  tokenHash:         varchar('token_hash', { length: 255 }).notNull(), // hashed JWT
+  tokenHash:         varchar('token_hash', { length: 255 }).notNull(),
   deviceFingerprint: text('device_fingerprint'),
   ipAddress:         varchar('ip_address', { length: 64 }),
   userAgent:         text('user_agent'),
@@ -67,13 +70,18 @@ export const sessions = pgTable('sessions', {
 }))
 
 // ─── Market Configs ───────────────────────────────────────────────────────────
+// CHANGED: added `mode` column (replaces the implicit paper_mode boolean for
+//          the mode system; paper_mode boolean is kept for backward-compat
+//          until the migration runs)
 export const marketConfigs = pgTable('market_configs', {
   id:         uuid('id').defaultRandom().primaryKey(),
   userId:     uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   marketType: marketTypeEnum('market_type').notNull(),
   isActive:   boolean('is_active').default(true).notNull(),
-  algoName:   varchar('algo_name', { length: 100 }),          // which algo to use
-  paperMode:  boolean('paper_mode').default(true).notNull(),  // always start paper
+  algoName:   varchar('algo_name', { length: 100 }),
+  paperMode:  boolean('paper_mode').default(true).notNull(),  // legacy — kept for migration safety
+  // NEW authoritative mode field: 'paper' | 'live'
+  mode:       tradingModeEnum('mode').default('paper').notNull(),
   createdAt:  timestamp('created_at').defaultNow().notNull(),
   updatedAt:  timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
@@ -85,11 +93,11 @@ export const exchangeApis = pgTable('exchange_apis', {
   id:            uuid('id').defaultRandom().primaryKey(),
   userId:        uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   marketType:    marketTypeEnum('market_type').notNull(),
-  exchangeName:  varchar('exchange_name', { length: 100 }).notNull(), // e.g. "zerodha", "coindcx"
+  exchangeName:  varchar('exchange_name', { length: 100 }).notNull(),
   exchangeLabel: varchar('exchange_label', { length: 100 }),
-  apiKeyEnc:     text('api_key_enc').notNull(),     // AES-256 encrypted
-  apiSecretEnc:  text('api_secret_enc').notNull(),  // AES-256 encrypted
-  extraFieldsEnc:text('extra_fields_enc'),           // JSON of extra fields, encrypted
+  apiKeyEnc:     text('api_key_enc').notNull(),
+  apiSecretEnc:  text('api_secret_enc').notNull(),
+  extraFieldsEnc:text('extra_fields_enc'),
   isVerified:    boolean('is_verified').default(false).notNull(),
   isActive:      boolean('is_active').default(true).notNull(),
   lastVerifiedAt:timestamp('last_verified_at'),
@@ -133,7 +141,7 @@ export const trades = pgTable('trades', {
   userId:          uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   exchangeName:    varchar('exchange_name', { length: 100 }).notNull(),
   marketType:      marketTypeEnum('market_type').notNull(),
-  symbol:          varchar('symbol', { length: 50 }).notNull(),   // e.g. BTC/USDT
+  symbol:          varchar('symbol', { length: 50 }).notNull(),
   side:            tradeSideEnum('side').notNull(),
   quantity:        decimal('quantity',   { precision: 20, scale: 8 }).notNull(),
   entryPrice:      decimal('entry_price',{ precision: 20, scale: 8 }).notNull(),
@@ -149,7 +157,7 @@ export const trades = pgTable('trades', {
   exchangeOrderId: varchar('exchange_order_id', { length: 255 }),
   openedAt:        timestamp('opened_at').defaultNow().notNull(),
   closedAt:        timestamp('closed_at'),
-  metadata:        jsonb('metadata'),                              // raw exchange response
+  metadata:        jsonb('metadata'),
 }, (t) => ({
   userIdx:    index('trades_user_idx').on(t.userId),
   symbolIdx:  index('trades_symbol_idx').on(t.symbol),
@@ -164,15 +172,32 @@ export const algoSignals = pgTable('algo_signals', {
   marketType:         marketTypeEnum('market_type').notNull(),
   symbol:             varchar('symbol', { length: 50 }).notNull(),
   signal:             signalEnum('signal').notNull(),
-  confidence:         decimal('confidence', { precision: 5, scale: 2 }), // 0-100
+  confidence:         decimal('confidence', { precision: 5, scale: 2 }),
   algoName:           varchar('algo_name', { length: 100 }),
   timeframe:          varchar('timeframe', { length: 20 }),
-  indicatorsSnapshot: jsonb('indicators_snapshot'),  // RSI=28, EMA9=43200, etc.
+  indicatorsSnapshot: jsonb('indicators_snapshot'),
   wasExecuted:        boolean('was_executed').default(false).notNull(),
   createdAt:          timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
   userIdx:    index('signals_user_idx').on(t.userId),
   createdIdx: index('signals_created_idx').on(t.createdAt),
+}))
+
+// ─── Mode Audit Logs ──────────────────────────────────────────────────────────
+// NEW TABLE: records every paper↔live mode switch with full context
+export const modeAuditLogs = pgTable('mode_audit_logs', {
+  id:        uuid('id').defaultRandom().primaryKey(),
+  userId:    uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  // 'global' for global toggle, 'exchange:crypto', 'exchange:indian', etc.
+  scope:     varchar('scope', { length: 50 }).notNull(),
+  fromMode:  tradingModeEnum('from_mode').notNull(),
+  toMode:    tradingModeEnum('to_mode').notNull(),
+  ipAddress: varchar('ip_address', { length: 64 }),
+  userAgent: text('user_agent'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  userIdx:    index('audit_user_idx').on(t.userId),
+  createdIdx: index('audit_created_idx').on(t.createdAt),
 }))
 
 // ─── Relations ────────────────────────────────────────────────────────────────
@@ -182,6 +207,7 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   exchangeApis:  many(exchangeApis),
   trades:        many(trades),
   algoSignals:   many(algoSignals),
+  modeAuditLogs: many(modeAuditLogs),
   botStatus:     one(botStatuses, { fields: [users.id], references: [botStatuses.userId] }),
   riskSettings:  one(riskSettings, { fields: [users.id], references: [riskSettings.userId] }),
 }))
@@ -202,3 +228,5 @@ export type NewTrade       = typeof trades.$inferInsert
 export type AlgoSignal     = typeof algoSignals.$inferSelect
 export type BotStatus      = typeof botStatuses.$inferSelect
 export type RiskSettings   = typeof riskSettings.$inferSelect
+export type ModeAuditLog   = typeof modeAuditLogs.$inferSelect
+export type TradingMode    = 'paper' | 'live'

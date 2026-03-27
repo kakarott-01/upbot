@@ -83,8 +83,15 @@ class BotScheduler:
             self.active_jobs[user_id] = []
 
             exchange_configs = await self.db.get_exchange_apis(user_id)
-            risk_cfg = await self.db.get_risk_settings(user_id)
-            risk_mgr = RiskManager(risk_cfg)
+            risk_cfg         = await self.db.get_risk_settings(user_id)
+            risk_mgr         = RiskManager(risk_cfg)
+
+            # ── KEY FIX: read paper_mode from DB, not from JSON config files ──
+            # This is the authoritative source of truth for trade execution mode.
+            # market_modes = { "crypto": True, "indian": False, ... }
+            # True = paper (simulate), False = live (real orders)
+            market_modes = await self.db.get_market_modes(user_id)
+            logger.info(f"📋 Market modes from DB: {market_modes}")
 
             started_markets = []
 
@@ -117,7 +124,23 @@ class BotScheduler:
                     )
 
                     AlgoClass = ALGO_MAP.get(market, GlobalAlgo)
-                    algo = AlgoClass(connector, risk_mgr, self.db, user_id)
+
+                    # ── PASS paper_mode EXPLICITLY from DB ────────────────────
+                    # Falls back to True (paper) if not found in DB — safe default.
+                    paper_mode = market_modes.get(market, True)
+
+                    logger.info(
+                        f"🏷️  Instantiating {AlgoClass.__name__} for market={market} "
+                        f"paper_mode={paper_mode} (source: DB)"
+                    )
+
+                    algo = AlgoClass(
+                        connector,
+                        risk_mgr,
+                        self.db,
+                        user_id,
+                        paper_mode=paper_mode,  # explicit DB-sourced flag
+                    )
 
                     interval = MARKET_INTERVAL.get(market, 60)
                     job_id   = f"{user_id}_{market}"
@@ -133,7 +156,10 @@ class BotScheduler:
 
                     self.active_jobs[user_id].append(job_id)
                     started_markets.append(market)
-                    logger.info(f"✅ Scheduled market={market} every {interval}s")
+                    logger.info(
+                        f"✅ Scheduled market={market} every {interval}s "
+                        f"[{'PAPER' if paper_mode else 'LIVE'}]"
+                    )
 
                 except Exception as e:
                     logger.error(f"❌ Failed to start market={market}: {e}", exc_info=True)
@@ -142,7 +168,10 @@ class BotScheduler:
                 await self.db.update_bot_status(user_id, "running", started_markets)
                 logger.info(f"🟢 Bot running for user={user_id} markets={started_markets}")
             else:
-                await self.db.update_bot_status(user_id, "error", [], "No markets could be started — check API keys and exchange config")
+                await self.db.update_bot_status(
+                    user_id, "error", [],
+                    "No markets could be started — check API keys and exchange config"
+                )
                 logger.error(f"❌ No markets started for user={user_id}")
 
         except Exception as e:
@@ -153,29 +182,20 @@ class BotScheduler:
     # ─────────────────────────────────────────────────────────────────────────
 
     def _stop_jobs_sync(self, user_id: str):
-        """
-        Synchronously remove all APScheduler jobs for a user.
-        Does NOT update DB — caller is responsible for that.
-        """
         jobs = self.active_jobs.get(user_id, [])
         for job_id in jobs:
             try:
                 self.scheduler.remove_job(job_id)
                 logger.info(f"🛑 Removed job {job_id}")
             except Exception:
-                pass  # Job may have already completed or been removed
+                pass
         self.active_jobs.pop(user_id, None)
 
     # ─────────────────────────────────────────────────────────────────────────
 
     async def stop_user_bot(self, user_id: str):
-        """
-        Async stop: removes jobs synchronously, then awaits DB update.
-        Call this from async contexts (e.g. FastAPI route handler).
-        """
         try:
             self._stop_jobs_sync(user_id)
-            # Await DB update directly — no fire-and-forget task
             await self.db.update_bot_status(user_id, "stopped", [])
             logger.info(f"🛑 Bot stopped for user={user_id}")
         except Exception as e:
