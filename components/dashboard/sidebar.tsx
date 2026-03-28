@@ -3,16 +3,17 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, TrendingUp, Settings, History,
-  BarChart2, Layers, ChevronRight, Zap
+  BarChart2, Layers, ChevronRight, Zap, BookOpen,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export const dashboardNav = [
-  { href: '/dashboard',             icon: LayoutDashboard, label: 'Dashboard' },
-  { href: '/dashboard/markets',     icon: Layers,          label: 'Markets & APIs' },
-  { href: '/dashboard/trades',      icon: History,         label: 'Trade History' },
-  { href: '/dashboard/performance', icon: BarChart2,       label: 'Performance' },
-  { href: '/dashboard/settings',    icon: Settings,        label: 'Bot Settings' },
+  { href: '/dashboard',              icon: LayoutDashboard, label: 'Dashboard' },
+  { href: '/dashboard/markets',      icon: Layers,          label: 'Markets & APIs' },
+  { href: '/dashboard/trades',       icon: History,         label: 'Trade History' },
+  { href: '/dashboard/bot-history',  icon: BookOpen,        label: 'Bot History' },
+  { href: '/dashboard/performance',  icon: BarChart2,       label: 'Performance' },
+  { href: '/dashboard/settings',     icon: Settings,        label: 'Bot Settings' },
 ]
 
 export interface MobileSidebarProps {
@@ -22,9 +23,7 @@ export interface MobileSidebarProps {
 
 export function MobileSidebar({ open, onClose }: MobileSidebarProps) {
   const pathname = usePathname()
-
   if (!open) return null
-
   return (
     <div className="fixed inset-0 z-50 md:hidden">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden="true" />
@@ -36,30 +35,17 @@ export function MobileSidebar({ open, onClose }: MobileSidebarProps) {
             </div>
             <span className="font-semibold text-gray-100">AlgoBot</span>
           </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-200 transition-colors"
-            aria-label="Close menu"
-          >
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-200 transition-colors">
             <ChevronRight className="w-5 h-5" />
           </button>
         </div>
-
         <nav className="p-3 space-y-0.5 overflow-y-auto h-[calc(100%-72px)]">
           {dashboardNav.map(({ href, icon: Icon, label }) => {
             const active = pathname === href
             return (
-              <Link
-                key={href}
-                href={href}
-                onClick={onClose}
-                className={cn(
-                  'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors',
-                  active
-                    ? 'bg-brand-500/15 text-brand-500 font-medium'
-                    : 'text-gray-300 hover:text-gray-100 hover:bg-gray-800'
-                )}
-              >
+              <Link key={href} href={href} onClick={onClose}
+                className={cn('flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors',
+                  active ? 'bg-brand-500/15 text-brand-500 font-medium' : 'text-gray-300 hover:text-gray-100 hover:bg-gray-800')}>
                 <Icon className="w-4 h-4 flex-shrink-0" />
                 <span className="flex-1">{label}</span>
               </Link>
@@ -73,32 +59,21 @@ export function MobileSidebar({ open, onClose }: MobileSidebarProps) {
 
 export function Sidebar() {
   const pathname = usePathname()
-
   return (
     <aside className="hidden md:flex flex-col w-56 bg-gray-900 border-r border-gray-800 flex-shrink-0">
-      {/* Logo */}
       <div className="flex items-center gap-2.5 px-4 py-5 border-b border-gray-800">
         <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center flex-shrink-0">
           <Zap className="w-4 h-4 text-white" />
         </div>
         <span className="font-semibold text-gray-100">AlgoBot</span>
       </div>
-
-      {/* Nav */}
       <nav className="flex-1 p-3 space-y-0.5">
         {dashboardNav.map(({ href, icon: Icon, label }) => {
           const active = pathname === href
           return (
-            <Link
-              key={href}
-              href={href}
-              className={cn(
-                'flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors group',
-                active
-                  ? 'bg-brand-500/15 text-brand-500 font-medium'
-                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
-              )}
-            >
+            <Link key={href} href={href}
+              className={cn('flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors group',
+                active ? 'bg-brand-500/15 text-brand-500 font-medium' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800')}>
               <Icon className="w-4 h-4 flex-shrink-0" />
               <span className="flex-1">{label}</span>
               {active && <ChevronRight className="w-3 h-3" />}
@@ -106,8 +81,6 @@ export function Sidebar() {
           )
         })}
       </nav>
-
-      {/* Version */}
       <div className="px-4 py-3 border-t border-gray-800">
         <p className="text-xs text-gray-700">AlgoBot v1.0.0</p>
       </div>

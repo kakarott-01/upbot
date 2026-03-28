@@ -1,23 +1,20 @@
+// app/api/bot/start/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { botStatuses, exchangeApis } from '@/lib/schema'
+import { botStatuses, botSessions, exchangeApis, marketConfigs } from '@/lib/schema'
 import { eq, and } from 'drizzle-orm'
 
 export async function POST(req: NextRequest) {
   const session = await auth()
-
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { markets } = await req.json()
-
   if (!markets || markets.length === 0) {
     return NextResponse.json({ error: 'No markets specified' }, { status: 400 })
   }
 
-  // ── Validate that an exchange API exists for EACH requested market ─────────
+  // Validate exchange APIs exist for each market
   const missingMarkets: string[] = []
   for (const market of markets) {
     const api = await db.query.exchangeApis.findFirst({
@@ -27,23 +24,17 @@ export async function POST(req: NextRequest) {
         eq(exchangeApis.isActive, true),
       ),
     })
-
-    if (!api) {
-      missingMarkets.push(market)
-    }
+    if (!api) missingMarkets.push(market)
   }
 
   if (missingMarkets.length > 0) {
     return NextResponse.json(
-      {
-        error: `No exchange API configured for: ${missingMarkets.join(', ')}. Please add your API keys in Markets & APIs first.`,
-        missingMarkets,
-      },
+      { error: `No exchange API configured for: ${missingMarkets.join(', ')}.`, missingMarkets },
       { status: 400 }
     )
   }
 
-  // ── Call bot engine ────────────────────────────────────────────────────────
+  // Call bot engine
   let botRes: Response | null = null
   try {
     botRes = await fetch(`${process.env.BOT_ENGINE_URL}/bot/start`, {
@@ -70,24 +61,60 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── Persist running state in DB ────────────────────────────────────────────
+  const now = new Date()
+
+  // Create one bot session per market
+  const sessionIds: string[] = []
+  for (const market of markets) {
+    // Get exchange name for this market
+    const api = await db.query.exchangeApis.findFirst({
+      where: and(
+        eq(exchangeApis.userId, session.id),
+        eq(exchangeApis.marketType, market as any),
+        eq(exchangeApis.isActive, true),
+      ),
+      columns: { exchangeName: true },
+    })
+
+    // Get mode for this market
+    const cfg = await db.query.marketConfigs.findFirst({
+      where: and(
+        eq(marketConfigs.userId, session.id),
+        eq(marketConfigs.marketType, market as any),
+      ),
+      columns: { mode: true },
+    })
+
+    const [newSession] = await db.insert(botSessions).values({
+      userId:    session.id,
+      exchange:  api?.exchangeName ?? 'unknown',
+      market,
+      mode:      cfg?.mode ?? 'paper',
+      status:    'running',
+      startedAt: now,
+    }).returning({ id: botSessions.id })
+
+    sessionIds.push(newSession.id)
+  }
+
+  // Persist running state
   await db.insert(botStatuses)
     .values({
       userId:        session.id,
       status:        'running',
       activeMarkets: markets,
-      startedAt:     new Date(),
+      startedAt:     now,
     })
     .onConflictDoUpdate({
       target: botStatuses.userId,
       set: {
         status:        'running',
         activeMarkets: markets,
-        startedAt:     new Date(),
+        startedAt:     now,
         errorMessage:  null,
-        updatedAt:     new Date(),
+        updatedAt:     now,
       },
     })
 
-  return NextResponse.json({ success: true, status: 'running', markets })
+  return NextResponse.json({ success: true, status: 'running', markets, sessionIds })
 }

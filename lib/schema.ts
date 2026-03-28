@@ -8,21 +8,12 @@ import { relations } from 'drizzle-orm'
 export const marketTypeEnum = pgEnum('market_type', [
   'indian', 'crypto', 'commodities', 'global'
 ])
-
-export const tradeSideEnum = pgEnum('trade_side', ['buy', 'sell'])
-
-export const tradeStatusEnum = pgEnum('trade_status', [
-  'pending', 'open', 'closed', 'cancelled', 'failed'
-])
-
-export const botStatusEnum = pgEnum('bot_status_enum', [
-  'running', 'stopped', 'paused', 'error'
-])
-
-export const signalEnum = pgEnum('signal_type', ['buy', 'sell', 'hold'])
-
-// NEW: trading mode enum used by market_configs and audit logs
-export const tradingModeEnum = pgEnum('trading_mode', ['paper', 'live'])
+export const tradeSideEnum    = pgEnum('trade_side', ['buy', 'sell'])
+export const tradeStatusEnum  = pgEnum('trade_status', ['pending', 'open', 'closed', 'cancelled', 'failed'])
+export const botStatusEnum    = pgEnum('bot_status_enum', ['running', 'stopped', 'paused', 'error'])
+export const signalEnum       = pgEnum('signal_type', ['buy', 'sell', 'hold'])
+export const tradingModeEnum  = pgEnum('trading_mode', ['paper', 'live'])
+export const botSessionStatusEnum = pgEnum('bot_session_status', ['running', 'stopped', 'error'])
 
 // ─── Users ────────────────────────────────────────────────────────────────────
 export const users = pgTable('users', {
@@ -70,17 +61,13 @@ export const sessions = pgTable('sessions', {
 }))
 
 // ─── Market Configs ───────────────────────────────────────────────────────────
-// CHANGED: added `mode` column (replaces the implicit paper_mode boolean for
-//          the mode system; paper_mode boolean is kept for backward-compat
-//          until the migration runs)
 export const marketConfigs = pgTable('market_configs', {
   id:         uuid('id').defaultRandom().primaryKey(),
   userId:     uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   marketType: marketTypeEnum('market_type').notNull(),
   isActive:   boolean('is_active').default(true).notNull(),
   algoName:   varchar('algo_name', { length: 100 }),
-  paperMode:  boolean('paper_mode').default(true).notNull(),  // legacy — kept for migration safety
-  // NEW authoritative mode field: 'paper' | 'live'
+  paperMode:  boolean('paper_mode').default(true).notNull(),
   mode:       tradingModeEnum('mode').default('paper').notNull(),
   createdAt:  timestamp('created_at').defaultNow().notNull(),
   updatedAt:  timestamp('updated_at').defaultNow().notNull(),
@@ -121,6 +108,28 @@ export const botStatuses = pgTable('bot_statuses', {
   updatedAt:     timestamp('updated_at').defaultNow().notNull(),
 })
 
+// ─── Bot Sessions (NEW) ───────────────────────────────────────────────────────
+export const botSessions = pgTable('bot_sessions', {
+  id:           uuid('id').defaultRandom().primaryKey(),
+  userId:       uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  exchange:     varchar('exchange', { length: 100 }).notNull().default('unknown'),
+  market:       varchar('market', { length: 50 }).notNull(),
+  mode:         tradingModeEnum('mode').default('paper').notNull(),
+  status:       botSessionStatusEnum('status').default('running').notNull(),
+  startedAt:    timestamp('started_at').defaultNow().notNull(),
+  endedAt:      timestamp('ended_at'),
+  totalTrades:  integer('total_trades').default(0).notNull(),
+  openTrades:   integer('open_trades').default(0).notNull(),
+  closedTrades: integer('closed_trades').default(0).notNull(),
+  totalPnl:     decimal('total_pnl', { precision: 20, scale: 8 }).default('0'),
+  errorMessage: text('error_message'),
+  metadata:     jsonb('metadata'),
+}, (t) => ({
+  userIdx:    index('bot_sessions_user_idx').on(t.userId),
+  startedIdx: index('bot_sessions_started_idx').on(t.startedAt),
+  statusIdx:  index('bot_sessions_status_idx').on(t.status),
+}))
+
 // ─── Risk Settings ────────────────────────────────────────────────────────────
 export const riskSettings = pgTable('risk_settings', {
   id:               uuid('id').defaultRandom().primaryKey(),
@@ -139,6 +148,7 @@ export const riskSettings = pgTable('risk_settings', {
 export const trades = pgTable('trades', {
   id:              uuid('id').defaultRandom().primaryKey(),
   userId:          uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  sessionId:       uuid('session_id').references(() => botSessions.id, { onDelete: 'set null' }), // NEW
   exchangeName:    varchar('exchange_name', { length: 100 }).notNull(),
   marketType:      marketTypeEnum('market_type').notNull(),
   symbol:          varchar('symbol', { length: 50 }).notNull(),
@@ -159,10 +169,11 @@ export const trades = pgTable('trades', {
   closedAt:        timestamp('closed_at'),
   metadata:        jsonb('metadata'),
 }, (t) => ({
-  userIdx:    index('trades_user_idx').on(t.userId),
-  symbolIdx:  index('trades_symbol_idx').on(t.symbol),
-  statusIdx:  index('trades_status_idx').on(t.status),
-  openedIdx:  index('trades_opened_idx').on(t.openedAt),
+  userIdx:      index('trades_user_idx').on(t.userId),
+  symbolIdx:    index('trades_symbol_idx').on(t.symbol),
+  statusIdx:    index('trades_status_idx').on(t.status),
+  openedIdx:    index('trades_opened_idx').on(t.openedAt),
+  sessionIdx:   index('trades_session_idx').on(t.sessionId),
 }))
 
 // ─── Algo Signals ─────────────────────────────────────────────────────────────
@@ -184,11 +195,9 @@ export const algoSignals = pgTable('algo_signals', {
 }))
 
 // ─── Mode Audit Logs ──────────────────────────────────────────────────────────
-// NEW TABLE: records every paper↔live mode switch with full context
 export const modeAuditLogs = pgTable('mode_audit_logs', {
   id:        uuid('id').defaultRandom().primaryKey(),
   userId:    uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
-  // 'global' for global toggle, 'exchange:crypto', 'exchange:indian', etc.
   scope:     varchar('scope', { length: 50 }).notNull(),
   fromMode:  tradingModeEnum('from_mode').notNull(),
   toMode:    tradingModeEnum('to_mode').notNull(),
@@ -208,15 +217,22 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   trades:        many(trades),
   algoSignals:   many(algoSignals),
   modeAuditLogs: many(modeAuditLogs),
+  botSessions:   many(botSessions),
   botStatus:     one(botStatuses, { fields: [users.id], references: [botStatuses.userId] }),
   riskSettings:  one(riskSettings, { fields: [users.id], references: [riskSettings.userId] }),
 }))
 
-export const tradesRelations = relations(trades, ({ one }) => ({
-  user: one(users, { fields: [trades.userId], references: [users.id] }),
+export const botSessionsRelations = relations(botSessions, ({ one, many }) => ({
+  user:   one(users, { fields: [botSessions.userId], references: [users.id] }),
+  trades: many(trades),
 }))
 
-// ─── Types (inferred) ─────────────────────────────────────────────────────────
+export const tradesRelations = relations(trades, ({ one }) => ({
+  user:    one(users,       { fields: [trades.userId],    references: [users.id] }),
+  session: one(botSessions, { fields: [trades.sessionId], references: [botSessions.id] }),
+}))
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 export type User           = typeof users.$inferSelect
 export type NewUser        = typeof users.$inferInsert
 export type AccessCode     = typeof accessCodes.$inferSelect
@@ -230,3 +246,5 @@ export type BotStatus      = typeof botStatuses.$inferSelect
 export type RiskSettings   = typeof riskSettings.$inferSelect
 export type ModeAuditLog   = typeof modeAuditLogs.$inferSelect
 export type TradingMode    = 'paper' | 'live'
+export type BotSession     = typeof botSessions.$inferSelect
+export type NewBotSession  = typeof botSessions.$inferInsert
