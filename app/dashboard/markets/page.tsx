@@ -3,7 +3,7 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle, ChevronDown, ChevronUp, Shield, ExternalLink,
-  Eye, EyeOff, Pencil, X, Loader2, Lock, KeyRound, MailCheck,
+  Eye, EyeOff, Pencil, X, Loader2, Lock, KeyRound, MailCheck, Plus,
 } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -76,10 +76,8 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
   const [resendCooldown, setResendCooldown] = useState(0);
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  // Send OTP on mount
   useEffect(() => { sendOtp(); }, []);
 
-  // Resend cooldown ticker
   useEffect(() => {
     if (resendCooldown <= 0) return;
     const t = setTimeout(() => setResendCooldown(c => c - 1), 1000);
@@ -137,15 +135,12 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
   }
 
   return (
-    // Backdrop
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: "rgba(3,7,18,0.85)", backdropFilter: "blur(4px)" }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="w-full max-w-sm bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl overflow-hidden">
-
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-brand-500/15 flex items-center justify-center">
@@ -161,7 +156,6 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
           </button>
         </div>
 
-        {/* Body */}
         <div className="px-5 py-5">
           {sending && !sent ? (
             <div className="flex flex-col items-center py-4 gap-3">
@@ -178,7 +172,6 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
                 </p>
               </div>
 
-              {/* OTP inputs */}
               <div className="flex gap-2 justify-center mb-4">
                 {digits.map((d, i) => (
                   <input
@@ -264,14 +257,12 @@ interface ConnectedCardProps {
 
 function ConnectedCard({ exch, market, userEmail, onEdit }: ConnectedCardProps) {
   const [showOtpModal, setShowOtpModal] = useState(false);
-  const [otpVerified,  setOtpVerified]  = useState(false);
   const [revealed,     setRevealed]     = useState<RevealedKeys | null>(null);
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState("");
 
   async function handleOtpVerified() {
     setShowOtpModal(false);
-    setOtpVerified(true);
     setLoading(true);
     setError("");
 
@@ -287,7 +278,6 @@ function ConnectedCard({ exch, market, userEmail, onEdit }: ConnectedCardProps) 
       setRevealed(data);
     } else {
       setError(data.error ?? "Failed to load keys");
-      setOtpVerified(false);
     }
   }
 
@@ -308,7 +298,6 @@ function ConnectedCard({ exch, market, userEmail, onEdit }: ConnectedCardProps) 
       )}
 
       <div className="bg-gray-800/40 rounded-xl border border-gray-700/50 overflow-hidden">
-        {/* Header row */}
         <div className="flex items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2.5">
             <CheckCircle className="w-4 h-4 text-brand-500 flex-shrink-0" />
@@ -333,9 +322,7 @@ function ConnectedCard({ exch, market, userEmail, onEdit }: ConnectedCardProps) 
           </div>
         </div>
 
-        {/* Keys section */}
         <div className="px-4 pb-4 pt-1 space-y-3 border-t border-gray-700/40">
-
           {loading ? (
             <div className="flex items-center gap-2 py-2 text-sm text-gray-500">
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -349,7 +336,6 @@ function ConnectedCard({ exch, market, userEmail, onEdit }: ConnectedCardProps) 
             ))
           )}
 
-          {/* View keys button — only shown if not yet verified */}
           {!revealed && !loading && (
             <button
               onClick={() => setShowOtpModal(true)}
@@ -360,21 +346,19 @@ function ConnectedCard({ exch, market, userEmail, onEdit }: ConnectedCardProps) 
             </button>
           )}
 
-          {/* Verified badge */}
           {revealed && (
             <div className="flex items-center gap-1.5 text-xs text-brand-500 mt-1">
               <CheckCircle className="w-3 h-3" />
               Verified — keys visible for 5 minutes
             </div>
           )}
-
         </div>
       </div>
     </>
   );
 }
 
-// ── Exchange input form (new or edit) ─────────────────────────────────────────
+// ── Exchange input form ────────────────────────────────────────────────────────
 
 interface ExchangeFormProps {
   exch: { id: string; name: string; fields: string[]; docs: string };
@@ -382,11 +366,11 @@ interface ExchangeFormProps {
   prefill?: RevealedKeys | null;
   onSaved: () => void;
   onCancel: () => void;
+  isEdit?: boolean;
 }
 
-function ExchangeForm({ exch, marketId, prefill, onSaved, onCancel }: ExchangeFormProps) {
+function ExchangeForm({ exch, marketId, prefill, onSaved, onCancel, isEdit }: ExchangeFormProps) {
   const qc = useQueryClient();
-  const key = `${marketId}_${exch.id}`;
 
   const [vals, setVals] = useState<Record<string, string>>(() => {
     if (prefill) {
@@ -442,20 +426,18 @@ function ExchangeForm({ exch, marketId, prefill, onSaved, onCancel }: ExchangeFo
     <div className="bg-gray-800/40 rounded-xl border border-gray-700/50 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/40">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded-full border border-gray-600" />
           <span className="text-sm font-medium text-gray-300">{exch.name}</span>
+          {isEdit && <span className="text-xs text-amber-400 bg-amber-900/20 border border-amber-800/30 px-2 py-0.5 rounded-full">Editing</span>}
         </div>
         <div className="flex items-center gap-2">
           <a href={exch.docs} target="_blank" rel="noopener noreferrer"
             className="text-xs text-gray-600 hover:text-brand-500 flex items-center gap-1 transition-colors">
             <ExternalLink className="w-3 h-3" /> Docs
           </a>
-          {prefill && (
-            <button onClick={onCancel}
-              className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1 transition-colors">
-              <X className="w-3 h-3" /> Cancel
-            </button>
-          )}
+          <button onClick={onCancel}
+            className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1 transition-colors">
+            <X className="w-3 h-3" /> Cancel
+          </button>
         </div>
       </div>
 
@@ -496,12 +478,100 @@ function ExchangeForm({ exch, marketId, prefill, onSaved, onCancel }: ExchangeFo
   );
 }
 
+// ── Exchange row (collapsed by default, expandable) ───────────────────────────
+
+interface ExchangeRowProps {
+  exch: { id: string; name: string; fields: string[]; docs: string };
+  market: { id: string };
+  saved: boolean;
+  userEmail: string;
+  editingKey: string | null;
+  editPrefill: RevealedKeys | null;
+  onEdit: () => void;
+  onSaved: () => void;
+  onCancelEdit: () => void;
+  onEditOtpModal: () => void;
+}
+
+function ExchangeRow({
+  exch, market, saved, userEmail, editingKey, editPrefill,
+  onEdit, onSaved, onCancelEdit, onEditOtpModal,
+}: ExchangeRowProps) {
+  const key = `${market.id}_${exch.id}`;
+  const isEditing = editingKey === key;
+
+  // Only open if actively editing
+  const [formOpen, setFormOpen] = useState(false);
+
+  // If editing (from OTP verify flow), force open
+  if (isEditing) {
+    return (
+      <ExchangeForm
+        exch={exch}
+        marketId={market.id}
+        prefill={editPrefill}
+        isEdit
+        onSaved={() => { onSaved(); setFormOpen(false); }}
+        onCancel={() => { onCancelEdit(); setFormOpen(false); }}
+      />
+    );
+  }
+
+  if (saved) {
+    return <ConnectedCard exch={exch} market={market} userEmail={userEmail} onEdit={onEditOtpModal} />;
+  }
+
+  // Not saved — show collapsed row with expand button
+  return (
+    <div className="bg-gray-800/40 rounded-xl border border-gray-700/50 overflow-hidden">
+      <button
+        onClick={() => setFormOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-800/60 transition-colors"
+      >
+        <div className="flex items-center gap-2.5">
+          <div className="w-4 h-4 rounded-full border-2 border-gray-600 flex-shrink-0" />
+          <span className="text-sm font-medium text-gray-400">{exch.name}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <a
+            href={exch.docs}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            className="text-xs text-gray-600 hover:text-brand-500 flex items-center gap-1 transition-colors"
+          >
+            <ExternalLink className="w-3 h-3" /> Docs
+          </a>
+          <div className="flex items-center gap-1 text-xs text-gray-500">
+            {formOpen ? (
+              <><ChevronUp className="w-3.5 h-3.5" /></>
+            ) : (
+              <><Plus className="w-3.5 h-3.5" /> Connect</>
+            )}
+          </div>
+        </div>
+      </button>
+
+      {formOpen && (
+        <div className="border-t border-gray-700/40">
+          <ExchangeForm
+            exch={exch}
+            marketId={market.id}
+            prefill={null}
+            onSaved={() => { setFormOpen(false); onSaved(); }}
+            onCancel={() => setFormOpen(false)}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MarketsPage() {
   const qc = useQueryClient();
-  const [expanded, setExpanded]           = useState<string | null>("crypto");
-  // editingKey tracks which exchange is being edited: "marketId_exchId"
+  const [expanded, setExpanded]           = useState<string | null>(null);
   const [editingKey, setEditingKey]       = useState<string | null>(null);
   const [editPrefill, setEditPrefill]     = useState<RevealedKeys | null>(null);
   const [editOtpModal, setEditOtpModal]   = useState<{ marketId: string; exchId: string } | null>(null);
@@ -511,7 +581,6 @@ export default function MarketsPage() {
     queryFn:  () => fetch("/api/exchange").then(r => r.json()),
   });
 
-  // Fetch user email for the OTP modal display
   const { data: meData } = useQuery({
     queryKey: ["me"],
     queryFn:  () => fetch("/api/me").then(r => r.json()).catch(() => null),
@@ -523,16 +592,20 @@ export default function MarketsPage() {
     return existingApis?.some(a => a.marketType === marketId && a.exchangeName === exchId);
   }
 
-  async function startEdit(marketId: string, exchId: string) {
-    // Show OTP modal first; on verified, load prefill and open form
-    setEditOtpModal({ marketId, exchId });
-  }
+  // Auto-expand markets that have a saved connection
+  useEffect(() => {
+    if (!existingApis) return;
+    for (const market of MARKETS) {
+      if (market.exchanges.some(e => isSaved(market.id, e.id))) {
+        setExpanded(market.id);
+        return;
+      }
+    }
+  }, [existingApis]);
 
   async function handleEditOtpVerified(marketId: string, exchId: string) {
     setEditOtpModal(null);
-
-    // Fetch decrypted keys (reveal token was just set by verify route)
-    const res  = await fetch("/api/exchange/reveal", {
+    const res = await fetch("/api/exchange/reveal", {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
       body:    JSON.stringify({ marketType: marketId, exchangeName: exchId }),
@@ -553,7 +626,6 @@ export default function MarketsPage() {
         </p>
       </div>
 
-      {/* Security reminder */}
       <div className="bg-amber-900/15 border border-amber-900/30 rounded-xl px-4 py-3 flex items-start gap-3">
         <Shield className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
         <div className="text-xs text-amber-400/80 space-y-1">
@@ -562,7 +634,7 @@ export default function MarketsPage() {
         </div>
       </div>
 
-      {/* Edit OTP modal (for edit flow) */}
+      {/* Edit OTP modal */}
       {editOtpModal && (
         <OtpModal
           email={userEmail}
@@ -572,83 +644,67 @@ export default function MarketsPage() {
       )}
 
       {/* Market accordions */}
-      {MARKETS.map(market => (
-        <div key={market.id} className="card overflow-hidden">
-          <button
-            onClick={() => setExpanded(expanded === market.id ? null : market.id)}
-            className="w-full flex items-center justify-between text-left"
-          >
-            <div>
-              <p className="text-sm font-semibold text-gray-200">{market.label}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{market.desc}</p>
-            </div>
-            <div className="flex items-center gap-3">
-              {market.exchanges.some(e => isSaved(market.id, e.id)) && (
-                <span className="text-xs text-brand-500 bg-brand-500/10 border border-brand-500/20 px-2 py-0.5 rounded-full">
-                  Connected
-                </span>
-              )}
-              {expanded === market.id
-                ? <ChevronUp className="w-4 h-4 text-gray-500" />
-                : <ChevronDown className="w-4 h-4 text-gray-500" />
-              }
-            </div>
-          </button>
+      {MARKETS.map(market => {
+        const hasConnection = market.exchanges.some(e => isSaved(market.id, e.id));
+        const isOpen = expanded === market.id;
 
-          {expanded === market.id && (
-            <div className="mt-4 pt-4 border-t border-gray-800 space-y-3">
-              {market.exchanges.map(exch => {
-                const key      = `${market.id}_${exch.id}`;
-                const saved    = isSaved(market.id, exch.id);
-                const editing  = editingKey === key;
+        return (
+          <div key={market.id} className="card overflow-hidden">
+            <button
+              onClick={() => setExpanded(isOpen ? null : market.id)}
+              className="w-full flex items-center justify-between text-left"
+            >
+              <div>
+                <p className="text-sm font-semibold text-gray-200">{market.label}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{market.desc}</p>
+              </div>
+              <div className="flex items-center gap-3">
+                {hasConnection && (
+                  <span className="text-xs text-brand-500 bg-brand-500/10 border border-brand-500/20 px-2 py-0.5 rounded-full">
+                    Connected
+                  </span>
+                )}
+                {isOpen
+                  ? <ChevronUp className="w-4 h-4 text-gray-500" />
+                  : <ChevronDown className="w-4 h-4 text-gray-500" />
+                }
+              </div>
+            </button>
 
-                if (editing) {
+            {isOpen && (
+              <div className="mt-4 pt-4 border-t border-gray-800 space-y-2">
+                {market.exchanges.map(exch => {
+                  const key   = `${market.id}_${exch.id}`;
+                  const saved = isSaved(market.id, exch.id) ?? false;
+
                   return (
-                    <ExchangeForm
+                    <ExchangeRow
                       key={key}
                       exch={exch}
-                      marketId={market.id}
-                      prefill={editPrefill}
+                      market={market}
+                      saved={saved}
+                      userEmail={userEmail}
+                      editingKey={editingKey}
+                      editPrefill={editPrefill}
+                      onEdit={() => setEditingKey(key)}
                       onSaved={() => {
                         setEditingKey(null);
                         setEditPrefill(null);
                         qc.invalidateQueries({ queryKey: ["exchange-apis"] });
                       }}
-                      onCancel={() => {
+                      onCancelEdit={() => {
                         setEditingKey(null);
                         setEditPrefill(null);
                       }}
+                      onEditOtpModal={() => setEditOtpModal({ marketId: market.id, exchId: exch.id })}
                     />
                   );
-                }
-
-                if (saved) {
-                  return (
-                    <ConnectedCard
-                      key={key}
-                      exch={exch}
-                      market={market}
-                      userEmail={userEmail}
-                      onEdit={() => startEdit(market.id, exch.id)}
-                    />
-                  );
-                }
-
-                return (
-                  <ExchangeForm
-                    key={key}
-                    exch={exch}
-                    marketId={market.id}
-                    prefill={null}
-                    onSaved={() => qc.invalidateQueries({ queryKey: ["exchange-apis"] })}
-                    onCancel={() => {}}
-                  />
-                );
-              })}
-            </div>
-          )}
-        </div>
-      ))}
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

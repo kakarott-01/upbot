@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Save, AlertTriangle } from 'lucide-react'
 import { ModeControls } from '@/components/dashboard/mode-controls'
+import { ToggleSwitch } from '@/components/ui/toggle-switch'
 
 const defaults = {
   maxPositionPct:  2,
@@ -80,10 +81,10 @@ export default function SettingsPage() {
     <div className="space-y-5 max-w-2xl mx-auto">
       <h1 className="text-xl font-semibold text-gray-100">Bot Settings</h1>
 
-      {/* ── Trading Mode Controls (NEW) ──────────────────────────────────── */}
+      {/* Trading Mode Controls */}
       <ModeControls />
 
-      {/* ── Risk Manager ─────────────────────────────────────────────────── */}
+      {/* Risk Manager */}
       <div className="card space-y-5">
         <div className="flex items-center gap-2 pb-3 border-b border-gray-800">
           <Shield className="w-4 h-4 text-brand-500" />
@@ -161,21 +162,16 @@ export default function SettingsPage() {
           <p className="text-xs text-gray-600 mt-1">Wait this long before next trade after a loss</p>
         </div>
 
+        {/* Trailing Stop — fixed toggle */}
         <div className="flex items-center justify-between pt-2 border-t border-gray-800">
-          <div>
+          <div className="flex-1 min-w-0 mr-4">
             <p className="text-sm text-gray-300">Trailing Stop Loss</p>
             <p className="text-xs text-gray-600">Stop loss follows price as it moves in your favour</p>
           </div>
-          <button
-            onClick={() => set('trailingStop', !form.trailingStop)}
-            className={`relative w-11 h-6 rounded-full transition-colors ${
-              form.trailingStop ? 'bg-brand-500' : 'bg-gray-700'
-            }`}
-          >
-            <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${
-              form.trailingStop ? 'translate-x-5' : 'translate-x-0.5'
-            }`} />
-          </button>
+          <ToggleSwitch
+            checked={form.trailingStop}
+            onChange={v => set('trailingStop', v)}
+          />
         </div>
 
         <button

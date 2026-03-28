@@ -109,7 +109,7 @@ function StatusBadge({ status }: { status: 'running' | 'stopped' | 'error' }) {
   }[status]
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border ${cfg}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`} />
       {status.charAt(0).toUpperCase() + status.slice(1)}
     </span>
   )
@@ -187,6 +187,24 @@ function useToast() {
   return { toast, show }
 }
 
+// ─── Stat Card (fixed layout) ─────────────────────────────────────────────────
+function StatCard({
+  label, value, sub, color,
+}: {
+  label: string
+  value: string | number
+  sub: string
+  color: string
+}) {
+  return (
+    <div className="bg-gray-900/80 border border-gray-800 rounded-xl p-4 flex flex-col gap-1 min-w-0">
+      <span className="text-xs font-medium text-gray-500 uppercase tracking-wide leading-none">{label}</span>
+      <span className={`text-2xl font-bold leading-tight truncate ${color}`}>{value}</span>
+      <span className="text-xs text-gray-600 leading-none">{sub}</span>
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function BotHistoryPage() {
   const qc = useQueryClient()
@@ -223,8 +241,7 @@ export default function BotHistoryPage() {
   const sessions    = data?.sessions ?? []
   const pagination  = data?.pagination
 
-  // Compute summary stats from current page
-  const totalPnl   = sessions.reduce((s, r) => s + Number(r.totalPnl ?? 0), 0)
+  const totalPnl    = sessions.reduce((s, r) => s + Number(r.totalPnl ?? 0), 0)
   const totalTrades = sessions.reduce((s, r) => s + r.totalTrades, 0)
   const runningCount = sessions.filter(s => s.status === 'running').length
 
@@ -273,20 +290,32 @@ export default function BotHistoryPage() {
         </button>
       </div>
 
-      {/* Summary stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {[
-          { label: 'Total Sessions', value: pagination?.total ?? '—', sub: 'all time', color: 'text-gray-100' },
-          { label: 'Running Now',    value: runningCount, sub: 'active bots', color: runningCount > 0 ? 'text-brand-500' : 'text-gray-500' },
-          { label: 'Total Trades',  value: totalTrades, sub: 'this page', color: 'text-gray-100' },
-          { label: 'Page P&L',      value: `₹${totalPnl.toFixed(2)}`, sub: 'closed trades', color: totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400' },
-        ].map(c => (
-          <div key={c.label} className="stat-card">
-            <span className="stat-label">{c.label}</span>
-            <span className={`text-xl font-bold ${c.color}`}>{c.value}</span>
-            <span className="stat-sub">{c.sub}</span>
-          </div>
-        ))}
+      {/* Summary stat cards — fixed layout, no overlap */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard
+          label="Total Sessions"
+          value={pagination?.total ?? '—'}
+          sub="all time"
+          color="text-gray-100"
+        />
+        <StatCard
+          label="Running Now"
+          value={runningCount}
+          sub="active bots"
+          color={runningCount > 0 ? 'text-brand-500' : 'text-gray-500'}
+        />
+        <StatCard
+          label="Total Trades"
+          value={totalTrades}
+          sub="this page"
+          color="text-gray-100"
+        />
+        <StatCard
+          label="Page P&L"
+          value={`₹${totalPnl.toFixed(2)}`}
+          sub="closed trades"
+          color={totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}
+        />
       </div>
 
       {/* Filters */}
@@ -345,7 +374,7 @@ export default function BotHistoryPage() {
             <thead>
               <tr className="border-b border-gray-800">
                 {['Date', 'Start', 'End', 'Duration', 'Exchange · Market', 'Mode', 'Trades', 'P&L', 'Status', ''].map(h => (
-                  <th key={h} className="text-left text-xs text-gray-600 font-medium pb-3 pt-4 px-3 first:pl-5 last:pr-5">
+                  <th key={h} className="text-left text-xs text-gray-600 font-medium pb-3 pt-4 px-3 first:pl-5 last:pr-5 whitespace-nowrap">
                     {h}
                   </th>
                 ))}
@@ -371,9 +400,9 @@ export default function BotHistoryPage() {
                             <span className="text-brand-500 animate-pulse">Live…</span>
                           )}
                         </td>
-                        <td className="px-3 py-3.5">
+                        <td className="px-3 py-3.5 whitespace-nowrap">
                           <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
-                            <Clock className="w-3 h-3 text-gray-600" />
+                            <Clock className="w-3 h-3 text-gray-600 flex-shrink-0" />
                             {getDuration(s.startedAt, s.endedAt)}
                           </span>
                         </td>
@@ -383,21 +412,21 @@ export default function BotHistoryPage() {
                             <span className="text-xs text-gray-500">{MARKET_LABEL[s.market] ?? s.market}</span>
                           </div>
                         </td>
-                        <td className="px-3 py-3.5"><ModeBadge mode={s.mode} /></td>
+                        <td className="px-3 py-3.5 whitespace-nowrap"><ModeBadge mode={s.mode} /></td>
                         <td className="px-3 py-3.5">
                           <div className="flex flex-col gap-0.5">
                             <span className="text-xs text-gray-300 font-medium">{s.totalTrades} total</span>
-                            <span className="text-xs text-gray-600">
+                            <span className="text-xs text-gray-600 whitespace-nowrap">
                               {s.openTrades} open · {s.closedTrades} closed
                             </span>
                           </div>
                         </td>
-                        <td className="px-3 py-3.5">
+                        <td className="px-3 py-3.5 whitespace-nowrap">
                           <span className={`text-xs font-semibold font-mono ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                             {pnl >= 0 ? '+' : ''}₹{Math.abs(pnl).toFixed(2)}
                           </span>
                         </td>
-                        <td className="px-3 py-3.5"><StatusBadge status={s.status} /></td>
+                        <td className="px-3 py-3.5 whitespace-nowrap"><StatusBadge status={s.status} /></td>
                         <td className="px-3 py-3.5 pr-5">
                           <button
                             onClick={() => setToDelete(s)}
