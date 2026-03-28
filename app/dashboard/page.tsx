@@ -7,6 +7,14 @@ import { BotControls } from '@/components/dashboard/bot-controls'
 import { formatCurrency } from '@/lib/utils'
 
 export default function DashboardPage() {
+  // Separate query for accurate summary stats — no row limit
+  const { data: summaryData } = useQuery({
+    queryKey: ['trades-summary'],
+    queryFn:  () => fetch('/api/trades/summary').then(r => r.json()),
+    refetchInterval: 15 * 1000,
+  })
+
+  // Recent trades only for the table + chart (limit 50 is fine here)
   const { data: tradesData } = useQuery({
     queryKey: ['trades'],
     queryFn:  () => fetch('/api/trades?limit=50').then(r => r.json()),
@@ -16,14 +24,13 @@ export default function DashboardPage() {
     queryKey:        ['bot-status'],
     queryFn:         () => fetch('/api/bot/status').then(r => r.json()),
     refetchInterval: 5000,
-    // Never flash back to empty while re-fetching — carry previous value
     placeholderData: (prev) => prev,
   })
 
-  const summary      = tradesData?.summary ?? { totalPnl: 0, winRate: 0, total: 0, closed: 0 }
+  // Use dedicated summary endpoint for stat cards
+  const summary = summaryData ?? { totalPnl: 0, winRate: 0, total: 0, closed: 0 }
   const recentTrades = tradesData?.trades?.slice(0, 10) ?? []
 
-  // Bot status card values — show skeleton while the very first fetch is in flight
   const botStatus        = botData?.status ?? 'stopped'
   const botIsRunning     = botStatus === 'running'
   const botActiveMarkets = botData?.activeMarkets ?? []
@@ -39,7 +46,6 @@ export default function DashboardPage() {
             {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
         </div>
-        {/* botData passed directly — BotControls reads the live query internally */}
         <BotControls botData={botData} />
       </div>
 
@@ -77,12 +83,11 @@ export default function DashboardPage() {
           <span className="stat-sub">Since inception</span>
         </div>
 
-        {/* Bot Status card — skeleton while loading, never flickers to stale state */}
+        {/* Bot Status card */}
         <div className="stat-card">
           <div className="flex items-center justify-between mb-1">
             <span className="stat-label">Bot Status</span>
             {botLoading && !botData ? (
-              // First-load skeleton dot
               <span className="w-2 h-2 rounded-full bg-gray-700 animate-pulse" />
             ) : (
               <span className={`w-2 h-2 rounded-full ${
@@ -92,7 +97,6 @@ export default function DashboardPage() {
           </div>
 
           {botLoading && !botData ? (
-            // First-load skeleton text
             <>
               <div className="h-5 w-20 bg-gray-800 rounded animate-pulse mb-1" />
               <div className="h-3 w-28 bg-gray-800 rounded animate-pulse" />
@@ -115,7 +119,7 @@ export default function DashboardPage() {
 
       </div>
 
-      {/* P&L Chart */}
+      {/* P&L Chart — uses the limited trades fetch, fine for chart */}
       <div className="card">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-medium text-gray-300">P&L Over Time</h2>
