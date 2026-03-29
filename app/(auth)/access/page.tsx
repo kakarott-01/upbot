@@ -74,7 +74,7 @@ export default function AccessPage() {
               <polyline points="16 7 22 7 22 13"/>
             </svg>
           </div>
-          <span style={S.name}>AlgoBot</span>
+          <span style={S.name}>UpBot</span>
         </div>
 
         <div style={S.card}>

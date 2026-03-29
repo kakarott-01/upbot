@@ -4,9 +4,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle, ChevronDown, ChevronUp, Shield, ExternalLink,
   Eye, EyeOff, Pencil, X, Loader2, Lock, KeyRound, MailCheck, Plus,
+  AlertTriangle,
 } from "lucide-react";
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface SavedApi {
   id: string;
@@ -22,8 +21,6 @@ interface RevealedKeys {
   apiSecret: string;
   extra: Record<string, string>;
 }
-
-// ── Market / exchange config ──────────────────────────────────────────────────
 
 const MARKETS = [
   {
@@ -45,8 +42,8 @@ const MARKETS = [
   {
     id: "commodities", label: "🛢 Commodities", desc: "MCX, NCDEX — Gold, Silver, Crude",
     exchanges: [
-      { id: "fyers",     name: "Fyers",                  fields: ["App ID", "Secret Key"],                       docs: "https://fyers.in" },
-      { id: "dhan",      name: "Dhan (MCX)",              fields: ["Client ID", "Access Token"],                  docs: "https://dhanhq.co" },
+      { id: "fyers",     name: "Fyers",                  fields: ["App ID", "Secret Key"],                         docs: "https://fyers.in" },
+      { id: "dhan",      name: "Dhan (MCX)",              fields: ["Client ID", "Access Token"],                    docs: "https://dhanhq.co" },
       { id: "angelone",  name: "Angel One SmartAPI",      fields: ["API Key", "Client Code", "PIN", "TOTP Secret"], docs: "https://angelone.in" },
     ],
   },
@@ -59,7 +56,7 @@ const MARKETS = [
   },
 ];
 
-// ── OTP Modal ─────────────────────────────────────────────────────────────────
+// ── OTP Modal (for viewing/editing API keys) ──────────────────────────────────
 
 interface OtpModalProps {
   email: string;
@@ -252,10 +249,11 @@ interface ConnectedCardProps {
   exch: { id: string; name: string; fields: string[]; docs: string };
   market: { id: string };
   userEmail: string;
+  botActiveForMarket: boolean;   // ← NEW: bot is running for this market
   onEdit: () => void;
 }
 
-function ConnectedCard({ exch, market, userEmail, onEdit }: ConnectedCardProps) {
+function ConnectedCard({ exch, market, userEmail, botActiveForMarket, onEdit }: ConnectedCardProps) {
   const [showOtpModal, setShowOtpModal] = useState(false);
   const [revealed,     setRevealed]     = useState<RevealedKeys | null>(null);
   const [loading,      setLoading]      = useState(false);
@@ -313,14 +311,34 @@ function ConnectedCard({ exch, market, userEmail, onEdit }: ConnectedCardProps) 
             >
               <ExternalLink className="w-3 h-3" /> Docs
             </a>
-            <button
-              onClick={onEdit}
-              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-brand-500 bg-gray-800 hover:bg-gray-700 border border-gray-700 px-2.5 py-1.5 rounded-lg transition-colors"
-            >
-              <Pencil className="w-3 h-3" /> Edit
-            </button>
+            {botActiveForMarket ? (
+              // ── Bot is running for this market: show locked edit button ──
+              <div
+                title="Stop the bot for this market before editing API keys"
+                className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-800 border border-gray-700 px-2.5 py-1.5 rounded-lg cursor-not-allowed select-none"
+              >
+                <Lock className="w-3 h-3" /> Locked
+              </div>
+            ) : (
+              <button
+                onClick={onEdit}
+                className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-brand-500 bg-gray-800 hover:bg-gray-700 border border-gray-700 px-2.5 py-1.5 rounded-lg transition-colors"
+              >
+                <Pencil className="w-3 h-3" /> Edit
+              </button>
+            )}
           </div>
         </div>
+
+        {/* Bot-active warning banner */}
+        {botActiveForMarket && (
+          <div className="mx-4 mb-3 flex items-start gap-2 bg-amber-900/15 border border-amber-900/30 rounded-lg px-3 py-2">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-400/80">
+              Bot is actively trading on this market. Stop the bot to edit these API keys.
+            </p>
+          </div>
+        )}
 
         <div className="px-4 pb-4 pt-1 space-y-3 border-t border-gray-700/40">
           {loading ? (
@@ -358,7 +376,7 @@ function ConnectedCard({ exch, market, userEmail, onEdit }: ConnectedCardProps) 
   );
 }
 
-// ── Exchange input form ────────────────────────────────────────────────────────
+// ── Exchange input form ───────────────────────────────────────────────────────
 
 interface ExchangeFormProps {
   exch: { id: string; name: string; fields: string[]; docs: string };
@@ -485,6 +503,7 @@ interface ExchangeRowProps {
   market: { id: string };
   saved: boolean;
   userEmail: string;
+  botActiveForMarket: boolean;
   editingKey: string | null;
   editPrefill: RevealedKeys | null;
   onEdit: () => void;
@@ -494,8 +513,8 @@ interface ExchangeRowProps {
 }
 
 function ExchangeRow({
-  exch, market, saved, userEmail, editingKey, editPrefill,
-  onEdit, onSaved, onCancelEdit, onEditOtpModal,
+  exch, market, saved, userEmail, botActiveForMarket,
+  editingKey, editPrefill, onEdit, onSaved, onCancelEdit, onEditOtpModal,
 }: ExchangeRowProps) {
   const key = `${market.id}_${exch.id}`;
   const isEditing = editingKey === key;
@@ -515,7 +534,15 @@ function ExchangeRow({
   }
 
   if (saved) {
-    return <ConnectedCard exch={exch} market={market} userEmail={userEmail} onEdit={onEditOtpModal} />;
+    return (
+      <ConnectedCard
+        exch={exch}
+        market={market}
+        userEmail={userEmail}
+        botActiveForMarket={botActiveForMarket}
+        onEdit={onEditOtpModal}
+      />
+    );
   }
 
   return (
@@ -567,16 +594,26 @@ function ExchangeRow({
 
 export default function MarketsPage() {
   const qc = useQueryClient();
-  // ✅ FIX: Start with null — no market expanded by default on page visit
-  const [expanded, setExpanded]           = useState<string | null>(null);
-  const [editingKey, setEditingKey]       = useState<string | null>(null);
-  const [editPrefill, setEditPrefill]     = useState<RevealedKeys | null>(null);
-  const [editOtpModal, setEditOtpModal]   = useState<{ marketId: string; exchId: string } | null>(null);
+  const [expanded,      setExpanded]      = useState<string | null>(null);
+  const [editingKey,    setEditingKey]    = useState<string | null>(null);
+  const [editPrefill,   setEditPrefill]   = useState<RevealedKeys | null>(null);
+  const [editOtpModal,  setEditOtpModal]  = useState<{ marketId: string; exchId: string } | null>(null);
 
   const { data: existingApis } = useQuery<SavedApi[]>({
     queryKey: ["exchange-apis"],
     queryFn:  () => fetch("/api/exchange").then(r => r.json()),
   });
+
+  // Fetch bot status to know which markets are actively running
+  const { data: botData } = useQuery({
+    queryKey:        ["bot-status"],
+    queryFn:         () => fetch("/api/bot/status").then(r => r.json()),
+    refetchInterval: 5000,
+    placeholderData: (prev: any) => prev,
+  });
+
+  const botRunning      = botData?.status === 'running';
+  const activeMarkets: string[] = botData?.activeMarkets ?? [];
 
   const { data: meData } = useQuery({
     queryKey: ["me"],
@@ -589,8 +626,10 @@ export default function MarketsPage() {
     return existingApis?.some(a => a.marketType === marketId && a.exchangeName === exchId);
   }
 
-  // ✅ FIX: Removed the useEffect that was auto-expanding markets on page visit.
-  // Users now manually click to expand any market they want.
+  // Is the bot actively running for this specific market?
+  function isBotActiveForMarket(marketId: string) {
+    return botRunning && activeMarkets.includes(marketId);
+  }
 
   async function handleEditOtpVerified(marketId: string, exchId: string) {
     setEditOtpModal(null);
@@ -623,6 +662,17 @@ export default function MarketsPage() {
         </div>
       </div>
 
+      {/* Bot-running banner */}
+      {botRunning && activeMarkets.length > 0 && (
+        <div className="bg-brand-500/5 border border-brand-500/20 rounded-xl px-4 py-3 flex items-start gap-3">
+          <AlertTriangle className="w-4 h-4 text-brand-500 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-brand-500/80">
+            Bot is running for <strong className="text-brand-500">{activeMarkets.join(', ')}</strong>.
+            API keys for these markets are locked. Stop the bot to edit them.
+          </p>
+        </div>
+      )}
+
       {/* Edit OTP modal */}
       {editOtpModal && (
         <OtpModal
@@ -634,8 +684,9 @@ export default function MarketsPage() {
 
       {/* Market accordions */}
       {MARKETS.map(market => {
-        const hasConnection = market.exchanges.some(e => isSaved(market.id, e.id));
-        const isOpen = expanded === market.id;
+        const hasConnection    = market.exchanges.some(e => isSaved(market.id, e.id));
+        const isOpen           = expanded === market.id;
+        const botActiveHere    = isBotActiveForMarket(market.id);
 
         return (
           <div key={market.id} className="card overflow-hidden">
@@ -648,7 +699,13 @@ export default function MarketsPage() {
                 <p className="text-xs text-gray-500 mt-0.5">{market.desc}</p>
               </div>
               <div className="flex items-center gap-3">
-                {hasConnection && (
+                {botActiveHere && (
+                  <span className="text-xs text-brand-500 bg-brand-500/10 border border-brand-500/20 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-brand-500 animate-pulse" />
+                    Bot Active
+                  </span>
+                )}
+                {hasConnection && !botActiveHere && (
                   <span className="text-xs text-brand-500 bg-brand-500/10 border border-brand-500/20 px-2 py-0.5 rounded-full">
                     Connected
                   </span>
@@ -663,19 +720,20 @@ export default function MarketsPage() {
             {isOpen && (
               <div className="mt-4 pt-4 border-t border-gray-800 space-y-2">
                 {market.exchanges.map(exch => {
-                  const key   = `${market.id}_${exch.id}`;
-                  const saved = isSaved(market.id, exch.id) ?? false;
+                  const rowKey = `${market.id}_${exch.id}`;
+                  const saved  = isSaved(market.id, exch.id) ?? false;
 
                   return (
                     <ExchangeRow
-                      key={key}
+                      key={rowKey}
                       exch={exch}
                       market={market}
                       saved={saved}
                       userEmail={userEmail}
+                      botActiveForMarket={botActiveHere}
                       editingKey={editingKey}
                       editPrefill={editPrefill}
-                      onEdit={() => setEditingKey(key)}
+                      onEdit={() => setEditingKey(rowKey)}
                       onSaved={() => {
                         setEditingKey(null);
                         setEditPrefill(null);
@@ -685,7 +743,11 @@ export default function MarketsPage() {
                         setEditingKey(null);
                         setEditPrefill(null);
                       }}
-                      onEditOtpModal={() => setEditOtpModal({ marketId: market.id, exchId: exch.id })}
+                      onEditOtpModal={() => {
+                        // Block edit if bot is active for this market
+                        if (botActiveHere) return;
+                        setEditOtpModal({ marketId: market.id, exchId: exch.id });
+                      }}
                     />
                   );
                 })}

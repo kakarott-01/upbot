@@ -4,11 +4,7 @@ import { verifySignupToken } from '@/lib/jwt'
 import { db } from '@/lib/db'
 import { accessCodes } from '@/lib/schema'
 import { eq } from 'drizzle-orm'
-
-declare global {
-  var __otpStore: Map<string, { otp: string; expiresAt: number }>
-}
-global.__otpStore = global.__otpStore ?? new Map()
+import { redis } from '@/lib/redis'
 
 const sql = neon(process.env.DATABASE_URL!)
 
@@ -21,12 +17,13 @@ export async function POST(req: NextRequest) {
 
     const normalizedEmail = email.toLowerCase().trim()
 
-    // Verify OTP from global store
-    const entry = global.__otpStore.get(normalizedEmail)
-    if (!entry || Date.now() > entry.expiresAt || entry.otp !== otp) {
+    // ── Verify OTP from Redis (replaces broken global.__otpStore) ─────────────
+    const stored = await redis.get<string>(`login_otp:${normalizedEmail}`)
+    if (!stored || stored !== String(otp).trim()) {
       return NextResponse.json({ error: 'Invalid or expired code' }, { status: 401 })
     }
-    global.__otpStore.delete(normalizedEmail) // burn after use
+    // Burn after use
+    await redis.del(`login_otp:${normalizedEmail}`)
 
     // Find existing user
     const existing = await sql`SELECT id FROM users WHERE email = ${normalizedEmail} LIMIT 1`
@@ -70,7 +67,6 @@ export async function POST(req: NextRequest) {
       userId = newUser[0].id
       console.info(`✅ New user created: ${normalizedEmail}`)
 
-      // Clear signup token after using it
       const postResponse = NextResponse.json({ success: true })
       postResponse.cookies.delete('signup_token')
       postResponse.cookies.set('user_session', JSON.stringify({
@@ -100,7 +96,6 @@ export async function POST(req: NextRequest) {
       sameSite: 'lax',
     })
 
-    // Remove any signup_token left over
     response.cookies.delete('signup_token')
 
     return response

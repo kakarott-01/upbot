@@ -1,3 +1,8 @@
+// app/api/mode/verify-otp/route.ts
+//
+// Verifies the mode-switch OTP (separate from the reveal-API-keys OTP).
+// Sets a short-lived cookie 'mode_switch_token' that /api/mode POST checks.
+
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { redis } from '@/lib/redis'
@@ -13,7 +18,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'OTP required' }, { status: 400 })
   }
 
-  const stored = await redis.get<string>(`reveal_otp:${session.id}`)
+  const stored = await redis.get<string>(`mode_switch_otp:${session.id}`)
 
   if (!stored) {
     return NextResponse.json({ error: 'No OTP found. Please request a new one.' }, { status: 401 })
@@ -24,13 +29,13 @@ export async function POST(req: NextRequest) {
   }
 
   // Burn OTP
-  await redis.del(`reveal_otp:${session.id}`)
+  await redis.del(`mode_switch_otp:${session.id}`)
 
-  // Issue short-lived reveal token cookie (5 minutes)
+  // Issue a short-lived mode-switch token cookie (5 minutes)
   const token = Buffer.from(`${session.id}:${Date.now()}`).toString('base64')
 
   const response = NextResponse.json({ success: true })
-  response.cookies.set('reveal_token', token, {
+  response.cookies.set('mode_switch_token', token, {
     httpOnly: true,
     maxAge:   5 * 60,
     path:     '/',

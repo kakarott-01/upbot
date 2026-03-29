@@ -1,11 +1,12 @@
 // app/api/mode/route.ts
 //
-// GET  /api/mode          → returns all market modes for the current user
-// POST /api/mode          → switches a market's mode (paper ↔ live)
+// GET  /api/mode  → returns all market modes for the current user
+// POST /api/mode  → switches a market's mode (paper ↔ live)
 //
-// Rules enforced here:
+// Rules enforced:
 //  1. Bot must be STOPPED before any mode switch
-//  2. paper → live requires a valid OTP (reuses the reveal-OTP cookie infrastructure)
+//  2. paper → live requires a valid mode_switch_token cookie
+//     (set by /api/mode/verify-otp, NOT the reveal-API-keys OTP)
 //  3. Every switch is written to mode_audit_logs
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -16,13 +17,12 @@ import { eq, and } from 'drizzle-orm'
 import { z } from 'zod'
 import { getClientIp } from '@/lib/utils'
 
-// ── Validation ─────────────────────────────────────────────────────────────────
 const switchSchema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
   toMode:     z.enum(['paper', 'live']),
 })
 
-// ── GET: return current mode for every market ──────────────────────────────────
+// ── GET ───────────────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
   const session = await auth()
   if (!session?.id) {
@@ -34,25 +34,25 @@ export async function GET(req: NextRequest) {
     columns: {
       marketType: true,
       mode:       true,
-      paperMode:  true,  // legacy, returned for backward compat
+      paperMode:  true,
       isActive:   true,
       updatedAt:  true,
     },
   })
 
-  // Also return bot running status so the UI can disable toggles
   const botStatus = await db.query.botStatuses.findFirst({
     where: eq(botStatuses.userId, session.id),
-    columns: { status: true },
+    columns: { status: true, activeMarkets: true },
   })
 
   return NextResponse.json({
-    botRunning: botStatus?.status === 'running',
-    markets:    configs,
+    botRunning:    botStatus?.status === 'running',
+    activeMarkets: botStatus?.activeMarkets ?? [],
+    markets:       configs,
   })
 }
 
-// ── POST: switch mode for a market ────────────────────────────────────────────
+// ── POST ──────────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session?.id) {
@@ -90,24 +90,23 @@ export async function POST(req: NextRequest) {
 
   const fromMode = existing?.mode ?? 'paper'
 
-  // No-op: already in requested mode
   if (fromMode === toMode) {
     return NextResponse.json({ success: true, mode: toMode })
   }
 
-  // ── Guard 2: paper → live requires OTP verification ──────────────────────
+  // ── Guard 2: paper → live requires mode_switch_token cookie ──────────────
+  // This is a SEPARATE token from the reveal_token used for viewing API keys.
   if (toMode === 'live') {
-    const revealToken = req.cookies.get('reveal_token')?.value
-    if (!revealToken) {
+    const modeSwitchToken = req.cookies.get('mode_switch_token')?.value
+    if (!modeSwitchToken) {
       return NextResponse.json(
         { error: 'OTP verification required to enable live trading.', requiresOtp: true },
         { status: 403 }
       )
     }
 
-    // Validate reveal token (same format used by /api/exchange/verify-reveal-otp)
     try {
-      const [tokenUserId, timestamp] = Buffer.from(revealToken, 'base64')
+      const [tokenUserId, timestamp] = Buffer.from(modeSwitchToken, 'base64')
         .toString('utf8')
         .split(':')
 
@@ -132,12 +131,11 @@ export async function POST(req: NextRequest) {
     await db.update(marketConfigs)
       .set({
         mode:      toMode,
-        paperMode: toMode === 'paper',  // keep legacy column in sync
+        paperMode: toMode === 'paper',
         updatedAt: new Date(),
       })
       .where(eq(marketConfigs.id, existing.id))
   } else {
-    // Create config row if it doesn't exist yet
     await db.insert(marketConfigs).values({
       userId:     session.id,
       marketType: marketType as any,

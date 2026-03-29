@@ -6,7 +6,7 @@ import { Providers } from '@/components/providers'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'AlgoBot — Automated Trading',
+  title: 'UpBot — Automated Trading',
   description: 'Personal algorithmic trading bot',
   icons: {
     icon: [

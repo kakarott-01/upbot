@@ -131,7 +131,7 @@ export default function LoginPage() {
               <polyline points="16 7 22 7 22 13"/>
             </svg>
           </div>
-          <span style={{ fontSize:'22px', fontWeight:600, color:'#f9fafb' }}>AlgoBot</span>
+          <span style={{ fontSize:'22px', fontWeight:600, color:'#f9fafb' }}>UpBot</span>
         </div>
 
         <div style={card}>

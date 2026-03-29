@@ -1,22 +1,11 @@
 'use client'
 
-// components/dashboard/mode-controls.tsx
-//
-// Renders the per-market mode toggles (PAPER ↔ LIVE).
-// Handles:
-//  - Disabling toggles when bot is running
-//  - Warning modal before any live switch
-//  - OTP verification modal (reuses existing /api/exchange/send-reveal-otp flow)
-//  - Audit log display
-
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   AlertTriangle, Shield, Clock, CheckCircle,
   Loader2, Lock, MailCheck, X, ChevronDown, ChevronUp,
 } from 'lucide-react'
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 type TradingMode = 'paper' | 'live'
 
@@ -28,8 +17,9 @@ interface MarketModeState {
 }
 
 interface ModesResponse {
-  botRunning: boolean
-  markets:    MarketModeState[]
+  botRunning:    boolean
+  activeMarkets: string[]
+  markets:       MarketModeState[]
 }
 
 interface AuditLog {
@@ -41,8 +31,6 @@ interface AuditLog {
   createdAt: string
 }
 
-// ── Market display config ──────────────────────────────────────────────────────
-
 const MARKET_LABELS: Record<string, string> = {
   indian:      '🇮🇳 Indian Markets',
   crypto:      '₿ Crypto',
@@ -50,7 +38,7 @@ const MARKET_LABELS: Record<string, string> = {
   global:      '🌐 Global',
 }
 
-// ── OTP Modal (reused from existing reveal-OTP flow) ──────────────────────────
+// ── OTP Modal (mode-switch dedicated) ─────────────────────────────────────────
 
 interface OtpModalProps {
   email:      string
@@ -75,9 +63,10 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
     return () => clearTimeout(t)
   }, [cooldown])
 
+  // Uses the NEW dedicated mode-switch OTP endpoint
   async function sendOtp() {
     setSending(true); setError('')
-    const res = await fetch('/api/exchange/send-reveal-otp', { method: 'POST' })
+    const res = await fetch('/api/mode/send-otp', { method: 'POST' })
     setSending(false)
     if (res.ok) { setSent(true); setCooldown(60); setTimeout(() => refs.current[0]?.focus(), 100) }
     else { const d = await res.json(); setError(d.error ?? 'Failed to send OTP') }
@@ -87,7 +76,8 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
     const code = digits.join('')
     if (code.length !== 6) return
     setVerifying(true); setError('')
-    const res = await fetch('/api/exchange/verify-reveal-otp', {
+    // Uses the NEW dedicated mode-switch verify endpoint
+    const res = await fetch('/api/mode/verify-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ otp: code }),
@@ -122,12 +112,12 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
       <div className="w-full max-w-sm bg-gray-900 border border-gray-800 rounded-2xl shadow-2xl overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-brand-500/15 flex items-center justify-center">
-              <Lock className="w-4 h-4 text-brand-500" />
+            <div className="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center">
+              <Lock className="w-4 h-4 text-red-400" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-gray-100">Verify to enable Live Trading</p>
-              <p className="text-xs text-gray-500">OTP security check</p>
+              <p className="text-sm font-semibold text-gray-100">Confirm Live Trading</p>
+              <p className="text-xs text-gray-500">OTP sent to your email</p>
             </div>
           </div>
           <button onClick={onClose} className="text-gray-600 hover:text-gray-300 transition-colors">
@@ -138,17 +128,17 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
         <div className="px-5 py-5">
           {sending && !sent ? (
             <div className="flex flex-col items-center py-4 gap-3">
-              <Loader2 className="w-6 h-6 text-brand-500 animate-spin" />
-              <p className="text-sm text-gray-400">Sending OTP to your email…</p>
+              <Loader2 className="w-6 h-6 text-red-400 animate-spin" />
+              <p className="text-sm text-gray-400">Sending confirmation code…</p>
             </div>
           ) : (
             <>
-              <div className="flex items-start gap-2.5 bg-brand-500/5 border border-brand-500/15 rounded-xl px-3.5 py-3 mb-5">
-                <MailCheck className="w-4 h-4 text-brand-500 flex-shrink-0 mt-0.5" />
+              <div className="flex items-start gap-2.5 bg-red-500/5 border border-red-500/15 rounded-xl px-3.5 py-3 mb-5">
+                <MailCheck className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
                 <p className="text-xs text-gray-400">
-                  A 6-digit code was sent to{' '}
+                  A confirmation code was sent to{' '}
                   <span className="text-gray-200 font-medium">{email}</span>.
-                  Enter it below to enable live trading.
+                  Enter it to enable live trading with real funds.
                 </p>
               </div>
               <div className="flex gap-2 justify-center mb-4">
@@ -163,8 +153,8 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
                     inputMode="numeric"
                     autoFocus={i === 0 && sent}
                     className="w-11 h-12 text-center text-lg font-semibold bg-gray-800 border border-gray-700
-                               rounded-lg text-gray-100 focus:border-brand-500 focus:ring-1
-                               focus:ring-brand-500/30 outline-none transition-all"
+                               rounded-lg text-gray-100 focus:border-red-400 focus:ring-1
+                               focus:ring-red-400/30 outline-none transition-all"
                   />
                 ))}
               </div>
@@ -173,19 +163,19 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
                 onClick={verify}
                 disabled={digits.join('').length !== 6 || verifying}
                 className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all
-                           bg-brand-500 hover:bg-brand-600 text-white
+                           bg-red-600 hover:bg-red-500 text-white
                            disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed"
               >
                 {verifying
                   ? <span className="flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Verifying…</span>
-                  : 'Verify & Enable Live'}
+                  : 'Confirm — Enable Live Trading'}
               </button>
               <button
                 onClick={sendOtp}
                 disabled={cooldown > 0 || sending}
                 className="w-full mt-2 py-2 text-xs text-gray-500 hover:text-gray-300 disabled:text-gray-700 disabled:cursor-not-allowed transition-colors"
               >
-                {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend OTP'}
+                {cooldown > 0 ? `Resend in ${cooldown}s` : 'Resend code'}
               </button>
             </>
           )}
@@ -195,7 +185,7 @@ function OtpModal({ email, onVerified, onClose }: OtpModalProps) {
   )
 }
 
-// ── Warning modal (shown before OTP for paper → live) ─────────────────────────
+// ── Warning modal ─────────────────────────────────────────────────────────────
 
 interface WarningModalProps {
   marketType: string
@@ -265,7 +255,7 @@ function LiveWarningModal({ marketType, onConfirm, onClose }: WarningModalProps)
   )
 }
 
-// ── Paper → Live confirmation modal (no OTP needed) ───────────────────────────
+// ── Paper confirm modal ───────────────────────────────────────────────────────
 
 interface PaperConfirmModalProps {
   marketType: string
@@ -305,7 +295,7 @@ function PaperConfirmModal({ marketType, onConfirm, onClose }: PaperConfirmModal
   )
 }
 
-// ── Audit log display ─────────────────────────────────────────────────────────
+// ── Audit log ─────────────────────────────────────────────────────────────────
 
 function AuditLog() {
   const [open, setOpen] = useState(false)
@@ -377,7 +367,6 @@ function AuditLog() {
 export function ModeControls() {
   const qc = useQueryClient()
 
-  // Pending action state: which market + which target mode is being processed
   const [pending, setPending] = useState<{
     marketType: string
     toMode:     TradingMode
@@ -412,17 +401,17 @@ export function ModeControls() {
       setPending(null)
     },
     onError: (err: Error) => {
-      // Surface the error — modal stays open
       console.error('Mode switch failed:', err.message)
     },
   })
 
-  const botRunning = data?.botRunning ?? false
-  const markets    = data?.markets ?? []
-  const userEmail  = meData?.email ?? 'your email'
+  const botRunning    = data?.botRunning ?? false
+  const activeMarkets = data?.activeMarkets ?? []
+  const markets       = data?.markets ?? []
+  const userEmail     = meData?.email ?? 'your email'
 
   function requestSwitch(marketType: string, toMode: TradingMode) {
-    if (botRunning) return  // guard: should be disabled in UI too
+    if (botRunning) return
     if (toMode === 'live') {
       setPending({ marketType, toMode, step: 'warning' })
     } else {
@@ -437,7 +426,6 @@ export function ModeControls() {
 
   function handleOtpVerified() {
     if (!pending) return
-    // OTP sets the reveal_token cookie; now fire the actual switch
     switchMut.mutate({ marketType: pending.marketType, toMode: pending.toMode })
   }
 
@@ -446,7 +434,6 @@ export function ModeControls() {
     switchMut.mutate({ marketType: pending.marketType, toMode: pending.toMode })
   }
 
-  // Determine which markets to show — fall back to all 4 if no configs yet
   const ALL_MARKETS = ['indian', 'crypto', 'commodities', 'global']
   const displayMarkets = ALL_MARKETS.map(mt => {
     const found = markets.find(m => m.marketType === mt)
@@ -455,7 +442,6 @@ export function ModeControls() {
 
   return (
     <>
-      {/* Modals */}
       {pending?.step === 'warning' && (
         <LiveWarningModal
           marketType={pending.marketType}
@@ -479,7 +465,6 @@ export function ModeControls() {
       )}
 
       <div className="card space-y-5">
-        {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-gray-800">
           <div className="flex items-center gap-2">
             <Shield className="w-4 h-4 text-brand-500" />
@@ -494,7 +479,6 @@ export function ModeControls() {
           )}
         </div>
 
-        {/* Per-market toggle rows */}
         {isLoading ? (
           <div className="flex items-center justify-center py-6">
             <Loader2 className="w-5 h-5 animate-spin text-gray-600" />
@@ -502,9 +486,10 @@ export function ModeControls() {
         ) : (
           <div className="space-y-3">
             {displayMarkets.map(({ marketType, mode }) => {
-              const isLive    = mode === 'live'
-              const switching = switchMut.isPending &&
-                pending?.marketType === marketType
+              const isLive      = mode === 'live'
+              // Bot is actively trading this market → lock the toggle
+              const isBotActive = botRunning && activeMarkets.includes(marketType)
+              const switching   = switchMut.isPending && pending?.marketType === marketType
 
               return (
                 <div
@@ -515,7 +500,6 @@ export function ModeControls() {
                       : 'bg-gray-800/40 border-gray-700/50'
                   }`}
                 >
-                  {/* Left: market name + badge */}
                   <div className="flex items-center gap-3">
                     <span className="text-sm text-gray-300">
                       {MARKET_LABELS[marketType] ?? marketType}
@@ -527,19 +511,21 @@ export function ModeControls() {
                     }`}>
                       {isLive ? '🔴 LIVE' : '🟡 PAPER'}
                     </span>
+                    {isBotActive && (
+                      <span className="text-xs text-brand-500 bg-brand-500/10 border border-brand-500/20 px-2 py-0.5 rounded-full">
+                        Bot active
+                      </span>
+                    )}
                   </div>
 
-                  {/* Right: toggle */}
                   <div className="flex items-center gap-2">
-                    {switching && (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-500" />
-                    )}
+                    {switching && <Loader2 className="w-3.5 h-3.5 animate-spin text-gray-500" />}
                     <button
-                      disabled={botRunning || switching}
+                      disabled={isBotActive || switching}
                       onClick={() => requestSwitch(marketType, isLive ? 'paper' : 'live')}
-                      title={botRunning ? 'Stop bot to change mode' : undefined}
+                      title={isBotActive ? 'Stop bot to change mode for this market' : undefined}
                       className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${
-                        botRunning || switching
+                        isBotActive || switching
                           ? 'opacity-40 cursor-not-allowed'
                           : 'cursor-pointer'
                       } ${isLive ? 'bg-red-600' : 'bg-gray-600'}`}
@@ -556,13 +542,11 @@ export function ModeControls() {
           </div>
         )}
 
-        {/* Info note */}
         <p className="text-xs text-gray-600 leading-relaxed">
-          Mode changes take effect on the next bot start. Switching requires the bot to be stopped.
-          Paper → Live requires OTP verification.
+          Mode changes take effect on the next bot start. Switching requires the bot to be stopped for that market.
+          Paper → Live requires email OTP confirmation.
         </p>
 
-        {/* Audit log */}
         <AuditLog />
       </div>
     </>
