@@ -17,8 +17,6 @@ const saveSchema = z.object({
 
 export async function POST(req: NextRequest) {
   const session = await auth()
-
-  // ✅ FIX
   if (!session?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -87,8 +85,6 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   const session = await auth()
-
-  // ✅ FIX
   if (!session?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -107,7 +103,10 @@ export async function GET(req: NextRequest) {
     },
   })
 
-  return NextResponse.json(apis)
+  const res = NextResponse.json(apis)
+  // Exchange API list rarely changes — cache 5 minutes
+  res.headers.set('Cache-Control', 'private, max-age=300, stale-while-revalidate=60')
+  return res
 }
 
 function getDefaultAlgo(market: string): string {

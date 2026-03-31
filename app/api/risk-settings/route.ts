@@ -17,8 +17,6 @@ const schema = z.object({
 
 export async function GET(req: NextRequest) {
   const session = await auth()
-
-  // ✅ FIX
   if (!session?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -27,13 +25,14 @@ export async function GET(req: NextRequest) {
     where: eq(riskSettings.userId, session.id),
   })
 
-  return NextResponse.json(settings ?? {})
+  const res = NextResponse.json(settings ?? {})
+  // Risk settings rarely change — cache 5 minutes, revalidate in background
+  res.headers.set('Cache-Control', 'private, max-age=300, stale-while-revalidate=60')
+  return res
 }
 
 export async function POST(req: NextRequest) {
   const session = await auth()
-
-  // ✅ FIX
   if (!session?.id) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }

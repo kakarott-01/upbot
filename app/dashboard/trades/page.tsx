@@ -91,8 +91,18 @@ function exportCSV(trades: Trade[]) {
   a.click(); URL.revokeObjectURL(url)
 }
 
-// ─── Pagination controls ─────────────────────────────────────────────────────
-function Paginator({ pagination, onPage }: { pagination: Pagination; onPage: (p: number) => void }) {
+// ─── Pagination controls ──────────────────────────────────────────────────────
+// PERFORMANCE: Prefetch next/prev page on button hover so clicks feel instant.
+// Data is already in cache by the time the user clicks — zero loading state.
+function Paginator({
+  pagination,
+  onPage,
+  onPrefetch,
+}: {
+  pagination: Pagination
+  onPage: (p: number) => void
+  onPrefetch: (p: number) => void
+}) {
   const { page, pages, total, limit } = pagination
   if (pages <= 1) return null
 
@@ -116,6 +126,7 @@ function Paginator({ pagination, onPage }: { pagination: Pagination; onPage: (p:
       </span>
       <div className="flex items-center gap-1">
         <button
+          onMouseEnter={() => page > 1 && onPrefetch(page - 1)}
           onClick={() => onPage(page - 1)}
           disabled={page === 1}
           className="p-1.5 rounded-lg bg-gray-800 border border-gray-700 text-gray-400 hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -124,12 +135,19 @@ function Paginator({ pagination, onPage }: { pagination: Pagination; onPage: (p:
         </button>
         {lo > 1 && (
           <>
-            <button onClick={() => onPage(1)} className="w-8 h-8 rounded-lg text-xs bg-gray-800 border border-gray-700 text-gray-500 hover:text-gray-200">1</button>
+            <button
+              onMouseEnter={() => onPrefetch(1)}
+              onClick={() => onPage(1)}
+              className="w-8 h-8 rounded-lg text-xs bg-gray-800 border border-gray-700 text-gray-500 hover:text-gray-200"
+            >1</button>
             {lo > 2 && <span className="text-gray-600 text-xs px-1">…</span>}
           </>
         )}
         {pageNums.map(p => (
-          <button key={p} onClick={() => onPage(p)}
+          <button
+            key={p}
+            onMouseEnter={() => p !== page && onPrefetch(p)}
+            onClick={() => onPage(p)}
             className={`w-8 h-8 rounded-lg text-xs border transition-colors ${
               p === page
                 ? 'bg-brand-500/15 border-brand-500/30 text-brand-500'
@@ -139,10 +157,15 @@ function Paginator({ pagination, onPage }: { pagination: Pagination; onPage: (p:
         {hi < pages && (
           <>
             {hi < pages - 1 && <span className="text-gray-600 text-xs px-1">…</span>}
-            <button onClick={() => onPage(pages)} className="w-8 h-8 rounded-lg text-xs bg-gray-800 border border-gray-700 text-gray-500 hover:text-gray-200">{pages}</button>
+            <button
+              onMouseEnter={() => onPrefetch(pages)}
+              onClick={() => onPage(pages)}
+              className="w-8 h-8 rounded-lg text-xs bg-gray-800 border border-gray-700 text-gray-500 hover:text-gray-200"
+            >{pages}</button>
           </>
         )}
         <button
+          onMouseEnter={() => page < pages && onPrefetch(page + 1)}
           onClick={() => onPage(page + 1)}
           disabled={page === pages}
           className="p-1.5 rounded-lg bg-gray-800 border border-gray-700 text-gray-400 hover:text-gray-200 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -154,7 +177,7 @@ function Paginator({ pagination, onPage }: { pagination: Pagination; onPage: (p:
   )
 }
 
-// ─── Stat Card — matches Bot History style, mobile-friendly ──────────────────
+// ─── Stat Card ────────────────────────────────────────────────────────────────
 function StatCard({
   label, value, sub, color, icon: Icon,
 }: {
@@ -196,16 +219,31 @@ export default function TradesPage() {
   }
 
   // ── Query ──────────────────────────────────────────────────────────────────
-  const params = new URLSearchParams({ page: String(page), limit: '50' })
-  if (market !== 'all') params.set('market', market)
-  if (status !== 'all') params.set('status', status)
-  if (mode   !== 'all') params.set('mode',   mode)
+  const buildParams = (p: number) => {
+    const params = new URLSearchParams({ page: String(p), limit: '50' })
+    if (market !== 'all') params.set('market', market)
+    if (status !== 'all') params.set('status', status)
+    if (mode   !== 'all') params.set('mode',   mode)
+    return params
+  }
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['trades', market, status, mode, page],
-    queryFn:  () => fetch(`/api/trades?${params}`).then(r => r.json()),
+    queryFn:  () => fetch(`/api/trades?${buildParams(page)}`).then(r => r.json()),
+    // PERFORMANCE: Trades are fresh for 15s before background refetch.
+    // Real-time accuracy isn't needed — the bot writes to DB, not the UI.
+    staleTime: 15_000,
     placeholderData: (prev: any) => prev,
   })
+
+  // ── Prefetch on hover — zero-latency page navigation ──────────────────────
+  const prefetchPage = useCallback((p: number) => {
+    qc.prefetchQuery({
+      queryKey: ['trades', market, status, mode, p],
+      queryFn:  () => fetch(`/api/trades?${buildParams(p)}`).then(r => r.json()),
+      staleTime: 30_000,
+    })
+  }, [qc, market, status, mode]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const trades: Trade[]        = data?.trades ?? []
   const pagination: Pagination = data?.pagination ?? { page: 1, limit: 50, total: 0, pages: 1, hasMore: false }
@@ -252,7 +290,6 @@ export default function TradesPage() {
 
   const isBusy = bulkDelete.isPending || deleteSingle.isPending
 
-  // ── Filter pill ────────────────────────────────────────────────────────────
   const Pill = ({ value, active, onClick, label }: { value: string; active: boolean; onClick: () => void; label?: string }) => (
     <button onClick={onClick}
       className={`px-3 py-1 text-xs rounded-lg border capitalize transition-colors ${
@@ -328,7 +365,7 @@ export default function TradesPage() {
         </div>
       </div>
 
-      {/* ✅ IMPROVED: Summary stat cards — mobile-first 2-col, desktop 3-col */}
+      {/* Summary stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
         <StatCard
           label="Total P&L"
@@ -344,7 +381,6 @@ export default function TradesPage() {
           color={summary.winRate >= 50 ? 'text-emerald-400' : 'text-red-400'}
           icon={Activity}
         />
-        {/* Full-width on mobile, normal on desktop */}
         <div className="col-span-2 lg:col-span-1">
           <StatCard
             label="Total Trades"
@@ -488,8 +524,12 @@ export default function TradesPage() {
           </table>
         </div>
 
-        {/* Pagination */}
-        <Paginator pagination={pagination} onPage={setPage} />
+        {/* Pagination with hover-prefetch */}
+        <Paginator
+          pagination={pagination}
+          onPage={(p) => { setPage(p); setSelected(new Set()) }}
+          onPrefetch={prefetchPage}
+        />
       </div>
     </div>
   )
