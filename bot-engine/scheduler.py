@@ -1,19 +1,21 @@
 """
-bot-engine/scheduler.py — REVISED v2
+bot-engine/scheduler.py — REVISED v3
 ======================================
-Key changes from v1:
+Key changes from v2:
 
-1. Drain mode read from DB (not in-memory flag).
-   _draining set removed. Algos call db.get_bot_stop_mode() directly.
-   This survives Render restarts correctly.
+1. session_ref now uses the REAL session ID from DB (passed in via
+   session_ids dict), not the placeholder "userId:market" string.
+   This means base_algo._reconcile_positions() correctly matches
+   bot_session_ref when filtering owned trades.
 
-2. close_all_task: a separate asyncio Task (not an APScheduler job)
-   that runs CloseAllEngine and then calls complete-stop.
+2. start_user_bot accepts an optional session_ids: Dict[str, str]
+   parameter so the Next.js start route can pass the DB-created
+   session IDs down. Falls back to "userId:market" if not provided
+   (backwards compatible with watchdog auto-restart).
 
-3. enter_drain_mode: just logs — actual drain signal is the DB status.
-   Algos read DB each cycle.
+3. Drain mode read from DB (not in-memory flag).
 
-4. session_ref passed to each algo instance for position ownership.
+4. close_all_task: a separate asyncio Task.
 
 5. stop_user_bot: cancels any running close_all task for the user.
 """
@@ -108,7 +110,20 @@ class BotScheduler:
 
     # ── Start ──────────────────────────────────────────────────────────────────
 
-    async def start_user_bot(self, user_id: str, markets: List[str]):
+    async def start_user_bot(
+        self,
+        user_id: str,
+        markets: List[str],
+        session_ids: Optional[Dict[str, str]] = None,
+    ):
+        """
+        Start the bot for a user.
+
+        session_ids: optional mapping of market → DB session UUID, passed in
+        from the Next.js /api/bot/start route. When provided, each algo gets
+        the correct session_ref so ownership tracking works properly.
+        Falls back to "userId:market" if not provided (e.g. watchdog restart).
+        """
         logger.info(f"🚀 Starting bot user={user_id} markets={markets}")
 
         await self._stop_jobs(user_id)
@@ -120,6 +135,10 @@ class BotScheduler:
             market_modes     = await self._db.get_market_modes(user_id)
 
             ctx = BotContext(user_id=user_id, markets=[])
+            # Store the session IDs so they are available in the context
+            if session_ids:
+                ctx.session_ids = session_ids
+
             started_markets: List[str] = []
 
             for market in markets:
@@ -143,12 +162,15 @@ class BotScheduler:
                 )
                 ctx.connectors[market] = connector
 
-                paper_mode  = market_modes.get(market, True)
-                AlgoClass   = ALGO_MAP.get(market, GlobalAlgo)
+                paper_mode = market_modes.get(market, True)
+                AlgoClass  = ALGO_MAP.get(market, GlobalAlgo)
 
-                # session_ref for ownership tagging: "userId:market"
-                # (simplified; in full impl use the actual sessionId from DB)
-                session_ref = f"{user_id}:{market}"
+                # Use the real DB session ID as the ownership tag if available.
+                # Falls back to "userId:market" for watchdog-triggered restarts
+                # where we don't have session IDs (new sessions are created
+                # fresh in that case by the DB layer).
+                real_session_id = (session_ids or {}).get(market)
+                session_ref     = real_session_id if real_session_id else f"{user_id}:{market}"
 
                 algo = AlgoClass(
                     connector=connector,
@@ -177,8 +199,6 @@ class BotScheduler:
                         logger.warning(f"⚠️  Heartbeat update failed: {e}")
 
                     # ── Drain completion check ────────────────────────────────
-                    # After each cycle, if we are in graceful mode and
-                    # open trades = 0, self-stop.
                     try:
                         stop_mode = await _scheduler._db.get_bot_stop_mode(_uid)
                         if stop_mode == "graceful":
@@ -209,7 +229,8 @@ class BotScheduler:
                 started_markets.append(market)
                 logger.info(
                     f"✅ Scheduled {AlgoClass.__name__} market={market} "
-                    f"every {interval}s [{'PAPER' if paper_mode else '🔴 LIVE'}]"
+                    f"every {interval}s [{'PAPER' if paper_mode else '🔴 LIVE'}] "
+                    f"session_ref={session_ref}"
                 )
 
             if not started_markets:
@@ -241,25 +262,16 @@ class BotScheduler:
             "(algos will read DB next cycle)"
         )
 
-    # ── Close All (active position closing) ────────────────────────────────────
+    # ── Close All ──────────────────────────────────────────────────────────────
 
     async def start_close_all(self, user_id: str):
-        """
-        Launch CloseAllEngine as a background asyncio Task.
-        APScheduler jobs are stopped first so the algo doesn't interfere.
-        """
+        """Launch CloseAllEngine as a background asyncio Task."""
         logger.info(f"🔴 Starting close_all for user={user_id[:8]}…")
 
-        # Stop algo cycles — CloseAllEngine handles position closing directly
         await self._stop_jobs(user_id)
 
         ctx = self.active_bots.get(user_id)
-        if not ctx:
-            # Bot context might not exist if this is called after a restart
-            # Still run close_all using DB data
-            logger.warning(f"[CloseAll] No active context for {user_id[:8]}… — running from DB")
 
-        # Build connector map from DB (handles restart scenario)
         exchange_configs = await self._db.get_exchange_apis(user_id)
         market_modes     = await self._db.get_market_modes(user_id)
 
@@ -302,7 +314,6 @@ class BotScheduler:
     async def stop_user_bot(self, user_id: str):
         logger.info(f"🛑 Stopping bot user={user_id}")
 
-        # Cancel any running close_all task
         ctx = self.active_bots.get(user_id)
         if ctx and ctx.close_all_task and not ctx.close_all_task.done():
             ctx.close_all_task.cancel()
@@ -356,7 +367,6 @@ class BotScheduler:
             except Exception as e:
                 logger.error(f"❌ complete-stop callback failed: {e}")
 
-        # Fallback: update DB directly
         try:
             await self._db.force_set_status(user_id, "stopped")
             await self.stop_user_bot(user_id)

@@ -3,29 +3,10 @@ bot-engine/db.py
 ================
 Production database layer.
 
-KEY ADDITIONS for trade lifecycle:
-- get_open_trade()                  → find an existing open trade for a symbol
-- close_paper_trade()               → mark trade closed with exit price + PnL
-- close_live_trade()                → same for live trades
-
-v2 ADDITIONS (Stop Bot feature):
-- get_bot_stop_mode()               → read stop_mode for drain/close check
-- force_set_status()                → fallback status setter if callback fails
-- set_bot_error()                   → store error message on bot_statuses
-- get_all_open_trades_all_markets() → used by CloseAllEngine
-- count_open_trades()               → drain completion check
-- log_close_attempt()               → audit trail for close_all
-- increment_close_attempts()        → track retry count on trade
-- update_close_error()              → store last close error on trade
-- cancel_orphan_trade()             → reconciliation helper
-- save_paper_trade() (updated)      → accepts optional session_ref
-- save_live_trade()  (updated)      → accepts optional session_ref
-
-v3 ADDITIONS (Auto-restart on startup):
-- get_running_user_bots()           → returns {user_id: [markets]} for all
-                                      users whose bot_statuses shows 'running'
-                                      Used by main.py lifespan to auto-restart
-                                      bots after Render deploys/restarts.
+Bug fixed: close_paper_trade() and close_live_trade() used Python's
+float round() which suffers IEEE-754 drift. Now uses Decimal +
+ROUND_HALF_UP for consistent PnL accuracy — matching what the frontend
+expects and what PostgreSQL stores.
 """
 
 import os
@@ -33,6 +14,7 @@ import json
 import logging
 import base64
 import hashlib
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Dict, List, Any
 from datetime import datetime
 
@@ -76,6 +58,19 @@ def decrypt_field(ciphertext: str) -> Optional[str]:
         return None
 
 
+def _round_pnl(value: float, places: int = 8) -> str:
+    """
+    Round a float PnL value using Decimal ROUND_HALF_UP to avoid IEEE-754
+    drift. Returns a string suitable for PostgreSQL DECIMAL columns.
+    """
+    quantizer = Decimal("0." + "0" * places)
+    return str(Decimal(str(value)).quantize(quantizer, rounding=ROUND_HALF_UP))
+
+
+def _round_pct(value: float) -> str:
+    return str(Decimal(str(value)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP))
+
+
 # ── Database ──────────────────────────────────────────────────────────────────
 
 class Database:
@@ -117,19 +112,12 @@ class Database:
         except Exception:
             return 0
 
-    # ── Auto-restart support (v3) ─────────────────────────────────────────────
+    # ── Auto-restart support ──────────────────────────────────────────────────
 
     async def get_running_user_bots(self) -> Dict[str, List[str]]:
         """
         Returns a mapping of user_id → list of markets for all users whose
         bot_statuses row shows status='running'.
-
-        Called during startup lifespan to auto-restart bots after a Render
-        deploy or free-tier restart. After cleanup_stale_sessions() has run,
-        bot_sessions are all marked stopped, but bot_statuses still reflects
-        the pre-restart 'running' state — that's what we use here.
-
-        Returns: { "uuid-string": ["crypto", "indian"], ... }
         """
         pool = await self.pool()
         rows = await pool.fetch(
@@ -150,7 +138,6 @@ class Database:
                 else:
                     markets = []
 
-                # Only include users that actually had active markets
                 if markets:
                     result[str(row["user_id"])] = markets
             except Exception as e:
@@ -302,9 +289,7 @@ class Database:
         symbol: str,
         market_type: str,
     ) -> Optional[Dict[str, Any]]:
-        """
-        Returns the most recent open trade for a user+symbol+market, or None.
-        """
+        """Returns the most recent open trade for a user+symbol+market, or None."""
         pool = await self.pool()
         row = await pool.fetchrow(
             """SELECT id, side, quantity, entry_price, opened_at
@@ -317,11 +302,25 @@ class Database:
         )
         return dict(row) if row else None
 
+    async def get_all_open_trades(
+        self,
+        user_id: str,
+        market_type: str,
+    ) -> List[Dict[str, Any]]:
+        """Returns all open trades for a user+market."""
+        pool = await self.pool()
+        rows = await pool.fetch(
+            """SELECT id, symbol, side, quantity, entry_price,
+                      market_type, is_paper, bot_session_ref, opened_at
+               FROM trades
+               WHERE user_id=$1 AND market_type=$2 AND status='open'
+               ORDER BY opened_at ASC""",
+            user_id, market_type,
+        )
+        return [dict(row) for row in rows]
+
     async def get_all_open_trades_all_markets(self, user_id: str) -> List[Dict[str, Any]]:
-        """
-        Returns ALL open trades for a user across all markets.
-        Used by CloseAllEngine.
-        """
+        """Returns ALL open trades for a user across all markets. Used by CloseAllEngine."""
         pool = await self.pool()
         rows = await pool.fetch(
             """SELECT id, symbol, side, quantity, entry_price,
@@ -351,7 +350,13 @@ class Database:
         pnl: float,
         pnl_pct: float,
     ):
-        """Mark a paper trade as closed with final exit price and PnL."""
+        """
+        Mark a paper trade as closed with final exit price and PnL.
+
+        Bug fixed: previously used Python float round() which suffers
+        IEEE-754 drift on repeated additions (e.g. 0.1 + 0.2 ≠ 0.3).
+        Now uses Decimal + ROUND_HALF_UP for exact financial rounding.
+        """
         pool = await self.pool()
         await pool.execute(
             """UPDATE trades
@@ -363,8 +368,8 @@ class Database:
                WHERE id=$1""",
             trade_id,
             str(exit_price),
-            str(round(pnl, 8)),
-            str(round(pnl_pct, 4)),
+            _round_pnl(pnl),
+            _round_pct(pnl_pct),
             datetime.utcnow(),
         )
         logger.info(
@@ -380,7 +385,10 @@ class Database:
         pnl_pct: float,
         close_order_id: str = "",
     ):
-        """Mark a live trade as closed."""
+        """
+        Mark a live trade as closed.
+        Uses Decimal ROUND_HALF_UP for PnL precision (same fix as close_paper_trade).
+        """
         pool = await self.pool()
         await pool.execute(
             """UPDATE trades
@@ -392,8 +400,8 @@ class Database:
                WHERE id=$1""",
             trade_id,
             str(exit_price),
-            str(round(pnl, 8)),
-            str(round(pnl_pct, 4)),
+            _round_pnl(pnl),
+            _round_pct(pnl_pct),
             datetime.utcnow(),
         )
         logger.info(
@@ -401,7 +409,7 @@ class Database:
             f"PnL={pnl:+.4f} ({pnl_pct:+.2f}%) order={close_order_id}"
         )
 
-    # ── Trade: CLOSE TRACKING (v2) ────────────────────────────────────────────
+    # ── Trade: CLOSE TRACKING ─────────────────────────────────────────────────
 
     async def log_close_attempt(
         self,
@@ -414,7 +422,6 @@ class Database:
         exchange_order_id: Optional[str] = None,
         error_message: Optional[str] = None,
     ):
-        """Insert a row into position_close_log for audit trail."""
         pool = await self.pool()
         await pool.execute(
             """INSERT INTO position_close_log
@@ -427,7 +434,6 @@ class Database:
         )
 
     async def increment_close_attempts(self, trade_id: str):
-        """Increment the close_attempts counter on a trade."""
         pool = await self.pool()
         await pool.execute(
             "UPDATE trades SET close_attempts = COALESCE(close_attempts,0)+1 WHERE id=$1",
@@ -435,20 +441,18 @@ class Database:
         )
 
     async def update_close_error(self, trade_id: str, error: str):
-        """Store the last close error on a trade."""
         pool = await self.pool()
         await pool.execute(
             "UPDATE trades SET close_error=$2 WHERE id=$1",
             trade_id, error,
         )
 
-    # ── Trade: RECONCILIATION (v2) ─────────────────────────────────────────────
+    # ── Trade: RECONCILIATION ─────────────────────────────────────────────────
 
     async def cancel_orphan_trade(self, trade_id: str):
         """
         Mark a trade as 'cancelled' when it's open in DB but gone from exchange.
         The trade was likely closed by SL/TP on exchange while the bot was offline.
-        We don't have an exit price so we use 'cancelled' rather than 'closed'.
         """
         pool = await self.pool()
         await pool.execute(
@@ -491,13 +495,8 @@ class Database:
             user_id,
         )
 
-    # ── Bot status: v2 additions ──────────────────────────────────────────────
-
     async def get_bot_stop_mode(self, user_id: str) -> Optional[str]:
-        """
-        Returns the current stop mode from DB, or None if running normally.
-        Possible values: 'close_all', 'graceful', None
-        """
+        """Returns the current stop mode from DB, or None if running normally."""
         pool = await self.pool()
         row = await pool.fetchrow(
             "SELECT stop_mode, status FROM bot_statuses WHERE user_id=$1",
@@ -510,10 +509,7 @@ class Database:
         return None
 
     async def force_set_status(self, user_id: str, status: str):
-        """
-        Fallback: directly set bot status without touching other fields.
-        Used when the completion callback fails after CloseAllEngine finishes.
-        """
+        """Fallback: directly set bot status without touching other fields."""
         pool = await self.pool()
         await pool.execute(
             """UPDATE bot_statuses

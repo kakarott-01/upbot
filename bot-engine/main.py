@@ -1,20 +1,22 @@
 """
-bot-engine/main.py — REVISED v3
+bot-engine/main.py — REVISED v4
 =================================
-Changes from v2:
-  1. Auto-restart: on startup, any user whose bot_statuses shows
-     status='running' gets their bot automatically restarted.
-     Survives Render deploys/restarts with zero manual intervention.
+Changes from v3:
+  1. StartRequest now accepts optional session_ids dict so the Next.js
+     start route can pass real DB session UUIDs to the scheduler.
+     The scheduler uses these as session_ref for trade ownership tracking.
 
-  2. Self-ping interval reduced from 600s → 60s to keep free tier warm.
+  2. Auto-restart on startup still works (no session_ids on watchdog restart —
+     falls back to "userId:market" placeholder which is fine for auto-restart
+     because reconciliation still restores open positions correctly).
 
-  3. Initial self-ping delay reduced from 120s → 30s.
+  3. Self-ping every 60s to keep Render free tier warm.
 """
 
 from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional, Dict
 import os
 import logging
 import asyncio
@@ -44,7 +46,7 @@ async def lifespan(app: FastAPI):
     from scheduler import BotScheduler
     from workers.watchdog import Watchdog
 
-    logger.info("🚀 AlgoBot Engine v3 starting up…")
+    logger.info("🚀 AlgoBot Engine v4 starting up…")
 
     _db        = Database()
     _scheduler = BotScheduler(_db)
@@ -62,8 +64,6 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_watchdog.run(), name="watchdog")
 
     # ── Step 2: Auto-restart bots that were running before this restart ────────
-    # This handles Render deploys, free-tier restarts, and crashes.
-    # bot_statuses rows with status='running' mean the user had an active bot.
     try:
         running_bots = await _db.get_running_user_bots()
         if running_bots:
@@ -74,7 +74,10 @@ async def lifespan(app: FastAPI):
                 logger.info(
                     f"♻️  Auto-restarting bot user={user_id[:8]}… markets={markets}"
                 )
-                # Use create_task so startup doesn't block waiting for all restarts
+                # No session_ids on auto-restart — scheduler falls back to
+                # "userId:market" placeholder, which is fine. New sessions
+                # will be created by the start route next time the user starts
+                # manually, and the DB sync will restore any open positions.
                 asyncio.create_task(
                     _safe_auto_restart(_scheduler, _db, user_id, markets),
                     name=f"auto_restart_{user_id}",
@@ -89,7 +92,7 @@ async def lifespan(app: FastAPI):
     if engine_url:
         asyncio.create_task(_self_ping_loop(engine_url), name="self_ping")
 
-    logger.info("✅ AlgoBot Engine v3 ready")
+    logger.info("✅ AlgoBot Engine v4 ready")
     yield
 
     logger.info("🛑 Shutting down…")
@@ -102,11 +105,11 @@ async def lifespan(app: FastAPI):
 async def _safe_auto_restart(scheduler, db, user_id: str, markets: List[str]):
     """
     Wraps start_user_bot in error handling so one failed restart doesn't
-    block others. On failure, marks the bot as stopped so the UI reflects
-    the real state.
+    block others. On failure, marks the bot as stopped.
     """
     try:
-        await asyncio.sleep(2)  # brief stagger so DB pool is fully ready
+        await asyncio.sleep(2)
+        # No session_ids for auto-restart — the scheduler falls back gracefully
         await scheduler.start_user_bot(user_id, markets)
         logger.info(
             f"✅ Auto-restart succeeded user={user_id[:8]}… markets={markets}"
@@ -115,7 +118,6 @@ async def _safe_auto_restart(scheduler, db, user_id: str, markets: List[str]):
         logger.error(
             f"❌ Auto-restart failed user={user_id[:8]}…: {e}", exc_info=True
         )
-        # Mark as stopped so UI doesn't show a phantom "running" state
         try:
             await db.update_bot_status(user_id, "stopped", [])
         except Exception as db_err:
@@ -123,10 +125,7 @@ async def _safe_auto_restart(scheduler, db, user_id: str, markets: List[str]):
 
 
 async def _self_ping_loop(base_url: str):
-    """
-    Pings /health every 60 seconds to keep Render free tier from spinning down.
-    Initial delay of 30s lets the server fully boot before first ping.
-    """
+    """Pings /health every 60 seconds to keep Render free tier warm."""
     import httpx
     await asyncio.sleep(30)
     while True:
@@ -136,10 +135,10 @@ async def _self_ping_loop(base_url: str):
                 logger.debug(f"💓 Self-ping {r.status_code}")
         except Exception as e:
             logger.warning(f"💓 Self-ping failed: {e}")
-        await asyncio.sleep(60)  # every 60s — was 600s
+        await asyncio.sleep(60)
 
 
-app = FastAPI(title="AlgoBot Engine", version="3.0.0", lifespan=lifespan)
+app = FastAPI(title="AlgoBot Engine", version="4.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -157,8 +156,12 @@ def _verify(x_bot_secret: str = Header(...)):
 # ── Schemas ────────────────────────────────────────────────────────────────────
 
 class StartRequest(BaseModel):
-    user_id: str
-    markets: List[str]
+    user_id:     str
+    markets:     List[str]
+    # Real DB session UUIDs passed from Next.js /api/bot/start.
+    # Used as session_ref for trade ownership tracking.
+    # Optional for backwards compatibility with watchdog auto-restart.
+    session_ids: Optional[Dict[str, str]] = None
 
 class StopRequest(BaseModel):
     user_id: str
@@ -174,7 +177,7 @@ class CloseAllRequest(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"status": "AlgoBot Engine running 🚀", "version": "3.0.0"}
+    return {"status": "AlgoBot Engine running 🚀", "version": "4.0.0"}
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
@@ -193,11 +196,22 @@ async def start_bot(req: StartRequest):
     if _scheduler.is_running(req.user_id):
         return {"status": "already_running", "user_id": req.user_id}
     try:
-        await _scheduler.start_user_bot(req.user_id, req.markets)
+        # Pass session_ids so the scheduler uses real DB UUIDs as session_ref.
+        # Falls back to "userId:market" if not provided (auto-restart case).
+        await _scheduler.start_user_bot(
+            req.user_id,
+            req.markets,
+            session_ids=req.session_ids,
+        )
     except Exception as e:
         logger.error(f"start_bot failed user={req.user_id}: {e}", exc_info=True)
         raise HTTPException(500, str(e))
-    return {"status": "started", "user_id": req.user_id, "markets": req.markets}
+    return {
+        "status":      "started",
+        "user_id":     req.user_id,
+        "markets":     req.markets,
+        "session_ids": req.session_ids,
+    }
 
 
 @app.post("/bot/stop", dependencies=[Depends(_verify)])
@@ -210,10 +224,6 @@ async def stop_bot(req: StopRequest):
 
 @app.post("/bot/drain", dependencies=[Depends(_verify)])
 async def drain_bot(req: DrainRequest):
-    """
-    Enter graceful drain mode: no new entries, keep running exit logic.
-    Algo cycles read DB status each time — no in-memory flag needed.
-    """
     if not _scheduler:
         raise HTTPException(500, "Scheduler not initialized")
     await _scheduler.enter_drain_mode(req.user_id)
@@ -222,11 +232,6 @@ async def drain_bot(req: DrainRequest):
 
 @app.post("/bot/close-all", dependencies=[Depends(_verify)])
 async def close_all_bot(req: CloseAllRequest):
-    """
-    Immediately market-close all open positions for this user.
-    Runs CloseAllEngine as a background task.
-    Algo cycles are stopped first.
-    """
     if not _scheduler:
         raise HTTPException(500, "Scheduler not initialized")
     try:

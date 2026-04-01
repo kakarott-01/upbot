@@ -1,7 +1,14 @@
 // app/api/bot/start/route.ts
 // ==========================
-// REVISED: adds Redis distributed locking to prevent duplicate starts
-// across multiple serverless workers.
+// Bugs fixed:
+// 1. Session rows are now created BEFORE the bot engine call. Previously they
+//    were created after — if the engine call timed out (15s), bot_statuses
+//    was set to 'running' but no session records existed, creating a phantom
+//    "running" state. Now sessions are cleaned up on engine failure.
+// 2. Session IDs are passed to the engine start request so the Python
+//    scheduler can use the real DB session UUID as session_ref (for trade
+//    ownership tracking in reconciliation).
+// 3. Redis distributed lock prevents duplicate starts across serverless workers.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
@@ -15,7 +22,6 @@ export async function POST(req: NextRequest) {
   if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   // ── Redis distributed lock ─────────────────────────────────────────────────
-  // Replaces the old in-process Set<string> which was useless across workers.
   const lock = await acquireBotLock(session.id, 'start')
   if (!lock.acquired) {
     return NextResponse.json({ error: lock.reason }, { status: 429 })
@@ -37,7 +43,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Bot is already running' }, { status: 409 })
     }
 
-    // Prevent start while a stop/drain is in progress
     if (existing?.status === 'stopping') {
       return NextResponse.json({
         error: 'Bot is currently stopping. Wait for it to finish before restarting.',
@@ -73,38 +78,16 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // ── Call bot engine ───────────────────────────────────────────────────────
-    let botRes: Response | null = null
-    try {
-      botRes = await fetch(`${process.env.BOT_ENGINE_URL}/bot/start`, {
-        method:  'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Bot-Secret': process.env.BOT_ENGINE_SECRET!,
-        },
-        body:   JSON.stringify({ user_id: session.id, markets }),
-        signal: AbortSignal.timeout(15_000),
-      })
-    } catch (err) {
-      console.error('Bot engine unreachable:', err)
-      return NextResponse.json(
-        { error: 'Bot engine is unreachable. Is the Render service running?' },
-        { status: 503 },
-      )
-    }
-
-    if (!botRes.ok) {
-      const body = await botRes.json().catch(() => ({}))
-      return NextResponse.json(
-        { error: body.detail ?? 'Bot engine returned an error', detail: body },
-        { status: botRes.status },
-      )
-    }
-
     const now = new Date()
 
-    // ── Create ONE session per market ─────────────────────────────────────────
-    const sessionIds: string[] = []
+    // ── Create sessions BEFORE calling the engine ─────────────────────────────
+    // Bug fix: previously sessions were created after the engine call. If the
+    // engine call timed out, bot_statuses was set to 'running' with no session
+    // records, causing a phantom running state. Now we create sessions first
+    // and clean them up if the engine call fails.
+    const sessionIds: Record<string, string> = {}
+    const createdSessionIds: string[] = []
+
     for (const market of markets) {
       const api = await db.query.exchangeApis.findFirst({
         where: and(
@@ -132,7 +115,50 @@ export async function POST(req: NextRequest) {
         startedAt: now,
       }).returning({ id: botSessions.id })
 
-      sessionIds.push(newSession.id)
+      sessionIds[market]    = newSession.id
+      createdSessionIds.push(newSession.id)
+    }
+
+    // ── Call bot engine ───────────────────────────────────────────────────────
+    let botRes: Response | null = null
+    try {
+      botRes = await fetch(`${process.env.BOT_ENGINE_URL}/bot/start`, {
+        method:  'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Bot-Secret': process.env.BOT_ENGINE_SECRET!,
+        },
+        // Pass session_ids so the Python scheduler uses real DB UUIDs as
+        // session_ref for trade ownership tracking
+        body:   JSON.stringify({ user_id: session.id, markets, session_ids: sessionIds }),
+        signal: AbortSignal.timeout(15_000),
+      })
+    } catch (err) {
+      console.error('Bot engine unreachable:', err)
+      // Clean up the sessions we just created since the bot didn't start
+      for (const sid of createdSessionIds) {
+        await db.update(botSessions)
+          .set({ status: 'stopped', endedAt: new Date() })
+          .where(eq(botSessions.id, sid))
+      }
+      return NextResponse.json(
+        { error: 'Bot engine is unreachable. Is the Render service running?' },
+        { status: 503 },
+      )
+    }
+
+    if (!botRes.ok) {
+      const body = await botRes.json().catch(() => ({}))
+      // Clean up sessions on engine error
+      for (const sid of createdSessionIds) {
+        await db.update(botSessions)
+          .set({ status: 'stopped', endedAt: new Date() })
+          .where(eq(botSessions.id, sid))
+      }
+      return NextResponse.json(
+        { error: body.detail ?? 'Bot engine returned an error', detail: body },
+        { status: botRes.status },
+      )
     }
 
     // ── Persist running state ─────────────────────────────────────────────────
@@ -158,7 +184,12 @@ export async function POST(req: NextRequest) {
         },
       })
 
-    return NextResponse.json({ success: true, status: 'running', markets, sessionIds })
+    return NextResponse.json({
+      success: true,
+      status:  'running',
+      markets,
+      sessionIds,
+    })
 
   } finally {
     await lock.release()
