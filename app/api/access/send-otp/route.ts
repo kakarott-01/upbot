@@ -1,23 +1,25 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// app/api/access/send-otp/route.ts  — FIXED
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX: Replaced Math.random()-based OTP with generateSecureOtp() from lib/otp.ts
+//      which uses crypto.randomInt() (CSPRNG).
+// ═══════════════════════════════════════════════════════════════════════════════
+
 import { NextRequest, NextResponse } from 'next/server'
-import nodemailer from 'nodemailer'
-import { getClientIp } from '@/lib/utils'
-import { redis } from '@/lib/redis'
+import nodemailer                     from 'nodemailer'
+import { getClientIp }                from '@/lib/utils'
+import { redis }                      from '@/lib/redis'
+import { generateSecureOtp }          from '@/lib/otp'   // FIX: CSPRNG
 
 const OTP_RATE_LIMIT = 3
-const OTP_WINDOW_MS  = 5 * 60 * 1000   // 5 minutes
-const OTP_EXPIRY_SEC = 5 * 60          // 5 minutes in seconds
-
-function generateOtp(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString()
-}
-
-// ── Rate limit helpers (stored in Redis) ──────────────────────────────────────
+const OTP_WINDOW_MS  = 5 * 60 * 1000
+const OTP_EXPIRY_SEC = 5 * 60
 
 async function canSendOtp(key: string): Promise<{ ok: boolean; remaining: number }> {
-  const rKey    = `otp_rate:${key}`
-  const now     = Date.now()
-  const raw     = await redis.get<string>(rKey)
-  const entry   = raw ? JSON.parse(raw) : null
+  const rKey  = `otp_rate:${key}`
+  const now   = Date.now()
+  const raw   = await redis.get<string>(rKey)
+  const entry = raw ? JSON.parse(raw) : null
 
   if (!entry || now - entry.firstTs > OTP_WINDOW_MS) {
     await redis.set(rKey, JSON.stringify({ count: 1, firstTs: now }), { ex: 300 })
@@ -43,29 +45,17 @@ export async function POST(req: NextRequest) {
     const normalizedEmail = email.toLowerCase().trim()
     const ip = getClientIp(req)
 
-    // Rate limit by IP
     const ipLimit = await canSendOtp(`ip:${ip}`)
     if (!ipLimit.ok) {
-      console.warn(`Rate limit exceeded for IP=${ip}`)
-      return NextResponse.json(
-        { error: 'Too many OTP requests from this IP. Try again later.' },
-        { status: 429 }
-      )
+      return NextResponse.json({ error: 'Too many OTP requests from this IP. Try again later.' }, { status: 429 })
     }
 
-    // Rate limit by email
     const emailLimit = await canSendOtp(`email:${normalizedEmail}`)
     if (!emailLimit.ok) {
-      console.warn(`Rate limit exceeded for email=${normalizedEmail}`)
-      return NextResponse.json(
-        { error: 'Too many OTP requests for this email. Try again later.' },
-        { status: 429 }
-      )
+      return NextResponse.json({ error: 'Too many OTP requests for this email. Try again later.' }, { status: 429 })
     }
 
-    const otp = generateOtp()
-
-    // Store OTP in Redis (replaces the broken global.__otpStore)
+    const otp = generateSecureOtp()  // FIX: was Math.random()
     await redis.set(`login_otp:${normalizedEmail}`, otp, { ex: OTP_EXPIRY_SEC })
 
     console.log(`\n🔐 OTP for ${normalizedEmail}: ${otp}\n`)

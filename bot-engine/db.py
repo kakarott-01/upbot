@@ -1,17 +1,20 @@
 """
-bot-engine/db.py
-================
-Production database layer — v2.
-
+bot-engine/db.py  — v3
+========================
 Fixes applied:
-  FIX C: close_paper_trade / close_live_trade now use WHERE status='open'
-          and check rowcount to prevent double-close.
-  FIX E: save_paper_trade / save_live_trade use INSERT ... ON CONFLICT DO NOTHING
-          (relies on the partial unique index idx_trades_one_open_per_symbol).
-  FIX K: New methods for risk state persistence (daily_loss, open_trade_count).
-  FIX 5: New method for runtime reconciliation — get_open_trade_ids_for_market()
-          and bulk_cancel_orphan_trades().
-  PERF:  get_all_open_trades() returns bot_session_ref for reconciliation filtering.
+
+FIX ENCRYPT: decrypt_field() now supports both v2 (AES-256-GCM + scrypt) format
+             and the legacy CryptoJS/MD5 format so existing DB records still work.
+             New records written by the Next.js layer will use v2 prefix.
+
+FIX WATCHDOG: get/set/reset watchdog_restart_count persisted to bot_statuses
+              so Render process restarts don't reset the counter to zero.
+
+FIX ORPHAN: save_failed_live_order() persists untracked live orders for
+            manual review. Called from base_algo when DB save returns None
+            after a live order was already placed on the exchange.
+
+All other methods from v2 unchanged.
 """
 
 import os
@@ -19,6 +22,7 @@ import json
 import logging
 import base64
 import hashlib
+import struct
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Dict, List, Any
 from datetime import datetime, date
@@ -31,9 +35,30 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-# ── CryptoJS-compatible AES decryption ────────────────────────────────────────
+# ── Key derivation (matches Node.js crypto.scryptSync defaults) ───────────────
+
+def _derive_key_v2() -> bytes:
+    """
+    Derive 32-byte key from ENCRYPTION_KEY using scrypt.
+    Parameters MUST match the Node.js side:
+      crypto.scryptSync(password, 'upbot-salt-v2', 32)
+      defaults: N=16384, r=8, p=1
+    """
+    password = os.getenv("ENCRYPTION_KEY")
+    if not password:
+        raise RuntimeError("ENCRYPTION_KEY not set")
+    return hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=b"upbot-salt-v2",
+        n=16384,
+        r=8,
+        p=1,
+        dklen=32,
+    )
+
 
 def _evp_bytes_to_key(password: bytes, salt: bytes, key_len: int = 32, iv_len: int = 16):
+    """CryptoJS-compatible key derivation (MD5-based EVP_BytesToKey)."""
     d, result = b"", b""
     while len(result) < key_len + iv_len:
         d = hashlib.md5(d + password + salt).digest()
@@ -41,10 +66,45 @@ def _evp_bytes_to_key(password: bytes, salt: bytes, key_len: int = 32, iv_len: i
     return result[:key_len], result[key_len:key_len + iv_len]
 
 
+# ── Decryption (supports both formats) ────────────────────────────────────────
+
 def decrypt_field(ciphertext: str) -> Optional[str]:
+    """
+    Decrypt a field from the DB.
+    Supports v2 (AES-256-GCM, prefix 'v2:') and legacy CryptoJS format.
+    """
+    if not ciphertext:
+        return None
+    if ciphertext.startswith("v2:"):
+        return _decrypt_v2(ciphertext[3:])
+    return _decrypt_legacy(ciphertext)
+
+
+def _decrypt_v2(b64: str) -> Optional[str]:
+    """Decrypt AES-256-GCM ciphertext produced by Node.js crypto."""
     try:
-        if not ciphertext:
-            return None
+        key    = _derive_key_v2()
+        packed = base64.b64decode(b64)
+
+        # Layout: iv[12] ‖ tag[16] ‖ ciphertext
+        if len(packed) < 12 + 16 + 1:
+            raise ValueError("v2 ciphertext too short")
+
+        iv         = packed[:12]
+        tag        = packed[12:28]
+        ciphertext = packed[28:]
+
+        cipher    = AES.new(key, AES.MODE_GCM, nonce=iv)
+        plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+        return plaintext.decode("utf-8")
+    except Exception as e:
+        logger.error(f"❌ V2 decryption failed: {e}")
+        return None
+
+
+def _decrypt_legacy(ciphertext: str) -> Optional[str]:
+    """CryptoJS-compatible AES-CBC decryption (legacy format)."""
+    try:
         password = os.getenv("ENCRYPTION_KEY")
         if not password:
             raise RuntimeError("ENCRYPTION_KEY not set")
@@ -59,7 +119,7 @@ def decrypt_field(ciphertext: str) -> Optional[str]:
         pad_len   = decrypted[-1]
         return decrypted[:-pad_len].decode("utf-8")
     except Exception as e:
-        logger.error(f"❌ Decryption failed: {e}")
+        logger.error(f"❌ Legacy decryption failed: {e}")
         return None
 
 
@@ -123,19 +183,11 @@ class Database:
         for row in rows:
             try:
                 raw = row["active_markets"]
-                if isinstance(raw, str):
-                    markets = json.loads(raw)
-                elif isinstance(raw, list):
-                    markets = raw
-                else:
-                    markets = []
-
+                markets = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
                 if markets:
                     result[str(row["user_id"])] = markets
             except Exception as e:
-                logger.error(
-                    f"❌ get_running_user_bots parse error user={row['user_id']}: {e}"
-                )
+                logger.error(f"❌ get_running_user_bots parse error user={row['user_id']}: {e}")
         return result
 
     # ── Exchange APIs ─────────────────────────────────────────────────────────
@@ -153,6 +205,7 @@ class Database:
                 api_key    = decrypt_field(row["api_key_enc"])
                 api_secret = decrypt_field(row["api_secret_enc"])
                 if not api_key or not api_secret:
+                    logger.warning(f"⚠️  Skipping market={row['market_type']}: decryption returned empty")
                     continue
                 extra: Dict = {}
                 if row["extra_fields_enc"]:
@@ -185,6 +238,88 @@ class Database:
         pool = await self.pool()
         row  = await pool.fetchrow("SELECT * FROM risk_settings WHERE user_id=$1", user_id)
         return dict(row) if row else {}
+
+    # ── FIX WATCHDOG: Persist restart counter across process restarts ─────────
+
+    async def get_watchdog_restart_count(self, user_id: str) -> int:
+        """
+        FIX: Read watchdog restart counter from DB so Render process restarts
+        don't reset it to zero, preventing infinite restart loops on broken configs.
+        """
+        pool = await self.pool()
+        row  = await pool.fetchrow(
+            "SELECT watchdog_restart_count FROM bot_statuses WHERE user_id=$1",
+            user_id,
+        )
+        if row is None or row["watchdog_restart_count"] is None:
+            return 0
+        return int(row["watchdog_restart_count"])
+
+    async def set_watchdog_restart_count(self, user_id: str, count: int):
+        pool = await self.pool()
+        await pool.execute(
+            """INSERT INTO bot_statuses (user_id, status, watchdog_restart_count, updated_at)
+               VALUES ($1, 'error', $2, NOW())
+               ON CONFLICT (user_id) DO UPDATE
+               SET watchdog_restart_count=$2, updated_at=NOW()""",
+            user_id, count,
+        )
+
+    async def reset_watchdog_restart_count(self, user_id: str):
+        """Reset after a healthy heartbeat is observed."""
+        pool = await self.pool()
+        await pool.execute(
+            "UPDATE bot_statuses SET watchdog_restart_count=0, updated_at=NOW() WHERE user_id=$1",
+            user_id,
+        )
+
+    # ── FIX ORPHAN: Persist failed live orders for manual review ──────────────
+
+    async def save_failed_live_order(
+        self,
+        user_id: str,
+        exchange_name: str,
+        market_type: str,
+        symbol: str,
+        side: str,
+        quantity: float,
+        entry_price: float,
+        exchange_order_id: Optional[str],
+        fail_reason: str,
+        cancel_attempted: bool = False,
+        cancel_succeeded: bool = False,
+        cancel_error: Optional[str] = None,
+    ):
+        """
+        FIX: Record a live order that was placed on the exchange but failed
+        to save to the trades table. These require manual review — real money
+        is committed but the system has no tracking record.
+        """
+        pool = await self.pool()
+        try:
+            await pool.execute(
+                """INSERT INTO failed_live_orders
+                   (user_id, exchange_name, market_type, symbol, side, quantity,
+                    entry_price, exchange_order_id, fail_reason, cancel_attempted,
+                    cancel_succeeded, cancel_error, requires_manual_review, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,NOW())""",
+                user_id, exchange_name, market_type, symbol,
+                side.lower(), str(quantity), str(entry_price),
+                exchange_order_id, fail_reason,
+                cancel_attempted, cancel_succeeded, cancel_error,
+            )
+            logger.error(
+                f"🚨 MANUAL REVIEW REQUIRED: Failed live order saved. "
+                f"symbol={symbol} side={side} qty={quantity} "
+                f"order_id={exchange_order_id} reason={fail_reason}"
+            )
+        except Exception as e:
+            # Last resort: at least log it loudly
+            logger.critical(
+                f"💀 CRITICAL: Could not save failed order record to DB! "
+                f"symbol={symbol} order_id={exchange_order_id} err={e}. "
+                "MANUAL EXCHANGE CHECK REQUIRED."
+            )
 
     # ── Signal storage ────────────────────────────────────────────────────────
 
@@ -220,13 +355,6 @@ class Database:
         market_type: str,
         session_ref: str = "",
     ) -> Optional[str]:
-        """
-        Save an open paper trade. Returns the new trade ID, or None if a
-        duplicate open trade already exists for this user+symbol+market
-        (relies on the partial unique index idx_trades_one_open_per_symbol).
-
-        FIX E: ON CONFLICT DO NOTHING prevents duplicate open trades.
-        """
         pool = await self.pool()
         row = await pool.fetchrow(
             """INSERT INTO trades
@@ -241,16 +369,10 @@ class Database:
             datetime.utcnow(),
         )
         if row:
-            logger.info(
-                f"📝 Paper trade opened: {side.upper()} {quantity:.6f} {symbol} @ {price} "
-                f"ref={session_ref}"
-            )
+            logger.info(f"📝 Paper trade opened: {side.upper()} {quantity:.6f} {symbol} @ {price}")
             return str(row["id"])
         else:
-            logger.warning(
-                f"⚠️  Duplicate open trade blocked for {symbol} (user={user_id[:8]}…). "
-                "An open position already exists in DB."
-            )
+            logger.warning(f"⚠️  Duplicate open trade blocked for {symbol} (user={user_id[:8]}…)")
             return None
 
     async def save_live_trade(
@@ -267,10 +389,6 @@ class Database:
         market_type: str,
         session_ref: str = "",
     ) -> Optional[str]:
-        """
-        Save an open live trade.
-        FIX E: ON CONFLICT DO NOTHING prevents duplicate opens.
-        """
         pool = await self.pool()
         row = await pool.fetchrow(
             """INSERT INTO trades
@@ -288,42 +406,26 @@ class Database:
             datetime.utcnow(),
         )
         if row:
-            logger.info(
-                f"📝 Live trade opened: {side.upper()} {quantity} {symbol} @ {price} "
-                f"ref={session_ref}"
-            )
+            logger.info(f"📝 Live trade opened: {side.upper()} {quantity} {symbol} @ {price}")
             return str(row["id"])
         else:
-            logger.warning(
-                f"⚠️  Duplicate live trade blocked for {symbol} (user={user_id[:8]}…)."
-            )
+            logger.warning(f"⚠️  Duplicate live trade blocked for {symbol} (user={user_id[:8]}…)")
             return None
 
     # ── Trade: FIND OPEN ──────────────────────────────────────────────────────
 
-    async def get_open_trade(
-        self,
-        user_id: str,
-        symbol: str,
-        market_type: str,
-    ) -> Optional[Dict[str, Any]]:
+    async def get_open_trade(self, user_id: str, symbol: str, market_type: str) -> Optional[Dict[str, Any]]:
         pool = await self.pool()
         row = await pool.fetchrow(
             """SELECT id, side, quantity, entry_price, opened_at
                FROM trades
-               WHERE user_id=$1 AND symbol=$2 AND market_type=$3
-                 AND status='open'
-               ORDER BY opened_at DESC
-               LIMIT 1""",
+               WHERE user_id=$1 AND symbol=$2 AND market_type=$3 AND status='open'
+               ORDER BY opened_at DESC LIMIT 1""",
             user_id, symbol, market_type,
         )
         return dict(row) if row else None
 
-    async def get_all_open_trades(
-        self,
-        user_id: str,
-        market_type: str,
-    ) -> List[Dict[str, Any]]:
+    async def get_all_open_trades(self, user_id: str, market_type: str) -> List[Dict[str, Any]]:
         pool = await self.pool()
         rows = await pool.fetch(
             """SELECT id, symbol, side, quantity, entry_price,
@@ -340,60 +442,37 @@ class Database:
         rows = await pool.fetch(
             """SELECT id, symbol, side, quantity, entry_price,
                       market_type, is_paper, bot_session_ref, opened_at
-               FROM trades
-               WHERE user_id=$1 AND status='open'
-               ORDER BY opened_at ASC""",
+               FROM trades WHERE user_id=$1 AND status='open' ORDER BY opened_at ASC""",
             user_id,
         )
         return [dict(row) for row in rows]
 
     async def count_open_trades(self, user_id: str) -> int:
         pool = await self.pool()
-        row = await pool.fetchrow(
-            "SELECT count(*)::int AS n FROM trades WHERE user_id=$1 AND status='open'",
-            user_id,
+        row  = await pool.fetchrow(
+            "SELECT count(*)::int AS n FROM trades WHERE user_id=$1 AND status='open'", user_id
         )
         return row["n"] if row else 0
 
-    # ── FIX 5: Runtime reconciliation helpers ──────────────────────────────────
+    # ── Reconciliation helpers ────────────────────────────────────────────────
 
-    async def get_open_symbols_for_market(
-        self,
-        user_id: str,
-        market_type: str,
-    ) -> Dict[str, str]:
-        """
-        Returns {symbol: trade_id} for all open trades for user+market.
-        Used by runtime reconciliation to compare against exchange positions.
-        """
+    async def get_open_symbols_for_market(self, user_id: str, market_type: str) -> Dict[str, str]:
         pool = await self.pool()
         rows = await pool.fetch(
-            """SELECT id::text, symbol
-               FROM trades
-               WHERE user_id=$1 AND market_type=$2 AND status='open'""",
+            "SELECT id::text, symbol FROM trades WHERE user_id=$1 AND market_type=$2 AND status='open'",
             user_id, market_type,
         )
         return {row["symbol"]: str(row["id"]) for row in rows}
 
-    async def get_reconciliation_last_run(
-        self,
-        user_id: str,
-        market_type: str,
-    ) -> Optional[datetime]:
-        """Returns the last time reconciliation ran for user+market."""
+    async def get_reconciliation_last_run(self, user_id: str, market_type: str) -> Optional[datetime]:
         pool = await self.pool()
-        row = await pool.fetchrow(
+        row  = await pool.fetchrow(
             "SELECT last_run_at FROM reconciliation_log WHERE user_id=$1 AND market_type=$2",
             user_id, market_type,
         )
         return row["last_run_at"] if row else None
 
-    async def update_reconciliation_log(
-        self,
-        user_id: str,
-        market_type: str,
-        trades_fixed: int,
-    ):
+    async def update_reconciliation_log(self, user_id: str, market_type: str, trades_fixed: int):
         pool = await self.pool()
         await pool.execute(
             """INSERT INTO reconciliation_log (user_id, market_type, last_run_at, trades_fixed)
@@ -405,107 +484,42 @@ class Database:
 
     # ── Trade: CLOSE ──────────────────────────────────────────────────────────
 
-    async def close_paper_trade(
-        self,
-        trade_id: str,
-        exit_price: float,
-        pnl: float,
-        pnl_pct: float,
-    ) -> bool:
-        """
-        Mark a paper trade as closed.
-
-        FIX C: WHERE status='open' guard prevents double-close.
-        Returns True if a row was updated, False if trade was already closed.
-        """
-        pool = await self.pool()
+    async def close_paper_trade(self, trade_id: str, exit_price: float, pnl: float, pnl_pct: float) -> bool:
+        pool   = await self.pool()
         result = await pool.execute(
-            """UPDATE trades
-               SET status='closed',
-                   exit_price=$2,
-                   pnl=$3,
-                   pnl_pct=$4,
-                   closed_at=$5
-               WHERE id=$1
-                 AND status='open'""",   # FIX C: atomic guard
-            trade_id,
-            str(exit_price),
-            _round_pnl(pnl),
-            _round_pct(pnl_pct),
-            datetime.utcnow(),
+            """UPDATE trades SET status='closed', exit_price=$2, pnl=$3, pnl_pct=$4, closed_at=$5
+               WHERE id=$1 AND status='open'""",
+            trade_id, str(exit_price), _round_pnl(pnl), _round_pct(pnl_pct), datetime.utcnow(),
         )
-        # asyncpg execute() returns "UPDATE N" where N is the number of rows affected
         rows_affected = int(result.split()[-1])
-
         if rows_affected == 0:
-            logger.warning(
-                f"⚠️  close_paper_trade: trade {trade_id} was already closed or not found. "
-                "Double-close prevented."
-            )
+            logger.warning(f"⚠️  close_paper_trade: trade {trade_id} already closed. Double-close prevented.")
             return False
-
-        logger.info(
-            f"📝 Paper trade closed id={trade_id} "
-            f"exit={exit_price} PnL={pnl:+.4f} ({pnl_pct:+.2f}%)"
-        )
+        logger.info(f"📝 Paper trade closed id={trade_id} exit={exit_price} PnL={pnl:+.4f}")
         return True
 
     async def close_live_trade(
-        self,
-        trade_id: str,
-        exit_price: float,
-        pnl: float,
-        pnl_pct: float,
-        close_order_id: str = "",
+        self, trade_id: str, exit_price: float, pnl: float, pnl_pct: float, close_order_id: str = ""
     ) -> bool:
-        """
-        Mark a live trade as closed.
-        FIX C: WHERE status='open' prevents double-close.
-        Returns True if updated, False if already closed.
-        """
-        pool = await self.pool()
+        pool   = await self.pool()
         result = await pool.execute(
-            """UPDATE trades
-               SET status='closed',
-                   exit_price=$2,
-                   pnl=$3,
-                   pnl_pct=$4,
-                   closed_at=$5
-               WHERE id=$1
-                 AND status='open'""",   # FIX C
-            trade_id,
-            str(exit_price),
-            _round_pnl(pnl),
-            _round_pct(pnl_pct),
-            datetime.utcnow(),
+            """UPDATE trades SET status='closed', exit_price=$2, pnl=$3, pnl_pct=$4, closed_at=$5
+               WHERE id=$1 AND status='open'""",
+            trade_id, str(exit_price), _round_pnl(pnl), _round_pct(pnl_pct), datetime.utcnow(),
         )
         rows_affected = int(result.split()[-1])
-
         if rows_affected == 0:
-            logger.warning(
-                f"⚠️  close_live_trade: trade {trade_id} was already closed. "
-                "Double-close prevented."
-            )
+            logger.warning(f"⚠️  close_live_trade: trade {trade_id} already closed. Double-close prevented.")
             return False
-
-        logger.info(
-            f"📝 Live trade closed id={trade_id} exit={exit_price} "
-            f"PnL={pnl:+.4f} ({pnl_pct:+.2f}%) order={close_order_id}"
-        )
+        logger.info(f"📝 Live trade closed id={trade_id} exit={exit_price} PnL={pnl:+.4f}")
         return True
 
     # ── Trade: CLOSE TRACKING ─────────────────────────────────────────────────
 
     async def log_close_attempt(
-        self,
-        user_id: str,
-        trade_id: str,
-        attempt: int,
-        status: str,
-        quantity_req: float = 0,
-        quantity_fill: float = 0,
-        exchange_order_id: Optional[str] = None,
-        error_message: Optional[str] = None,
+        self, user_id: str, trade_id: str, attempt: int, status: str,
+        quantity_req: float = 0, quantity_fill: float = 0,
+        exchange_order_id: Optional[str] = None, error_message: Optional[str] = None,
     ):
         pool = await self.pool()
         await pool.execute(
@@ -514,118 +528,69 @@ class Database:
                 exchange_order_id, error_message, attempted_at)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())""",
             user_id, trade_id, attempt, status,
-            str(quantity_req), str(quantity_fill),
-            exchange_order_id, error_message,
+            str(quantity_req), str(quantity_fill), exchange_order_id, error_message,
         )
 
     async def increment_close_attempts(self, trade_id: str):
         pool = await self.pool()
         await pool.execute(
-            "UPDATE trades SET close_attempts = COALESCE(close_attempts,0)+1 WHERE id=$1",
-            trade_id,
+            "UPDATE trades SET close_attempts = COALESCE(close_attempts,0)+1 WHERE id=$1", trade_id,
         )
 
     async def update_close_error(self, trade_id: str, error: str):
         pool = await self.pool()
-        await pool.execute(
-            "UPDATE trades SET close_error=$2 WHERE id=$1",
-            trade_id, error,
-        )
-
-    # ── Trade: RECONCILIATION ─────────────────────────────────────────────────
+        await pool.execute("UPDATE trades SET close_error=$2 WHERE id=$1", trade_id, error)
 
     async def cancel_orphan_trade(self, trade_id: str):
-        """
-        Mark a trade as 'cancelled' when it's open in DB but gone from exchange.
-        FIX C: WHERE status='open' guard ensures idempotency.
-        """
-        pool = await self.pool()
+        pool   = await self.pool()
         result = await pool.execute(
-            """UPDATE trades
-               SET status='cancelled', closed_at=NOW()
-               WHERE id=$1 AND status='open'""",
-            trade_id,
+            "UPDATE trades SET status='cancelled', closed_at=NOW() WHERE id=$1 AND status='open'", trade_id,
         )
         rows_affected = int(result.split()[-1])
         if rows_affected > 0:
             logger.info(f"📝 Orphan trade cancelled: id={trade_id}")
         return rows_affected > 0
 
-    # ── FIX K: Risk state persistence ─────────────────────────────────────────
+    # ── Risk state ────────────────────────────────────────────────────────────
 
-    async def get_risk_state(
-        self,
-        user_id: str,
-        market_type: str,
-    ) -> Dict[str, Any]:
-        """
-        Load today's risk state from DB. Returns defaults if not found.
-        Called on RiskManager init to restore counters after restart.
-        """
-        pool = await self.pool()
+    async def get_risk_state(self, user_id: str, market_type: str) -> Dict[str, Any]:
+        pool  = await self.pool()
         today = date.today().isoformat()
-        row = await pool.fetchrow(
-            """SELECT daily_loss, open_trade_count
-               FROM risk_state
+        row   = await pool.fetchrow(
+            """SELECT daily_loss, open_trade_count FROM risk_state
                WHERE user_id=$1 AND market_type=$2 AND day_date=$3::date""",
             user_id, market_type, today,
         )
         if row:
-            return {
-                "daily_loss":       float(row["daily_loss"]),
-                "open_trade_count": int(row["open_trade_count"]),
-            }
+            return {"daily_loss": float(row["daily_loss"]), "open_trade_count": int(row["open_trade_count"])}
         return {"daily_loss": 0.0, "open_trade_count": 0}
 
-    async def update_risk_state(
-        self,
-        user_id: str,
-        market_type: str,
-        daily_loss: float,
-        open_trade_count: int,
-    ):
-        """
-        Persist risk state so restarts don't reset daily loss or open count.
-        Uses UPSERT — safe to call after every trade event.
-        """
-        pool = await self.pool()
+    async def update_risk_state(self, user_id: str, market_type: str, daily_loss: float, open_trade_count: int):
+        pool  = await self.pool()
         today = date.today().isoformat()
         await pool.execute(
             """INSERT INTO risk_state
                (user_id, market_type, daily_loss, open_trade_count, day_date, updated_at)
                VALUES ($1, $2, $3, $4, $5::date, NOW())
                ON CONFLICT (user_id, market_type, day_date)
-               DO UPDATE SET
-                 daily_loss       = $3,
-                 open_trade_count = $4,
-                 updated_at       = NOW()""",
-            user_id, market_type,
-            _round_pnl(daily_loss),
-            open_trade_count,
-            today,
+               DO UPDATE SET daily_loss=$3, open_trade_count=$4, updated_at=NOW()""",
+            user_id, market_type, _round_pnl(daily_loss), open_trade_count, today,
         )
 
     async def reset_daily_risk_state(self, user_id: str, market_type: str):
-        """Reset daily loss counter (called at start of new trading day)."""
         pool = await self.pool()
         await pool.execute(
-            """INSERT INTO risk_state
-               (user_id, market_type, daily_loss, open_trade_count, day_date, updated_at)
+            """INSERT INTO risk_state (user_id, market_type, daily_loss, open_trade_count, day_date, updated_at)
                VALUES ($1, $2, 0, 0, CURRENT_DATE, NOW())
-               ON CONFLICT (user_id, market_type, day_date)
-               DO UPDATE SET daily_loss=0, updated_at=NOW()""",
+               ON CONFLICT (user_id, market_type, day_date) DO UPDATE SET daily_loss=0, updated_at=NOW()""",
             user_id, market_type,
         )
 
     # ── Bot status ────────────────────────────────────────────────────────────
 
     async def update_bot_status(
-        self,
-        user_id: str,
-        status: str,
-        markets: List[str],
-        error: Optional[str] = None,
-        started_at: Optional[datetime] = None,
+        self, user_id: str, status: str, markets: List[str],
+        error: Optional[str] = None, started_at: Optional[datetime] = None,
     ):
         pool = await self.pool()
         now  = datetime.utcnow()
@@ -645,28 +610,22 @@ class Database:
     async def update_heartbeat(self, user_id: str):
         pool = await self.pool()
         await pool.execute(
-            "UPDATE bot_statuses SET last_heartbeat=NOW(), updated_at=NOW() WHERE user_id=$1",
-            user_id,
+            "UPDATE bot_statuses SET last_heartbeat=NOW(), updated_at=NOW() WHERE user_id=$1", user_id,
         )
 
     async def get_bot_stop_mode(self, user_id: str) -> Optional[str]:
         pool = await self.pool()
-        row = await pool.fetchrow(
-            "SELECT stop_mode, status FROM bot_statuses WHERE user_id=$1",
-            user_id,
+        row  = await pool.fetchrow(
+            "SELECT stop_mode, status FROM bot_statuses WHERE user_id=$1", user_id,
         )
         if not row:
             return None
-        if row["status"] == "stopping":
-            return row["stop_mode"]
-        return None
+        return row["stop_mode"] if row["status"] == "stopping" else None
 
     async def force_set_status(self, user_id: str, status: str):
         pool = await self.pool()
         await pool.execute(
-            """UPDATE bot_statuses
-               SET status=$2, updated_at=NOW(),
-                   stop_mode=NULL, stopping_at=NULL
+            """UPDATE bot_statuses SET status=$2, updated_at=NOW(), stop_mode=NULL, stopping_at=NULL
                WHERE user_id=$1""",
             user_id, status,
         )

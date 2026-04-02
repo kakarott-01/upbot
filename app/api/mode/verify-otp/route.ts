@@ -1,8 +1,13 @@
-// app/api/mode/verify-otp/route.ts
+// ═══════════════════════════════════════════════════════════════════════════════
+// app/api/mode/verify-otp/route.ts  — FIXED
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX: Replaced base64(userId:timestamp) token with HMAC-signed token.
+// ═══════════════════════════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
-import { redis } from '@/lib/redis'
+import { auth }                       from '@/lib/auth'
+import { redis }                      from '@/lib/redis'
+import { issueSecureToken }           from '@/lib/secure-token'  // FIX
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -10,13 +15,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const { otp } = await req.json()
+  const { otp } = await req.json().catch(() => ({}))
   if (!otp || typeof otp !== 'string') {
     return NextResponse.json({ error: 'OTP required' }, { status: 400 })
   }
 
-  // Upstash may deserialize stored numeric strings as JS numbers.
-  // Always coerce to string before comparing.
   const raw = await redis.get(`mode_switch_otp:${session.id}`)
 
   if (raw === null || raw === undefined) {
@@ -33,8 +36,8 @@ export async function POST(req: NextRequest) {
   // Burn OTP
   await redis.del(`mode_switch_otp:${session.id}`)
 
-  // Issue a short-lived mode-switch token cookie (5 minutes)
-  const token = Buffer.from(`${session.id}:${Date.now()}`).toString('base64')
+  // FIX: HMAC-signed token (was base64(userId:timestamp) — forgeable)
+  const token = issueSecureToken(session.id, 'mode_switch')
 
   const response = NextResponse.json({ success: true })
   response.cookies.set('mode_switch_token', token, {

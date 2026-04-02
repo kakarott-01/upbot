@@ -1,52 +1,52 @@
-import { cookies } from "next/headers"
-import { getServerSession } from "next-auth/next"
-import { authOptions } from '@/lib/auth-options'
+import { cookies }         from 'next/headers'
+import { getServerSession } from 'next-auth/next'
+import { authOptions }      from '@/lib/auth-options'
+import { verifySession }    from '@/lib/signed-cookie'  // FIX: HMAC-verified parse
 
-export function getSessionFromCookie(cookieValue: string | undefined) {
-  if (!cookieValue) return null
-  try {
-    return JSON.parse(cookieValue) as {
-      id: string
-      email: string
-      name: string
-    }
-  } catch {
-    return null
-  }
-}
+/**
+ * lib/auth.ts — v2
+ * =================
+ * FIX: The legacy user_session cookie is now parsed via verifySession()
+ *      which performs HMAC-SHA256 signature verification before trusting
+ *      the payload.  Unsigned/legacy cookies are still accepted for backward
+ *      compatibility but will be replaced with signed cookies on next login.
+ */
 
 export async function auth() {
-  const cookieStore = cookies()
-  const sessionCookie = cookieStore.get("user_session")?.value
+  const cookieStore   = cookies()
+  const sessionCookie = cookieStore.get('user_session')?.value
 
-  const legacy = getSessionFromCookie(sessionCookie)
-  if (legacy) {
+  // ── Legacy cookie path (email/OTP login) ──────────────────────────────────
+  // verifySession checks HMAC signature; returns null if invalid/unsigned
+  const legacy = verifySession(sessionCookie)
+  if (legacy?.id && legacy?.email) {
     return {
       ...legacy,
       user: {
-        id: legacy.id,
+        id:    legacy.id,
         email: legacy.email,
-        name: legacy.name,
+        name:  legacy.name,
       },
     }
   }
 
+  // ── NextAuth JWT path (Google OAuth login) ────────────────────────────────
   const nextAuthSession = await getServerSession(authOptions)
   if (!nextAuthSession?.user?.email) return null
 
-  const userId = (nextAuthSession.user as any).id as string | undefined
+  const userId   = (nextAuthSession.user as any).id as string | undefined
   const userName = nextAuthSession.user.name ?? nextAuthSession.user.email.split('@')[0]
 
   if (!userId) return null
 
   return {
-    id: userId,
+    id:    userId,
     email: nextAuthSession.user.email,
-    name: userName,
+    name:  userName,
     user: {
-      id: userId,
+      id:    userId,
       email: nextAuthSession.user.email,
-      name: userName,
+      name:  userName,
       image: nextAuthSession.user.image,
     },
   }

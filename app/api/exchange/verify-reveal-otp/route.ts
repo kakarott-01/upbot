@@ -1,6 +1,14 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// app/api/exchange/verify-reveal-otp/route.ts  — FIXED
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX: Replaced base64(userId:timestamp) token (trivially forgeable) with
+//      HMAC-signed token from lib/secure-token.ts.
+// ═══════════════════════════════════════════════════════════════════════════════
+
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
-import { redis } from '@/lib/redis'
+import { auth }                       from '@/lib/auth'
+import { redis }                      from '@/lib/redis'
+import { issueSecureToken }           from '@/lib/secure-token'  // FIX
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -8,20 +16,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const { otp } = await req.json()
+  const { otp } = await req.json().catch(() => ({}))
   if (!otp || typeof otp !== 'string') {
     return NextResponse.json({ error: 'OTP required' }, { status: 400 })
   }
 
-  // Upstash may deserialize a stored numeric string as a JS number.
-  // Always coerce to string before comparing.
+  // Upstash may deserialize stored numeric strings as JS numbers — always coerce
   const raw = await redis.get(`reveal_otp:${session.id}`)
 
   if (raw === null || raw === undefined) {
     return NextResponse.json({ error: 'No OTP found. Please request a new one.' }, { status: 401 })
   }
 
-  const stored = String(raw).trim()
+  const stored   = String(raw).trim()
   const provided = otp.trim()
 
   if (stored !== provided) {
@@ -31,8 +38,8 @@ export async function POST(req: NextRequest) {
   // Burn OTP
   await redis.del(`reveal_otp:${session.id}`)
 
-  // Issue short-lived reveal token cookie (5 minutes)
-  const token = Buffer.from(`${session.id}:${Date.now()}`).toString('base64')
+  // FIX: Issue HMAC-signed token (was base64(userId:timestamp) — forgeable)
+  const token = issueSecureToken(session.id, 'reveal')
 
   const response = NextResponse.json({ success: true })
   response.cookies.set('reveal_token', token, {

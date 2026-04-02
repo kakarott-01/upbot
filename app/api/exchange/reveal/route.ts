@@ -1,14 +1,17 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
-import { db } from '@/lib/db'
-import { exchangeApis } from '@/lib/schema'
-import { eq, and } from 'drizzle-orm'
-import { decrypt, decryptJSON } from '@/lib/encryption'
+// ═══════════════════════════════════════════════════════════════════════════════
+// app/api/exchange/reveal/route.ts  — FIXED
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX: Token verification now uses verifySecureToken() (HMAC-SHA256) instead
+//      of manually decoding base64(userId:timestamp) which had no integrity.
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// POST /api/exchange/reveal
-// Body: { marketType, exchangeName }
-// Returns decrypted API key + secret — only callable after OTP is verified
-// The OTP verification sets a short-lived cookie 'reveal_token' that this route checks.
+import { NextRequest, NextResponse }    from 'next/server'
+import { auth }                          from '@/lib/auth'
+import { db }                            from '@/lib/db'
+import { exchangeApis }                  from '@/lib/schema'
+import { eq, and }                       from 'drizzle-orm'
+import { decrypt, decryptJSON }          from '@/lib/encryption'
+import { verifySecureToken }             from '@/lib/secure-token'  // FIX
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -16,32 +19,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Check reveal token cookie (set by /api/exchange/verify-reveal-otp)
-  const revealToken = req.cookies.get('reveal_token')?.value
-  if (!revealToken) {
+  // FIX: Verify HMAC-signed token (was raw base64 — forgeable by anyone with userId)
+  const rawToken = req.cookies.get('reveal_token')?.value
+  if (!rawToken) {
     return NextResponse.json({ error: 'OTP verification required' }, { status: 403 })
   }
 
-  // Validate the token: it's a signed string "userId:timestamp"
-  // Token is valid for 5 minutes
-  try {
-    const [tokenUserId, timestamp] = Buffer.from(revealToken, 'base64')
-      .toString('utf8')
-      .split(':')
-
-    if (tokenUserId !== session.id) {
-      return NextResponse.json({ error: 'Invalid reveal token' }, { status: 403 })
-    }
-
-    const tokenAge = Date.now() - Number(timestamp)
-    if (tokenAge > 5 * 60 * 1000) {
-      return NextResponse.json({ error: 'Reveal token expired. Please verify OTP again.' }, { status: 403 })
-    }
-  } catch {
-    return NextResponse.json({ error: 'Invalid reveal token' }, { status: 403 })
+  const result = verifySecureToken(rawToken, 'reveal')
+  if (!result.ok) {
+    return NextResponse.json({ error: `Invalid reveal token: ${result.reason}` }, { status: 403 })
+  }
+  if (result.userId !== session.id) {
+    return NextResponse.json({ error: 'Token user mismatch' }, { status: 403 })
   }
 
-  const { marketType, exchangeName } = await req.json()
+  const { marketType, exchangeName } = await req.json().catch(() => ({}))
 
   if (!marketType || !exchangeName) {
     return NextResponse.json({ error: 'marketType and exchangeName required' }, { status: 400 })

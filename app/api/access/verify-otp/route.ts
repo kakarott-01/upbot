@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { neon } from '@neondatabase/serverless'
-import { verifySignupToken } from '@/lib/jwt'
-import { db } from '@/lib/db'
-import { accessCodes } from '@/lib/schema'
-import { eq } from 'drizzle-orm'
-import { redis } from '@/lib/redis'
+import { neon }                       from '@neondatabase/serverless'
+import { verifySignupToken }          from '@/lib/jwt'
+import { db }                         from '@/lib/db'
+import { accessCodes }                from '@/lib/schema'
+import { eq }                         from 'drizzle-orm'
+import { redis }                      from '@/lib/redis'
+import { signSession }                from '@/lib/signed-cookie'  // FIX: signed cookie
 
 const sql = neon(process.env.DATABASE_URL!)
 
@@ -17,9 +18,7 @@ export async function POST(req: NextRequest) {
 
     const normalizedEmail = email.toLowerCase().trim()
 
-    // ── Verify OTP from Redis ──────────────────────────────────────────────────
-    // IMPORTANT: Upstash Redis may deserialize a stored numeric string (e.g. "123456")
-    // as a JS number (123456). Always coerce to string before comparing.
+    // ── Verify OTP from Redis ─────────────────────────────────────────────────
     const raw = await redis.get(`login_otp:${normalizedEmail}`)
 
     if (raw === null || raw === undefined) {
@@ -78,13 +77,11 @@ export async function POST(req: NextRequest) {
       userId = newUser[0].id
       console.info(`✅ New user created: ${normalizedEmail}`)
 
-      const postResponse = NextResponse.json({ success: true })
+      // FIX: sign the session cookie with HMAC
+      const sessionPayload = { id: userId, email: normalizedEmail, name: normalizedEmail.split('@')[0] }
+      const postResponse   = NextResponse.json({ success: true })
       postResponse.cookies.delete('signup_token')
-      postResponse.cookies.set('user_session', JSON.stringify({
-        id:    userId,
-        email: normalizedEmail,
-        name:  normalizedEmail.split('@')[0],
-      }), {
+      postResponse.cookies.set('user_session', signSession(sessionPayload), {
         httpOnly: true,
         secure:   process.env.NODE_ENV === 'production',
         maxAge:   30 * 24 * 60 * 60,
@@ -95,20 +92,16 @@ export async function POST(req: NextRequest) {
       return postResponse
     }
 
-    // Set session cookie
-    const response = NextResponse.json({ success: true })
-    response.cookies.set('user_session', JSON.stringify({
-      id:    userId,
-      email: normalizedEmail,
-      name:  normalizedEmail.split('@')[0],
-    }), {
+    // FIX: sign the session cookie with HMAC
+    const sessionPayload = { id: userId, email: normalizedEmail, name: normalizedEmail.split('@')[0] }
+    const response       = NextResponse.json({ success: true })
+    response.cookies.set('user_session', signSession(sessionPayload), {
       httpOnly: true,
       secure:   process.env.NODE_ENV === 'production',
       maxAge:   30 * 24 * 60 * 60,
       path:     '/',
       sameSite: 'lax',
     })
-
     response.cookies.delete('signup_token')
 
     return response

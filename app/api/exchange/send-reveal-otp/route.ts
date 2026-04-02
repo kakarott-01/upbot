@@ -1,11 +1,12 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
-import { redis } from '@/lib/redis'
-import nodemailer from 'nodemailer'
+// ═══════════════════════════════════════════════════════════════════════════════
+// app/api/exchange/send-reveal-otp/route.ts  — FIXED
+// ═══════════════════════════════════════════════════════════════════════════════
 
-function generateOtp(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString()
-}
+import { NextRequest, NextResponse } from 'next/server'
+import { auth }                       from '@/lib/auth'
+import { redis }                      from '@/lib/redis'
+import nodemailer                     from 'nodemailer'
+import { generateSecureOtp }          from '@/lib/otp'   // FIX: CSPRNG
 
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -13,7 +14,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Rate limit: max 3 per 10 minutes per user (stored in Redis)
   const rateLimitKey = `reveal_otp_rate:${session.id}`
   const raw          = await redis.get<string>(rateLimitKey)
   const limit        = raw ? JSON.parse(raw) : null
@@ -28,8 +28,7 @@ export async function POST(req: NextRequest) {
     : { ...limit, count: limit.count + 1 }
   await redis.set(rateLimitKey, JSON.stringify(newLimit), { ex: 600 })
 
-  const otp = generateOtp()
-  // Store in Redis with 5-minute TTL
+  const otp = generateSecureOtp()  // FIX: was Math.random()
   await redis.set(`reveal_otp:${session.id}`, otp, { ex: 300 })
 
   console.log(`\n🔐 Reveal OTP for ${session.email}: ${otp}\n`)

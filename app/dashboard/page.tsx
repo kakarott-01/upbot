@@ -1,20 +1,40 @@
+// ═══════════════════════════════════════════════════════════════════════════════
+// app/dashboard/page.tsx  — FIXED
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX (medium): Dashboard P&L chart was recalculating cumulative PnL from the
+//               /api/trades endpoint which is limited to 50 rows. Users with
+//               >50 trades saw a partial/incorrect cumulative chart.
+//
+//               Now fetches cumPnl from /api/performance which has NO row limit
+//               and returns pre-computed cumulative data.
+// ═══════════════════════════════════════════════════════════════════════════════
+
 'use client'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery }       from '@tanstack/react-query'
 import { TrendingUp, Activity, DollarSign } from 'lucide-react'
-import { PnlChart } from '@/components/charts/pnl-chart'
-import { TradeTable } from '@/components/dashboard/trade-table'
-import { BotControls } from '@/components/dashboard/bot-controls'
+import { PnlChart }       from '@/components/charts/pnl-chart'
+import { TradeTable }     from '@/components/dashboard/trade-table'
+import { BotControls }    from '@/components/dashboard/bot-controls'
 import { formatCurrency } from '@/lib/utils'
 
 export default function DashboardPage() {
-  // Separate query for accurate summary stats — no row limit
+  // Accurate summary stats — no row limit
   const { data: summaryData } = useQuery({
     queryKey: ['trades-summary'],
     queryFn:  () => fetch('/api/trades/summary').then(r => r.json()),
-    refetchInterval: 15 * 1000,
+    refetchInterval: 15_000,
   })
 
-  // Recent trades only for the table + chart (limit 50 is fine here)
+  // FIX: Fetch cumulative PnL from /api/performance (full history, no row limit)
+  // Use staleTime=60s — this chart doesn't need to be as fresh as stat cards
+  const { data: perfData } = useQuery({
+    queryKey: ['performance-chart'],
+    queryFn:  () => fetch('/api/performance').then(r => r.json()),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  })
+
+  // Recent trades for the table only (50-row limit is fine for a preview table)
   const { data: tradesData } = useQuery({
     queryKey: ['trades'],
     queryFn:  () => fetch('/api/trades?limit=50').then(r => r.json()),
@@ -27,9 +47,10 @@ export default function DashboardPage() {
     placeholderData: (prev) => prev,
   })
 
-  // Use dedicated summary endpoint for stat cards
-  const summary = summaryData ?? { totalPnl: 0, winRate: 0, total: 0, closed: 0 }
-  const recentTrades = tradesData?.trades?.slice(0, 10) ?? []
+  const summary        = summaryData ?? { totalPnl: 0, winRate: 0, total: 0, closed: 0 }
+  const recentTrades   = tradesData?.trades?.slice(0, 10) ?? []
+  // FIX: Use pre-computed cumPnl from performance endpoint (full history)
+  const cumPnlData     = perfData?.cumPnl ?? []
 
   const botStatus        = botData?.status ?? 'stopped'
   const botIsRunning     = botStatus === 'running'
@@ -83,19 +104,15 @@ export default function DashboardPage() {
           <span className="stat-sub">Since inception</span>
         </div>
 
-        {/* Bot Status card */}
         <div className="stat-card">
           <div className="flex items-center justify-between mb-1">
             <span className="stat-label">Bot Status</span>
             {botLoading && !botData ? (
               <span className="w-2 h-2 rounded-full bg-gray-700 animate-pulse" />
             ) : (
-              <span className={`w-2 h-2 rounded-full ${
-                botIsRunning ? 'bg-brand-500 animate-pulse' : 'bg-gray-700'
-              }`} />
+              <span className={`w-2 h-2 rounded-full ${botIsRunning ? 'bg-brand-500 animate-pulse' : 'bg-gray-700'}`} />
             )}
           </div>
-
           {botLoading && !botData ? (
             <>
               <div className="h-5 w-20 bg-gray-800 rounded animate-pulse mb-1" />
@@ -103,15 +120,11 @@ export default function DashboardPage() {
             </>
           ) : (
             <>
-              <div className={`stat-value text-base font-medium ${
-                botIsRunning ? 'text-brand-500' : 'text-gray-500'
-              }`}>
+              <div className={`stat-value text-base font-medium ${botIsRunning ? 'text-brand-500' : 'text-gray-500'}`}>
                 {botIsRunning ? 'Running' : 'Stopped'}
               </div>
               <span className="stat-sub">
-                {botActiveMarkets.length
-                  ? botActiveMarkets.join(' · ')
-                  : 'No active markets'}
+                {botActiveMarkets.length ? botActiveMarkets.join(' · ') : 'No active markets'}
               </span>
             </>
           )}
@@ -119,13 +132,13 @@ export default function DashboardPage() {
 
       </div>
 
-      {/* P&L Chart — uses the limited trades fetch, fine for chart */}
+      {/* P&L Chart — FIX: uses full-history cumPnl from /api/performance */}
       <div className="card">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-medium text-gray-300">P&L Over Time</h2>
-          <span className="badge-gray">Last 30 days</span>
+          <h2 className="text-sm font-medium text-gray-300">Cumulative P&L</h2>
+          <span className="badge-gray">All time</span>
         </div>
-        <PnlChart trades={tradesData?.trades ?? []} />
+        <PnlChart cumPnlData={cumPnlData} />
       </div>
 
       {/* Recent Trades */}

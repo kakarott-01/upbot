@@ -1,21 +1,18 @@
-// app/api/mode/route.ts
-//
-// GET  /api/mode  → returns all market modes for the current user
-// POST /api/mode  → switches a market's mode (paper ↔ live)
-//
-// Rules enforced:
-//  1. Bot must be STOPPED before any mode switch
-//  2. paper → live requires a valid mode_switch_token cookie
-//     (set by /api/mode/verify-otp, NOT the reveal-API-keys OTP)
-//  3. Every switch is written to mode_audit_logs
+// ═══════════════════════════════════════════════════════════════════════════════
+// app/api/mode/route.ts  — FIXED (POST handler)
+// ═══════════════════════════════════════════════════════════════════════════════
+// FIX: mode_switch_token now verified via verifySecureToken() (HMAC-SHA256).
+//      The GET handler is unchanged.
+// ═══════════════════════════════════════════════════════════════════════════════
 
-import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
-import { db } from '@/lib/db'
+import { NextRequest, NextResponse }           from 'next/server'
+import { auth }                                 from '@/lib/auth'
+import { db }                                   from '@/lib/db'
 import { marketConfigs, botStatuses, modeAuditLogs } from '@/lib/schema'
-import { eq, and } from 'drizzle-orm'
-import { z } from 'zod'
-import { getClientIp } from '@/lib/utils'
+import { eq, and }                              from 'drizzle-orm'
+import { z }                                    from 'zod'
+import { getClientIp }                          from '@/lib/utils'
+import { verifySecureToken }                    from '@/lib/secure-token'  // FIX
 
 const switchSchema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
@@ -59,7 +56,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const body   = await req.json()
+  const body   = await req.json().catch(() => ({}))
   const parsed = switchSchema.safeParse(body)
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
@@ -67,7 +64,7 @@ export async function POST(req: NextRequest) {
 
   const { marketType, toMode } = parsed.data
 
-  // ── Guard 1: bot must be stopped ─────────────────────────────────────────
+  // Guard 1: bot must be stopped
   const botStatus = await db.query.botStatuses.findFirst({
     where: eq(botStatuses.userId, session.id),
     columns: { status: true },
@@ -80,7 +77,7 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── Load current config ───────────────────────────────────────────────────
+  // Load current config
   const existing = await db.query.marketConfigs.findFirst({
     where: and(
       eq(marketConfigs.userId,     session.id),
@@ -94,39 +91,33 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, mode: toMode })
   }
 
-  // ── Guard 2: paper → live requires mode_switch_token cookie ──────────────
-  // This is a SEPARATE token from the reveal_token used for viewing API keys.
+  // Guard 2: paper → live requires a valid HMAC-signed mode_switch_token cookie
+  // FIX: was base64(userId:timestamp) — trivially forgeable
   if (toMode === 'live') {
-    const modeSwitchToken = req.cookies.get('mode_switch_token')?.value
-    if (!modeSwitchToken) {
+    const rawToken = req.cookies.get('mode_switch_token')?.value
+    if (!rawToken) {
       return NextResponse.json(
         { error: 'OTP verification required to enable live trading.', requiresOtp: true },
         { status: 403 }
       )
     }
 
-    try {
-      const [tokenUserId, timestamp] = Buffer.from(modeSwitchToken, 'base64')
-        .toString('utf8')
-        .split(':')
-
-      if (tokenUserId !== session.id) {
-        return NextResponse.json({ error: 'Invalid OTP token.', requiresOtp: true }, { status: 403 })
-      }
-
-      const tokenAge = Date.now() - Number(timestamp)
-      if (tokenAge > 5 * 60 * 1000) {
-        return NextResponse.json(
-          { error: 'OTP token expired. Please verify again.', requiresOtp: true },
-          { status: 403 }
-        )
-      }
-    } catch {
-      return NextResponse.json({ error: 'Invalid OTP token.', requiresOtp: true }, { status: 403 })
+    const result = verifySecureToken(rawToken, 'mode_switch')
+    if (!result.ok) {
+      return NextResponse.json(
+        { error: `OTP token invalid: ${result.reason}`, requiresOtp: true },
+        { status: 403 }
+      )
+    }
+    if (result.userId !== session.id) {
+      return NextResponse.json(
+        { error: 'OTP token user mismatch.', requiresOtp: true },
+        { status: 403 }
+      )
     }
   }
 
-  // ── Apply the mode switch ─────────────────────────────────────────────────
+  // Apply the mode switch
   if (existing) {
     await db.update(marketConfigs)
       .set({
@@ -144,7 +135,7 @@ export async function POST(req: NextRequest) {
     })
   }
 
-  // ── Write audit log ───────────────────────────────────────────────────────
+  // Write audit log
   await db.insert(modeAuditLogs).values({
     userId:    session.id,
     scope:     `exchange:${marketType}`,
