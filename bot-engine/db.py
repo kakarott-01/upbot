@@ -539,7 +539,7 @@ class Database:
         manager treats it as "no recent loss".
         """
         pool  = await self.pool()
-        today = date.today().isoformat()
+        today = date.today()
         row   = await pool.fetchrow(
             """SELECT daily_loss, open_trade_count, last_loss_time
                FROM risk_state
@@ -569,7 +569,7 @@ class Database:
         the last loss, or None if no loss has occurred today.
         """
         pool  = await self.pool()
-        today = date.today().isoformat()
+        today = date.today()
         await pool.execute(
             """INSERT INTO risk_state
                (user_id, market_type, daily_loss, open_trade_count, last_loss_time, day_date, updated_at)
