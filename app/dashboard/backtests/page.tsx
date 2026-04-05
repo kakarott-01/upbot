@@ -329,7 +329,7 @@ export default function BacktestsPage() {
 
           {error && <p className="text-xs text-red-400">{error}</p>}
 
-          <button onClick={() => runMutation.mutate()} disabled={runMutation.isPending || strategyKeys.length === 0} className="btn-primary w-full">
+          <button onClick={() => runMutation.mutate()} disabled={runMutation.isPending || strategyKeys.length === 0} className="btn-primary w-full justify-center">
             {runMutation.isPending ? <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Running…</span> : <><Play className="w-4 h-4" /> Run Backtest</>}
           </button>
         </div>
@@ -368,7 +368,7 @@ export default function BacktestsPage() {
                   type="button"
                   onClick={() => deployMutation.mutate(result.id)}
                   disabled={deployMutation.isPending}
-                  className="btn-primary"
+                  className="btn-primary justify-center"
                 >
                   {deployMutation.isPending ? 'Deploying…' : 'Deploy this configuration'}
                 </button>

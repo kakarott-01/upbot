@@ -85,6 +85,7 @@ export function StrategySettings() {
   const qc = useQueryClient()
   const [configs, setConfigs] = useState<Record<string, RuntimeConfig>>({})
   const [savedMarket, setSavedMarket] = useState<string | null>(null)
+  const [savingMarket, setSavingMarket] = useState<string | null>(null)
 
   const { data: strategyData, isLoading: strategiesLoading } = useQuery({
     queryKey: ['strategy-catalog'],
@@ -156,10 +157,16 @@ export function StrategySettings() {
       if (!res.ok) throw new Error(data.error ?? 'Failed to save strategy config')
       return data
     },
+    onMutate: ({ marketType }) => {
+      setSavingMarket(marketType)
+    },
     onSuccess: (_data, vars) => {
       setSavedMarket(vars.marketType)
       qc.invalidateQueries({ queryKey: ['strategy-configs'] })
       setTimeout(() => setSavedMarket((current) => (current === vars.marketType ? null : current)), 2500)
+    },
+    onSettled: (_data, _error, vars) => {
+      setSavingMarket((current) => (current === vars?.marketType ? null : current))
     },
   })
 
@@ -223,6 +230,10 @@ export function StrategySettings() {
           <h2 className="text-sm font-medium text-gray-200">Strategy Engine</h2>
           <p className="text-xs text-gray-500 mt-0.5">Select up to 2 sealed strategies per market and save each market independently.</p>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-brand-500/15 bg-brand-500/5 px-3 py-3 text-xs text-gray-300">
+        Strategy controls cap market and strategy exposure first. Bot Settings still enforce account-wide position size, stop loss, and daily loss guardrails afterward.
       </div>
 
       {botIsLocked && (
@@ -300,7 +311,7 @@ export function StrategySettings() {
               </div>
             )}
 
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
               <label className="space-y-1">
                 <span className="text-xs text-gray-500">Position Mode</span>
                 <select
@@ -377,7 +388,7 @@ export function StrategySettings() {
                           )}
                         </div>
 
-                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
                           <label className="space-y-1">
                             <span className="text-xs text-gray-500">Priority</span>
                             <select
@@ -639,7 +650,7 @@ export function StrategySettings() {
                 disabled={botIsLocked || saveMutation.isPending || config.strategyKeys.length === 0}
                 className="btn-primary w-full sm:w-auto"
               >
-                {saveMutation.isPending ? (
+                {savingMarket === market.id ? (
                   <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Saving…</span>
                 ) : savedMarket === market.id ? (
                   '✓ Saved'

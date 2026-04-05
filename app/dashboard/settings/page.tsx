@@ -60,8 +60,8 @@ export default function SettingsPage() {
 
   const SliderField = ({ label, field, min, max, step = 0.5, suffix = '%', description }: any) => (
     <div>
-      <div className="flex items-center justify-between mb-1.5">
-        <label className="text-sm text-gray-300">{label}</label>
+      <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+        <label className="pr-3 text-sm text-gray-300">{label}</label>
         <span className="text-sm font-mono text-brand-500 font-medium">
           {form[field as keyof typeof form]}{suffix}
         </span>
@@ -75,7 +75,7 @@ export default function SettingsPage() {
                    [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-brand-500
                    [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
       />
-      {description && <p className="text-xs text-gray-600 mt-1">{description}</p>}
+      {description && <p className="mt-1 text-xs text-gray-500">{description}</p>}
     </div>
   )
 
@@ -109,6 +109,10 @@ export default function SettingsPage() {
           </p>
         </div>
 
+        <div className="rounded-xl border border-brand-500/15 bg-brand-500/5 px-3 py-3 text-xs text-gray-300">
+          These are global account guardrails. Strategy Engine capital and drawdown controls do not replace these checks; they add another layer before orders are allowed through.
+        </div>
+
         <SliderField
           label="Max Position Size"
           field="maxPositionPct"
@@ -135,7 +139,7 @@ export default function SettingsPage() {
         />
 
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
             <label className="text-sm text-gray-300">Max Simultaneous Trades</label>
             <span className="text-sm font-mono text-brand-500 font-medium">{form.maxOpenTrades}</span>
           </div>
@@ -148,11 +152,11 @@ export default function SettingsPage() {
                        [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-brand-500
                        [&::-webkit-slider-thumb]:rounded-full"
           />
-          <p className="text-xs text-gray-600 mt-1">Maximum open positions at any time</p>
+          <p className="mt-1 text-xs text-gray-500">Maximum open positions at any time</p>
         </div>
 
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
             <label className="text-sm text-gray-300">Cooldown After Loss</label>
             <span className="text-sm font-mono text-brand-500 font-medium">
               {form.cooldownSeconds >= 60
@@ -169,14 +173,14 @@ export default function SettingsPage() {
                        [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-brand-500
                        [&::-webkit-slider-thumb]:rounded-full"
           />
-          <p className="text-xs text-gray-600 mt-1">Wait this long before next trade after a loss</p>
+          <p className="mt-1 text-xs text-gray-500">Wait this long before next trade after a loss</p>
         </div>
 
         {/* Trailing Stop — fixed toggle */}
         <div className="flex items-center justify-between pt-2 border-t border-gray-800">
           <div className="flex-1 min-w-0 mr-4">
             <p className="text-sm text-gray-300">Trailing Stop Loss</p>
-            <p className="text-xs text-gray-600">Stop loss follows price as it moves in your favour</p>
+            <p className="text-xs text-gray-500">Stop loss follows price as it moves in your favour</p>
           </div>
           <ToggleSwitch
             checked={form.trailingStop}
@@ -185,7 +189,7 @@ export default function SettingsPage() {
         </div>
 
         <div className="pt-2 border-t border-gray-800">
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
             <label className="text-sm text-gray-300">Paper Trading Balance</label>
             <span className="text-sm font-mono text-brand-500 font-medium">
               ₹{form.paperBalance.toLocaleString('en-IN')}
@@ -200,10 +204,10 @@ export default function SettingsPage() {
                        [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-brand-500
                        [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
           />
-          <p className="text-xs text-gray-600 mt-1">Simulated capital used for paper-mode position sizing</p>
+          <p className="mt-1 text-xs text-gray-500">Simulated capital used for paper-mode position sizing</p>
         </div>
 
-        <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} className="btn-primary w-full">
+        <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} className="btn-primary w-full justify-center">
           {saveMut.isPending
             ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
             : saved
