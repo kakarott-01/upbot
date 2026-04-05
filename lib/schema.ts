@@ -245,6 +245,8 @@ export const trades = pgTable('trades', {
   remainingQuantity: decimal('remaining_quantity', { precision: 20, scale: 8 }),
   status:          tradeStatusEnum('status').default('pending').notNull(),
   algoUsed:        varchar('algo_used', { length: 100 }),
+  strategyKey:     varchar('strategy_key', { length: 100 }),
+  positionScopeKey: varchar('position_scope_key', { length: 160 }).default('default').notNull(),
   signalId:        uuid('signal_id'),
   isPaper:         boolean('is_paper').default(true).notNull(),
   exchangeOrderId: varchar('exchange_order_id', { length: 255 }),
@@ -261,10 +263,11 @@ export const trades = pgTable('trades', {
   openedIdx:    index('trades_opened_idx').on(t.openedAt),
   sessionIdx:   index('trades_session_idx').on(t.sessionId),
   userOpenIdx:  index('idx_trades_user_open').on(t.userId, t.status),
-  // NOTE: The unique partial index idx_trades_one_open_per_symbol is created
-  // via raw SQL in migration 001_production_fixes.sql because Drizzle does not
-  // support partial unique indexes declaratively. It exists in the DB and is
-  // referenced by ON CONFLICT in Python db.py.
+  strategyIdx:  index('trades_strategy_idx').on(t.strategyKey),
+  scopeIdx:     index('trades_scope_idx').on(t.userId, t.marketType, t.symbol, t.positionScopeKey),
+  // NOTE: The active-scope unique partial index is created via raw SQL migration.
+  // It allows one open trade per user/market/symbol/position_scope_key while
+  // still supporting multiple aggressive live positions on the same symbol.
 }))
 
 // ─── Position Close Log ───────────────────────────────────────────────────────

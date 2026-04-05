@@ -31,26 +31,41 @@ def required_lookback() -> int:
     return 60
 
 
+def strategy_default_timeframe(strategy_key: str) -> str:
+    if strategy_key == "MEAN_REVERSION_PRO":
+        return "5m"
+    if strategy_key == "BREAKOUT_PULSE_X":
+        return "1h"
+    return "15m"
+
+
 class BlackBoxStrategyExecutor:
+    def evaluate_strategy(self, df: pd.DataFrame, strategy_key: str) -> Optional[str]:
+        return self._evaluate_strategy(df, strategy_key)
+
+    def combine(self, votes: List[Optional[str]], execution_mode: str, required_votes: Optional[int] = None) -> Optional[str]:
+        usable = [vote for vote in votes if vote in ("BUY", "SELL")]
+        if not usable:
+            return None
+
+        if execution_mode == "SAFE":
+            threshold = required_votes if required_votes is not None else len(votes)
+            first = usable[0]
+            return first if len(usable) == threshold and all(v == first for v in usable) else None
+
+        buy_votes = sum(1 for vote in usable if vote == "BUY")
+        sell_votes = sum(1 for vote in usable if vote == "SELL")
+        if buy_votes and sell_votes:
+            return None
+        return "BUY" if buy_votes else "SELL"
+
     def evaluate(self, df: pd.DataFrame, strategy_keys: List[str], execution_mode: str) -> Optional[str]:
         votes = []
         for strategy_key in strategy_keys:
             signal = self._evaluate_strategy(df, strategy_key)
             if signal in ("BUY", "SELL"):
                 votes.append(signal)
-
-        if not votes:
-            return None
-
-        if execution_mode == "SAFE":
-            first = votes[0]
-            return first if all(v == first for v in votes) and len(votes) == len(strategy_keys) else None
-
-        buy_votes = sum(1 for vote in votes if vote == "BUY")
-        sell_votes = sum(1 for vote in votes if vote == "SELL")
-        if buy_votes and sell_votes:
-            return None
-        return "BUY" if buy_votes else "SELL"
+        return self.combine(votes, execution_mode, required_votes=len(strategy_keys))
 
     def _evaluate_strategy(self, df: pd.DataFrame, strategy_key: str) -> Optional[str]:
         if len(df) < required_lookback():

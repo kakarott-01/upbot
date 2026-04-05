@@ -384,6 +384,8 @@ class Database:
                     actual_quantity=float(payload["actual_quantity"]),
                     exchange_name=payload.get("exchange_name", "live"),
                     fee_rate=float(payload.get("fee_rate", 0.001)),
+                    strategy_key=payload.get("strategy_key"),
+                    position_scope_key=payload.get("position_scope_key"),
                 )
                 if trade_id:
                     restored += 1
@@ -442,19 +444,23 @@ class Database:
         market_type: str,
         session_ref: str = "",
         fee_rate: float = 0.001,
+        strategy_key: Optional[str] = None,
+        position_scope_key: Optional[str] = None,
     ) -> Optional[str]:
         pool = await self.pool()
+        scope_key = position_scope_key or strategy_key or algo_name or "default"
         row = await pool.fetchrow(
             """INSERT INTO trades
                (user_id, exchange_name, market_type, symbol, side, quantity,
                 entry_price, fee_rate, filled_quantity, remaining_quantity,
-                status, algo_used, is_paper, bot_session_ref, opened_at)
-               VALUES ($1,'paper',$2,$3,$4,$5,$6,$7,0,$5,'open',$8,true,$9,$10)
-               ON CONFLICT ON CONSTRAINT idx_trades_one_open_per_symbol DO NOTHING
+                status, algo_used, strategy_key, position_scope_key, is_paper, bot_session_ref, opened_at)
+               VALUES ($1,'paper',$2,$3,$4,$5,$6,$7,0,$5,'open',$8,$9,$10,true,$11,$12)
+               ON CONFLICT (user_id, market_type, symbol, position_scope_key)
+               WHERE status='open' DO NOTHING
                RETURNING id""",
             user_id, market_type, symbol,
             side.lower(), str(quantity), str(price),
-            str(fee_rate), algo_name, session_ref or None,
+            str(fee_rate), algo_name, strategy_key, scope_key, session_ref or None,
             datetime.utcnow(),
         )
         if row:
@@ -481,6 +487,8 @@ class Database:
         actual_quantity: Optional[float] = None,
         exchange_name: str = "live",
         fee_rate: float = 0.001,
+        strategy_key: Optional[str] = None,
+        position_scope_key: Optional[str] = None,
     ) -> Optional[str]:
         # F9: Use actual filled quantity if provided, fall back to requested quantity
         recorded_quantity = actual_quantity if actual_quantity is not None else quantity
@@ -491,20 +499,22 @@ class Database:
                 f"requested={quantity:.8f} filled={actual_quantity:.8f}"
             )
 
+        scope_key = position_scope_key or strategy_key or algo_name or "default"
         pool = await self.pool()
         row = await pool.fetchrow(
             """INSERT INTO trades
                (user_id, exchange_name, market_type, symbol, side, quantity,
                 entry_price, stop_loss, take_profit, fee_rate,
-                filled_quantity, remaining_quantity, status, algo_used,
+                filled_quantity, remaining_quantity, status, algo_used, strategy_key, position_scope_key,
                 is_paper, exchange_order_id, bot_session_ref, opened_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$6,'open',$11,false,$12,$13,$14)
-               ON CONFLICT ON CONSTRAINT idx_trades_one_open_per_symbol DO NOTHING
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$6,'open',$11,$12,$13,false,$14,$15,$16)
+               ON CONFLICT (user_id, market_type, symbol, position_scope_key)
+               WHERE status='open' DO NOTHING
                RETURNING id""",
             user_id, exchange_name, market_type, symbol,
             side.lower(), str(recorded_quantity), str(price),
             str(stop_loss), str(take_profit), str(fee_rate),
-            algo_name, order_id,
+            algo_name, strategy_key, scope_key, order_id,
             session_ref or None,
             datetime.utcnow(),
         )
@@ -517,30 +527,66 @@ class Database:
 
     # ── Trade: FIND OPEN ──────────────────────────────────────────────────────
 
-    async def get_open_trade(self, user_id: str, symbol: str, market_type: str) -> Optional[Dict[str, Any]]:
+    async def get_open_trade(
+        self,
+        user_id: str,
+        symbol: str,
+        market_type: str,
+        position_scope_key: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         pool = await self.pool()
-        row = await pool.fetchrow(
-            """SELECT id, side, quantity, entry_price, opened_at,
-                      fee_rate, fee_amount, pnl, net_pnl,
-                      filled_quantity, remaining_quantity
-               FROM trades
-               WHERE user_id=$1 AND symbol=$2 AND market_type=$3 AND status='open'
-               ORDER BY opened_at DESC LIMIT 1""",
-            user_id, symbol, market_type,
-        )
+        if position_scope_key:
+            row = await pool.fetchrow(
+                """SELECT id, side, quantity, entry_price, opened_at,
+                          fee_rate, fee_amount, pnl, net_pnl,
+                          filled_quantity, remaining_quantity, strategy_key, position_scope_key
+                   FROM trades
+                   WHERE user_id=$1 AND symbol=$2 AND market_type=$3
+                     AND position_scope_key=$4 AND status='open'
+                   ORDER BY opened_at DESC LIMIT 1""",
+                user_id, symbol, market_type, position_scope_key,
+            )
+        else:
+            row = await pool.fetchrow(
+                """SELECT id, side, quantity, entry_price, opened_at,
+                          fee_rate, fee_amount, pnl, net_pnl,
+                          filled_quantity, remaining_quantity, strategy_key, position_scope_key
+                   FROM trades
+                   WHERE user_id=$1 AND symbol=$2 AND market_type=$3 AND status='open'
+                   ORDER BY opened_at DESC LIMIT 1""",
+                user_id, symbol, market_type,
+            )
         return dict(row) if row else None
 
-    async def get_all_open_trades(self, user_id: str, market_type: str) -> List[Dict[str, Any]]:
+    async def get_all_open_trades(
+        self,
+        user_id: str,
+        market_type: str,
+        position_scope_key: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         pool = await self.pool()
-        rows = await pool.fetch(
-            """SELECT id, symbol, side, quantity, entry_price,
-                      market_type, is_paper, bot_session_ref, opened_at,
-                      fee_rate, pnl, net_pnl, filled_quantity, remaining_quantity
-               FROM trades
-               WHERE user_id=$1 AND market_type=$2 AND status='open'
-               ORDER BY opened_at ASC""",
-            user_id, market_type,
-        )
+        if position_scope_key:
+            rows = await pool.fetch(
+                """SELECT id, symbol, side, quantity, entry_price,
+                          market_type, is_paper, bot_session_ref, opened_at,
+                          fee_rate, pnl, net_pnl, filled_quantity, remaining_quantity,
+                          strategy_key, position_scope_key
+                   FROM trades
+                   WHERE user_id=$1 AND market_type=$2 AND position_scope_key=$3 AND status='open'
+                   ORDER BY opened_at ASC""",
+                user_id, market_type, position_scope_key,
+            )
+        else:
+            rows = await pool.fetch(
+                """SELECT id, symbol, side, quantity, entry_price,
+                          market_type, is_paper, bot_session_ref, opened_at,
+                          fee_rate, pnl, net_pnl, filled_quantity, remaining_quantity,
+                          strategy_key, position_scope_key
+                   FROM trades
+                   WHERE user_id=$1 AND market_type=$2 AND status='open'
+                   ORDER BY opened_at ASC""",
+                user_id, market_type,
+            )
         return [dict(row) for row in rows]
 
     async def get_all_open_trades_all_markets(self, user_id: str) -> List[Dict[str, Any]]:
@@ -563,13 +609,39 @@ class Database:
 
     # ── Reconciliation helpers ────────────────────────────────────────────────
 
-    async def get_open_symbols_for_market(self, user_id: str, market_type: str) -> Dict[str, str]:
+    async def get_open_trade_refs_for_market(
+        self,
+        user_id: str,
+        market_type: str,
+        position_scope_key: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        pool = await self.pool()
+        if position_scope_key:
+            rows = await pool.fetch(
+                """SELECT id::text, symbol, position_scope_key
+                   FROM trades
+                   WHERE user_id=$1 AND market_type=$2 AND position_scope_key=$3 AND status='open'""",
+                user_id, market_type, position_scope_key,
+            )
+        else:
+            rows = await pool.fetch(
+                """SELECT id::text, symbol, position_scope_key
+                   FROM trades
+                   WHERE user_id=$1 AND market_type=$2 AND status='open'""",
+                user_id, market_type,
+            )
+        return [dict(row) for row in rows]
+
+    async def get_open_trades_for_symbol(self, user_id: str, market_type: str, symbol: str) -> List[Dict[str, Any]]:
         pool = await self.pool()
         rows = await pool.fetch(
-            "SELECT id::text, symbol FROM trades WHERE user_id=$1 AND market_type=$2 AND status='open'",
-            user_id, market_type,
+            """SELECT id::text, side, strategy_key, position_scope_key
+               FROM trades
+               WHERE user_id=$1 AND market_type=$2 AND symbol=$3 AND status='open'
+               ORDER BY opened_at ASC""",
+            user_id, market_type, symbol,
         )
-        return {row["symbol"]: str(row["id"]) for row in rows}
+        return [dict(row) for row in rows]
 
     async def get_reconciliation_last_run(self, user_id: str, market_type: str) -> Optional[datetime]:
         pool = await self.pool()

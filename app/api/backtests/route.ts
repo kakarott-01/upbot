@@ -64,3 +64,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: (error as Error).message }, { status: 400 })
   }
 }
+
+export async function GET() {
+  const session = await auth()
+  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const runs = await db.query.backtestRuns.findMany({
+    where: eq(backtestRuns.userId, session.id),
+    orderBy: (table, { desc }) => [desc(table.createdAt)],
+    limit: 20,
+  })
+
+  return NextResponse.json({ runs })
+}

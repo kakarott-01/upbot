@@ -91,6 +91,8 @@ class BaseAlgo(ABC):
         user_id: str,
         paper_mode: bool = True,
         session_ref: str = "",
+        position_scope_key: str = "default",
+        strategy_key: Optional[str] = None,
     ):
         self.connector    = connector
         self.risk         = risk_mgr
@@ -98,6 +100,8 @@ class BaseAlgo(ABC):
         self.user_id      = user_id
         self._paper_mode  = paper_mode
         self._session_ref = session_ref
+        self.position_scope_key = position_scope_key
+        self.strategy_key = strategy_key
 
         self._reconciled  = False
         self._risk_loaded = False
@@ -149,7 +153,9 @@ class BaseAlgo(ABC):
             return
         logger.info(f"[{self.name}] 🔍 Starting startup reconciliation…")
         try:
-            db_open: List[Dict] = await self.db.get_all_open_trades(self.user_id, self.market_type)
+            db_open: List[Dict] = await self.db.get_all_open_trades(
+                self.user_id, self.market_type, self.position_scope_key
+            )
             if not db_open:
                 self._reconciled = True
                 return
@@ -209,8 +215,10 @@ class BaseAlgo(ABC):
             if last_run is not None and (now - last_run).total_seconds() < RECONCILE_INTERVAL_SEC:
                 return
             logger.info(f"[{self.name}] 🔄 Runtime reconciliation starting…")
-            db_open_map = await self.db.get_open_symbols_for_market(self.user_id, self.market_type)
-            if not db_open_map:
+            db_open_refs = await self.db.get_open_trade_refs_for_market(
+                self.user_id, self.market_type, self.position_scope_key
+            )
+            if not db_open_refs:
                 await self.db.update_reconciliation_log(self.user_id, self.market_type, 0)
                 return
             try:
@@ -232,7 +240,9 @@ class BaseAlgo(ABC):
                 logger.warning(f"[{self.name}] ⚠️  Exchange reconciliation fetch failed: {e}. Skipping.")
                 return
             fixed = 0
-            for symbol, trade_id in db_open_map.items():
+            for trade_ref in db_open_refs:
+                symbol = trade_ref["symbol"]
+                trade_id = trade_ref["id"]
                 if symbol not in exchange_symbols:
                     logger.warning(f"[{self.name}] 🔍 Runtime orphan: {symbol} id={trade_id}")
                     was_fixed = await self.db.cancel_orphan_trade(trade_id)
@@ -357,6 +367,8 @@ class BaseAlgo(ABC):
                     price, self.name, self.market_type,
                     session_ref=self._session_ref,
                     fee_rate=float(self.config.get("fee_rate", 0.001)),
+                    strategy_key=self.strategy_key,
+                    position_scope_key=self.position_scope_key,
                 )
                 if trade_id:
                     if hasattr(self, "_confirm_staged_open"):
@@ -375,7 +387,9 @@ class BaseAlgo(ABC):
 
     async def _find_open_trade(self, symbol: str) -> Tuple:
         try:
-            row = await self.db.get_open_trade(self.user_id, symbol, self.market_type)
+            row = await self.db.get_open_trade(
+                self.user_id, symbol, self.market_type, self.position_scope_key
+            )
             if row:
                 return True, row["id"], float(row["entry_price"]), row["side"]
         except Exception as e:
@@ -390,7 +404,9 @@ class BaseAlgo(ABC):
             self._open_positions.pop(symbol, None)
 
         try:
-            open_row = await self.db.get_open_trade(self.user_id, symbol, self.market_type)
+            open_row = await self.db.get_open_trade(
+                self.user_id, symbol, self.market_type, self.position_scope_key
+            )
             if not open_row:
                 logger.info(f"[{self.name}] ℹ️  {symbol} already closed in DB, skipping close")
                 return
@@ -687,6 +703,8 @@ class BaseAlgo(ABC):
                     actual_quantity=actual_quantity,
                     exchange_name=self.connector.exchange_name,
                     fee_rate=fee_rate,
+                    strategy_key=self.strategy_key,
+                    position_scope_key=self.position_scope_key,
                 )
             except Exception as e:
                 last_error = e
@@ -709,6 +727,8 @@ class BaseAlgo(ABC):
             "take_profit": take_profit,
             "order_id": order_id,
             "algo_name": self.name,
+            "strategy_key": self.strategy_key,
+            "position_scope_key": self.position_scope_key,
             "market_type": self.market_type,
             "session_ref": self._session_ref,
             "exchange_name": self.connector.exchange_name,

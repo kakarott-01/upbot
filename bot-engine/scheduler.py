@@ -159,6 +159,12 @@ class BotScheduler:
                 ctx.connectors[market] = connector
 
                 paper_mode = market_modes.get(market, True)
+                strategy_cfg = await self._db.get_market_strategy_config(user_id, market)
+                strategy_keys = strategy_cfg.get("strategy_keys", [])
+                execution_mode = strategy_cfg.get("execution_mode", "SAFE")
+                if not strategy_keys:
+                    logger.warning(f"⚠️  No strategy config for market={market}, skipping")
+                    continue
                 real_session_id = (session_ids or {}).get(market)
                 session_ref     = real_session_id if real_session_id else f"{user_id}:{market}"
 
@@ -175,100 +181,92 @@ class BotScheduler:
                         "Starting with zero values."
                     )
 
-                algo = ConfiguredMultiStrategyAlgo(
-                    connector=connector,
-                    risk_mgr=risk_mgr,
-                    db=self._db,
-                    user_id=user_id,
-                    paper_mode=paper_mode,
-                    session_ref=session_ref,
-                    market_type_name=market,
-                )
-                # Mark risk as already loaded so base_algo doesn't reload on first cycle
-                algo._risk_loaded = True
-
                 interval = MARKET_INTERVAL.get(market, 60)
-                job_id   = f"{user_id}_{market}"
-
-                async def _wrapped_cycle(
-                    _algo=algo,
-                    _uid=user_id,
-                    _scheduler=self,
-                ):
-                    await _algo.run_cycle()
-                    now = datetime.utcnow()
-                    if _uid in _scheduler.active_bots:
-                        _scheduler.active_bots[_uid].last_heartbeat = now
-                    try:
-                        await _scheduler._db.update_heartbeat(_uid)
-                    except Exception as e:
-                        logger.warning(f"⚠️  Heartbeat update failed: {e}")
-
-                    # ── Drain completion check ────────────────────────────────
-                    try:
-                        stop_mode = await _scheduler._db.get_bot_stop_mode(_uid)
-                        if stop_mode == "graceful":
-                            open_count = await _scheduler._db.count_open_trades(_uid)
-                            if open_count == 0:
-                                ctx = _scheduler.active_bots.get(_uid)
-                                if ctx and ctx.drain_completing:
-                                    logger.debug(
-                                        f"[drain] Completion already in progress for "
-                                        f"user={_uid[:8]}… — skipping duplicate"
-                                    )
-                                    return
-                                if ctx:
-                                    ctx.drain_completing = True
-
-                                logger.info(
-                                    f"✅ Drain complete for user={_uid[:8]}… "
-                                    "— all positions closed, stopping now"
-                                )
-
-                                # Stop jobs FIRST before DB update to close the race window
-                                await _scheduler._stop_jobs(_uid)
-                                logger.info(
-                                    f"🛑 APScheduler jobs removed for user={_uid[:8]}…"
-                                )
-
-                                try:
-                                    await _scheduler._db.force_set_status(_uid, "stopped")
-                                    logger.info(
-                                        f"✅ DB status → stopped for user={_uid[:8]}…"
-                                    )
-                                except Exception as e:
-                                    logger.error(
-                                        f"❌ Failed to update DB stop status "
-                                        f"for user={_uid[:8]}…: {e}"
-                                    )
-
-                                asyncio.create_task(
-                                    _scheduler._complete_stop_callback(_uid),
-                                    name=f"complete_stop_cb_{_uid}",
-                                )
-
-                                clear_ohlcv_cache()
-
-                    except Exception as e:
-                        logger.error(f"❌ Drain completion check error: {e}")
-
-                self._scheduler.add_job(
-                    _wrapped_cycle,
-                    trigger=IntervalTrigger(seconds=interval),
-                    id=job_id,
-                    replace_existing=True,
-                    max_instances=1,
-                    coalesce=True,
-                    misfire_grace_time=10,
+                scopes = (
+                    [{"strategy_keys": strategy_keys, "execution_mode": "SAFE", "position_scope_key": "|".join(strategy_keys)}]
+                    if execution_mode == "SAFE" or len(strategy_keys) == 1
+                    else [
+                        {"strategy_keys": [strategy_key], "execution_mode": "AGGRESSIVE", "position_scope_key": strategy_key}
+                        for strategy_key in strategy_keys
+                    ]
                 )
 
-                ctx.job_ids.append(job_id)
+                for scope in scopes:
+                    algo = ConfiguredMultiStrategyAlgo(
+                        connector=connector,
+                        risk_mgr=risk_mgr,
+                        db=self._db,
+                        user_id=user_id,
+                        paper_mode=paper_mode,
+                        session_ref=session_ref,
+                        market_type_name=market,
+                        strategy_keys=scope["strategy_keys"],
+                        execution_mode=scope["execution_mode"],
+                        position_scope_key=scope["position_scope_key"],
+                    )
+                    algo._risk_loaded = True
+
+                    safe_scope = scope["position_scope_key"].replace("/", "_").replace("|", "_")
+                    job_id = f"{user_id}_{market}_{safe_scope}"
+
+                    async def _wrapped_cycle(
+                        _algo=algo,
+                        _uid=user_id,
+                        _scheduler=self,
+                    ):
+                        await _algo.run_cycle()
+                        now = datetime.utcnow()
+                        if _uid in _scheduler.active_bots:
+                            _scheduler.active_bots[_uid].last_heartbeat = now
+                        try:
+                            await _scheduler._db.update_heartbeat(_uid)
+                        except Exception as e:
+                            logger.warning(f"⚠️  Heartbeat update failed: {e}")
+
+                        try:
+                            stop_mode = await _scheduler._db.get_bot_stop_mode(_uid)
+                            if stop_mode == "graceful":
+                                open_count = await _scheduler._db.count_open_trades(_uid)
+                                if open_count == 0:
+                                    ctx = _scheduler.active_bots.get(_uid)
+                                    if ctx and ctx.drain_completing:
+                                        return
+                                    if ctx:
+                                        ctx.drain_completing = True
+                                    await _scheduler._stop_jobs(_uid)
+                                    try:
+                                        await _scheduler._db.force_set_status(_uid, "stopped")
+                                    except Exception as e:
+                                        logger.error(
+                                            f"❌ Failed to update DB stop status "
+                                            f"for user={_uid[:8]}…: {e}"
+                                        )
+                                    asyncio.create_task(
+                                        _scheduler._complete_stop_callback(_uid),
+                                        name=f"complete_stop_cb_{_uid}",
+                                    )
+                                    clear_ohlcv_cache()
+                        except Exception as e:
+                            logger.error(f"❌ Drain completion check error: {e}")
+
+                    self._scheduler.add_job(
+                        _wrapped_cycle,
+                        trigger=IntervalTrigger(seconds=interval),
+                        id=job_id,
+                        replace_existing=True,
+                        max_instances=1,
+                        coalesce=True,
+                        misfire_grace_time=10,
+                    )
+
+                    ctx.job_ids.append(job_id)
+                    logger.info(
+                        f"✅ Scheduled {ConfiguredMultiStrategyAlgo.__name__} market={market} "
+                        f"scope={scope['position_scope_key']} every {interval}s "
+                        f"[{'PAPER' if paper_mode else '🔴 LIVE'}] session_ref={session_ref}"
+                    )
+
                 started_markets.append(market)
-                logger.info(
-                    f"✅ Scheduled {ConfiguredMultiStrategyAlgo.__name__} market={market} "
-                    f"every {interval}s [{'PAPER' if paper_mode else '🔴 LIVE'}] "
-                    f"session_ref={session_ref}"
-                )
 
             if not started_markets:
                 raise RuntimeError("No markets could be started — check exchange API keys")

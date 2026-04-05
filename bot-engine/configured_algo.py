@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from algorithms.base_algo import BaseAlgo
-from strategy_engine import BlackBoxStrategyExecutor
+from strategy_engine import BlackBoxStrategyExecutor, strategy_default_timeframe
 
 logger = logging.getLogger(__name__)
 
@@ -14,23 +14,32 @@ DEFAULT_SYMBOLS = {
     "global": ["AAPL", "MSFT", "NVDA"],
 }
 
-DEFAULT_TIMEFRAMES = {
-    "crypto": "15m",
-    "indian": "5m",
-    "commodities": "1h",
-    "global": "1h",
-}
-
 
 class ConfiguredMultiStrategyAlgo(BaseAlgo):
-    def __init__(self, *args, market_type_name: str, **kwargs):
+    def __init__(
+        self,
+        *args,
+        market_type_name: str,
+        strategy_keys: List[str],
+        execution_mode: str,
+        position_scope_key: str,
+        **kwargs,
+    ):
         self._market_type_name = market_type_name
+        self._strategy_keys = strategy_keys
+        self._execution_mode = execution_mode
         self._executor = BlackBoxStrategyExecutor()
         self._open_positions: Dict[str, Dict] = {}
         self._db_synced: set = set()
         self._staged_open: Dict[str, Dict] = {}
-        super().__init__(*args, **kwargs)
-        self.name = f"BLACKBOX_{self._market_type_name.upper()}"
+        super().__init__(
+            *args,
+            position_scope_key=position_scope_key,
+            strategy_key=strategy_keys[0] if len(strategy_keys) == 1 else None,
+            **kwargs,
+        )
+        scope_label = position_scope_key.replace("|", "_")
+        self.name = f"BLACKBOX_{self._market_type_name.upper()}_{scope_label}"
 
     @property
     def market_type(self) -> str:
@@ -42,7 +51,6 @@ class ConfiguredMultiStrategyAlgo(BaseAlgo):
     def default_config(self) -> Dict:
         return {
             "symbols": DEFAULT_SYMBOLS.get(self._market_type_name, []),
-            "timeframe": DEFAULT_TIMEFRAMES.get(self._market_type_name, "15m"),
             "fee_rate": 0.001,
         }
 
@@ -54,7 +62,9 @@ class ConfiguredMultiStrategyAlgo(BaseAlgo):
             return
         self._db_synced.add(symbol)
         try:
-            open_row = await self.db.get_open_trade(self.user_id, symbol, self.market_type)
+            open_row = await self.db.get_open_trade(
+                self.user_id, symbol, self.market_type, self.position_scope_key
+            )
             if open_row and symbol not in self._open_positions:
                 opened_at = open_row["opened_at"]
                 if hasattr(opened_at, "tzinfo") and opened_at.tzinfo is not None:
@@ -85,27 +95,59 @@ class ConfiguredMultiStrategyAlgo(BaseAlgo):
     def _close(self, symbol: str):
         self._open_positions.pop(symbol, None)
 
+    async def _decision_for_symbol(self, symbol: str) -> tuple[Optional[str], Optional[float]]:
+        votes: List[Optional[str]] = []
+        latest_close = None
+
+        for strategy_key in self._strategy_keys:
+            timeframe = strategy_default_timeframe(strategy_key)
+            df = await self.connector.fetch_ohlcv_cached(symbol, timeframe, limit=160)
+            if len(df) < 80:
+                votes.append(None)
+                continue
+            latest_close = float(df["close"].iloc[-1])
+            votes.append(self._executor.evaluate_strategy(df, strategy_key))
+
+        if latest_close is None:
+            return None, None
+
+        decision = self._executor.combine(
+            votes,
+            self._execution_mode,
+            required_votes=len(self._strategy_keys),
+        )
+        return decision, latest_close
+
     async def generate_signal(self, symbol: str) -> Optional[str]:
         await self._sync_position_from_db(symbol)
-        strategy_cfg = await self.db.get_market_strategy_config(self.user_id, self.market_type)
-        strategy_keys = strategy_cfg.get("strategy_keys", [])
-        execution_mode = strategy_cfg.get("execution_mode", "SAFE")
-        if not strategy_keys:
+        if not self._strategy_keys:
             return None
 
-        timeframe = self.config.get("timeframe", DEFAULT_TIMEFRAMES.get(self._market_type_name, "15m"))
-        df = await self.connector.fetch_ohlcv_cached(symbol, timeframe, limit=160)
-        if len(df) < 80:
+        decision, latest_close = await self._decision_for_symbol(symbol)
+        if latest_close is None:
             return None
-
-        current_close = float(df["close"].iloc[-1])
-        decision = self._executor.evaluate(df, strategy_keys, execution_mode)
 
         if symbol in self._open_positions:
-            return self._check_exit(symbol, current_close, decision)
+            return self._check_exit(symbol, latest_close, decision)
 
         if decision in ("BUY", "SELL"):
-            self._stage_open(symbol, decision, current_close)
+            if len(self._strategy_keys) == 1 and self._execution_mode == "AGGRESSIVE":
+                open_trades = await self.db.get_open_trades_for_symbol(
+                    self.user_id, self.market_type, symbol
+                )
+                opposite_exists = any(
+                    row["position_scope_key"] != self.position_scope_key
+                    and row["side"].upper() != decision
+                    for row in open_trades
+                )
+                if opposite_exists:
+                    logger.warning(
+                        f"[{self.name}] Aggressive entry blocked for {symbol}: "
+                        "opposite strategy direction already open on this symbol."
+                    )
+                    return None
+
+            self._stage_open(symbol, decision, latest_close)
             return decision
         return None
 

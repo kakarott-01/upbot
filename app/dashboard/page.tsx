@@ -47,6 +47,12 @@ export default function DashboardPage() {
     placeholderData: (prev) => prev,
   })
 
+  const { data: strategyConfigData } = useQuery({
+    queryKey: ['strategy-configs'],
+    queryFn: () => fetch('/api/strategy-config').then(r => r.json()),
+    staleTime: 30_000,
+  })
+
   const summary        = summaryData ?? { totalPnl: 0, winRate: 0, total: 0, closed: 0 }
   const recentTrades   = tradesData?.trades?.slice(0, 10) ?? []
   // FIX: Use pre-computed cumPnl from performance endpoint (full history)
@@ -55,6 +61,9 @@ export default function DashboardPage() {
   const botStatus        = botData?.status ?? 'stopped'
   const botIsRunning     = botStatus === 'running'
   const botActiveMarkets = botData?.activeMarkets ?? []
+  const aggressiveMarkets = (strategyConfigData?.markets ?? [])
+    .filter((market: any) => market.executionMode === 'AGGRESSIVE')
+    .map((market: any) => market.marketType)
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto px-3 sm:px-4">
@@ -69,6 +78,13 @@ export default function DashboardPage() {
         </div>
         <BotControls botData={botData} />
       </div>
+
+      {aggressiveMarkets.length > 0 && (
+        <div className="bg-red-950/25 border border-red-900/35 rounded-xl px-4 py-3 text-sm text-red-200">
+          Aggressive mode is enabled for: {aggressiveMarkets.join(', ')}. Independent strategy-scoped live positions are active,
+          while opposite-direction overlap on the same symbol is blocked for safety.
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">

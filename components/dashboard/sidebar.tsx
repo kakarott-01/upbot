@@ -3,7 +3,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, TrendingUp, Settings, History,
-  BarChart2, Layers, ChevronRight, Zap, BookOpen,
+  BarChart2, Layers, ChevronRight, Zap, BookOpen, FlaskConical,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -13,6 +13,7 @@ export const dashboardNav = [
   { href: '/dashboard/trades',       icon: History,         label: 'Trade History' },
   { href: '/dashboard/bot-history',  icon: BookOpen,        label: 'Bot History' },
   { href: '/dashboard/performance',  icon: BarChart2,       label: 'Performance' },
+  { href: '/dashboard/backtests',    icon: FlaskConical,    label: 'Backtests' },
   { href: '/dashboard/settings',     icon: Settings,        label: 'Bot Settings' },
 ]
 

@@ -9,7 +9,18 @@ export async function GET(req: NextRequest) {
   if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const marketType = req.nextUrl.searchParams.get('marketType')
-  if (!marketType || !['indian', 'crypto', 'commodities', 'global'].includes(marketType)) {
+  if (!marketType) {
+    const markets = ['indian', 'crypto', 'commodities', 'global'] as const
+    const configs = await Promise.all(
+      markets.map(async (market) => ({
+        marketType: market,
+        ...(await getUserMarketStrategyConfig(session.id, market)),
+      })),
+    )
+    return NextResponse.json({ markets: configs })
+  }
+
+  if (!['indian', 'crypto', 'commodities', 'global'].includes(marketType)) {
     return NextResponse.json({ error: 'Valid marketType is required.' }, { status: 400 })
   }
 

@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Save, AlertTriangle } from 'lucide-react'
 import { ModeControls } from '@/components/dashboard/mode-controls'
 import { ToggleSwitch } from '@/components/ui/toggle-switch'
+import { StrategySettings } from '@/components/dashboard/strategy-settings'
 
 const defaults = {
   maxPositionPct:  2,
@@ -85,6 +86,8 @@ export default function SettingsPage() {
 
       {/* Trading Mode Controls */}
       <ModeControls />
+
+      <StrategySettings />
 
       {/* Risk Manager */}
       <div className="card space-y-5">
