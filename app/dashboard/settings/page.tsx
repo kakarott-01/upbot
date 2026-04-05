@@ -4,7 +4,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Shield, Save, AlertTriangle } from 'lucide-react'
 import { ModeControls } from '@/components/dashboard/mode-controls'
 import { ToggleSwitch } from '@/components/ui/toggle-switch'
-import { StrategySettings } from '@/components/dashboard/strategy-settings'
 
 const defaults = {
   maxPositionPct:  2,
@@ -81,22 +80,28 @@ export default function SettingsPage() {
   )
 
   return (
-    <div className="space-y-5 max-w-2xl mx-auto">
-      <h1 className="text-xl font-semibold text-gray-100">Bot Settings</h1>
+    <div className="mx-auto flex w-full max-w-4xl flex-col gap-5">
+      <div className="flex flex-col gap-3 rounded-2xl border border-gray-800 bg-gradient-to-br from-gray-900 via-slate-900 to-gray-950 p-5 sm:p-6">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-semibold text-gray-100 sm:text-2xl">Bot Settings</h1>
+            <p className="mt-1 text-sm text-gray-400">
+              Manage market mode, risk guardrails, and paper capital from one focused control panel.
+            </p>
+          </div>
+          <div className="badge-gray self-start">Mobile tuned</div>
+        </div>
+      </div>
 
-      {/* Trading Mode Controls */}
       <ModeControls />
 
-      <StrategySettings />
-
-      {/* Risk Manager */}
       <div className="card space-y-5">
         <div className="flex items-center gap-2 pb-3 border-b border-gray-800">
           <Shield className="w-4 h-4 text-brand-500" />
           <h2 className="text-sm font-medium text-gray-200">Risk Management</h2>
         </div>
 
-        <div className="bg-amber-900/15 border border-amber-900/30 rounded-lg px-3 py-2.5 flex items-start gap-2.5">
+        <div className="bg-amber-900/15 border border-amber-900/30 rounded-xl px-3 py-3 flex items-start gap-2.5">
           <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-amber-400/80">
             These limits are enforced on every trade. The bot will refuse to trade if any limit would be violated.
@@ -198,11 +203,7 @@ export default function SettingsPage() {
           <p className="text-xs text-gray-600 mt-1">Simulated capital used for paper-mode position sizing</p>
         </div>
 
-        <button
-          onClick={() => saveMut.mutate()}
-          disabled={saveMut.isPending}
-          className="btn-primary w-full"
-        >
+        <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} className="btn-primary w-full">
           {saveMut.isPending
             ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
             : saved

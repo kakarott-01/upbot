@@ -2,8 +2,8 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
-  LayoutDashboard, TrendingUp, Settings, History,
-  BarChart2, Layers, ChevronRight, Zap, BookOpen, FlaskConical,
+  LayoutDashboard, Settings, History,
+  BarChart2, Layers, ChevronRight, Zap, BookOpen, FlaskConical, Layers3,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -14,6 +14,7 @@ export const dashboardNav = [
   { href: '/dashboard/bot-history',  icon: BookOpen,        label: 'Bot History' },
   { href: '/dashboard/performance',  icon: BarChart2,       label: 'Performance' },
   { href: '/dashboard/backtests',    icon: FlaskConical,    label: 'Backtests' },
+  { href: '/dashboard/strategy-engine', icon: Layers3,      label: 'Strategy Engine' },
   { href: '/dashboard/settings',     icon: Settings,        label: 'Bot Settings' },
 ]
 
@@ -28,7 +29,7 @@ export function MobileSidebar({ open, onClose }: MobileSidebarProps) {
   return (
     <div className="fixed inset-0 z-50 md:hidden">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden="true" />
-      <div className="relative h-full w-72 bg-gray-900 border-r border-gray-800 shadow-xl">
+      <div className="relative h-full w-[85vw] max-w-xs bg-gray-900 border-r border-gray-800 shadow-xl">
         <div className="flex items-center justify-between px-4 py-4 border-b border-gray-800">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-brand-500 flex items-center justify-center flex-shrink-0">
@@ -40,12 +41,12 @@ export function MobileSidebar({ open, onClose }: MobileSidebarProps) {
             <ChevronRight className="w-5 h-5" />
           </button>
         </div>
-        <nav className="p-3 space-y-0.5 overflow-y-auto h-[calc(100%-72px)]">
+        <nav className="p-3 space-y-1 overflow-y-auto h-[calc(100%-72px)]">
           {dashboardNav.map(({ href, icon: Icon, label }) => {
             const active = pathname === href
             return (
               <Link key={href} href={href} onClick={onClose}
-                className={cn('flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors',
+                className={cn('flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm transition-colors',
                   active ? 'bg-brand-500/15 text-brand-500 font-medium' : 'text-gray-300 hover:text-gray-100 hover:bg-gray-800')}>
                 <Icon className="w-4 h-4 flex-shrink-0" />
                 <span className="flex-1">{label}</span>
@@ -68,12 +69,12 @@ export function Sidebar() {
         </div>
         <span className="font-semibold text-gray-100">UpBot</span>
       </div>
-      <nav className="flex-1 p-3 space-y-0.5">
+      <nav className="flex-1 p-3 space-y-1">
         {dashboardNav.map(({ href, icon: Icon, label }) => {
           const active = pathname === href
           return (
             <Link key={href} href={href}
-              className={cn('flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors group',
+              className={cn('flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm transition-colors group',
                 active ? 'bg-brand-500/15 text-brand-500 font-medium' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800')}>
               <Icon className="w-4 h-4 flex-shrink-0" />
               <span className="flex-1">{label}</span>

@@ -23,7 +23,7 @@ export const PUBLIC_STRATEGY_CATALOG: PublicStrategyCatalogItem[] = [
     description: 'Captures sustained directional moves and avoids low-conviction chop.',
     riskLevel: 'MEDIUM',
     supportedMarkets: ['CRYPTO', 'STOCKS', 'FOREX'],
-    supportedTimeframes: ['5m', '15m', '1h'],
+    supportedTimeframes: ['5m', '15m', '30m', '1h', '4h', '1d'],
     historicalPerformance: { winRate: 58.4, averageReturn: 12.63, maxDrawdown: 8.91, sharpeRatio: 1.41 },
   },
   {
@@ -32,7 +32,7 @@ export const PUBLIC_STRATEGY_CATALOG: PublicStrategyCatalogItem[] = [
     description: 'Looks for stretched moves that statistically tend to normalize over short horizons.',
     riskLevel: 'LOW',
     supportedMarkets: ['CRYPTO', 'STOCKS'],
-    supportedTimeframes: ['5m', '15m', '30m'],
+    supportedTimeframes: ['5m', '15m', '30m', '1h', '4h', '1d'],
     historicalPerformance: { winRate: 63.2, averageReturn: 9.84, maxDrawdown: 6.27, sharpeRatio: 1.58 },
   },
   {
@@ -41,7 +41,7 @@ export const PUBLIC_STRATEGY_CATALOG: PublicStrategyCatalogItem[] = [
     description: 'Prioritizes momentum expansion after compression and confirmed participation.',
     riskLevel: 'HIGH',
     supportedMarkets: ['CRYPTO', 'FOREX', 'STOCKS'],
-    supportedTimeframes: ['15m', '1h', '4h'],
+    supportedTimeframes: ['15m', '30m', '1h', '4h', '1d'],
     historicalPerformance: { winRate: 51.7, averageReturn: 15.94, maxDrawdown: 12.35, sharpeRatio: 1.29 },
   },
 ]

@@ -102,10 +102,10 @@ export function TopBar({ user }: TopBarProps) {
   return (
     <>
       <MobileSidebar open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
-      <header className="flex items-center justify-between px-4 md:px-6 py-3 border-b border-gray-800 bg-gray-900 flex-shrink-0">
+      <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-800 bg-gray-900 flex-shrink-0 md:px-6">
 
         <button
-          className="md:hidden flex items-center justify-center w-9 h-9 rounded-lg bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors"
+          className="md:hidden flex items-center justify-center w-10 h-10 rounded-xl bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors flex-shrink-0"
           onClick={() => setMobileNavOpen(true)}
           aria-label="Open menu"
         >
@@ -118,11 +118,11 @@ export function TopBar({ user }: TopBarProps) {
             Loading…
           </div>
         ) : pillConfig ? (
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${pillConfig.classes}`}>
+          <div className={`min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${pillConfig.classes}`}>
             <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${pillConfig.dot}`} />
-            <span>{pillConfig.label}</span>
+            <span className="truncate">{pillConfig.label}</span>
             {pillConfig.sub && (
-              <span className="opacity-70">{pillConfig.sub}</span>
+              <span className="hidden truncate opacity-70 sm:block">{pillConfig.sub}</span>
             )}
             {timeoutWarning && isStopping && (
               <AlertTriangle className="w-3 h-3 ml-0.5" />
@@ -130,8 +130,7 @@ export function TopBar({ user }: TopBarProps) {
           </div>
         ) : null}
 
-        {/* Right side */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           <button className="w-8 h-8 rounded-lg bg-gray-800 hover:bg-gray-700 flex items-center justify-center transition-colors">
             <Bell className="w-4 h-4 text-gray-500" />
           </button>

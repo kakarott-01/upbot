@@ -47,6 +47,7 @@ OHLCV_CACHE_TTL_BY_MARKET = {
 }
 OHLCV_CACHE_TTL_DEFAULT = 55
 MAX_CACHE_ENTRIES = 200
+OHLCV_PAGE_LIMIT = 1000
 
 
 def _cache_key(exchange_name: str, symbol: str, timeframe: str) -> Tuple[str, str, str]:
@@ -88,6 +89,18 @@ def _set_cached_ohlcv(
 def clear_ohlcv_cache() -> None:
     _ohlcv_cache.clear()
     logger.info("🧹 OHLCV cache cleared")
+
+
+def _timeframe_to_millis(timeframe: str) -> int:
+    unit = timeframe[-1]
+    value = int(timeframe[:-1])
+    if unit == "m":
+        return value * 60 * 1000
+    if unit == "h":
+        return value * 60 * 60 * 1000
+    if unit == "d":
+        return value * 24 * 60 * 60 * 1000
+    raise ValueError(f"Unsupported timeframe: {timeframe}")
 
 
 class ExchangeConnector:
@@ -153,7 +166,40 @@ class ExchangeConnector:
     ) -> pd.DataFrame:
         async with self._exchange() as ex:
             try:
-                raw = await ex.fetch_ohlcv(symbol, timeframe, since=since_ms, limit=limit)
+                requested_limit = max(int(limit), 1)
+                page_limit = min(requested_limit, OHLCV_PAGE_LIMIT)
+                cursor = since_ms
+                raw: List[List[float]] = []
+
+                while len(raw) < requested_limit:
+                    batch = await ex.fetch_ohlcv(
+                        symbol,
+                        timeframe,
+                        since=cursor,
+                        limit=min(page_limit, requested_limit - len(raw)),
+                    )
+                    if not batch:
+                        break
+
+                    if raw:
+                        last_timestamp = raw[-1][0]
+                        batch = [row for row in batch if row[0] > last_timestamp]
+                        if not batch:
+                            break
+
+                    raw.extend(batch)
+
+                    if len(batch) < page_limit:
+                        break
+
+                    if cursor is None:
+                        break
+
+                    next_cursor = int(batch[-1][0]) + _timeframe_to_millis(timeframe)
+                    if next_cursor <= cursor:
+                        break
+                    cursor = next_cursor
+
                 if not raw:
                     raise ValueError(f"Empty OHLCV for {symbol}")
                 df = pd.DataFrame(

@@ -1,8 +1,8 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, BarChart3, Loader2, Play } from 'lucide-react'
+import { AlertTriangle, BarChart3, CalendarRange, Loader2, Play } from 'lucide-react'
 import {
   ResponsiveContainer,
   LineChart,
@@ -20,10 +20,29 @@ const MARKETS = [
   { id: 'global', label: 'Global', category: 'STOCKS' },
 ] as const
 
+type StrategyItem = {
+  strategyKey: string
+  name: string
+  description: string
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH'
+  supportedMarkets: string[]
+  supportedTimeframes: string[]
+}
+
+const DEFAULT_ASSETS = {
+  indian: 'RELIANCE',
+  crypto: 'BTC/USDT',
+  commodities: 'XAU/USD',
+  global: 'SPY',
+} as const
+
+const MAX_RANGE_START = '2017-01-01T00:00'
+const MAX_RANGE_HINT = 'Backtests now fetch history in chunks, so the usable range is the full exchange-available history for the chosen asset and timeframe.'
+
 export default function BacktestsPage() {
   const qc = useQueryClient()
   const [marketType, setMarketType] = useState<'indian' | 'crypto' | 'commodities' | 'global'>('crypto')
-  const [asset, setAsset] = useState('BTC/USDT')
+  const [asset, setAsset] = useState<string>(DEFAULT_ASSETS.crypto)
   const [timeframe, setTimeframe] = useState('15m')
   const [executionMode, setExecutionMode] = useState<'SAFE' | 'AGGRESSIVE'>('SAFE')
   const [initialCapital, setInitialCapital] = useState(10000)
@@ -43,12 +62,37 @@ export default function BacktestsPage() {
     queryFn: () => fetch('/api/backtests').then((r) => r.json()),
   })
 
-  const strategies = strategyData?.strategies ?? []
+  const strategies: StrategyItem[] = strategyData?.strategies ?? []
   const marketCategory = MARKETS.find((market) => market.id === marketType)?.category ?? 'CRYPTO'
   const filteredStrategies = useMemo(
-    () => strategies.filter((strategy: any) => strategy.supportedMarkets.includes(marketCategory)),
+    () => strategies.filter((strategy) => strategy.supportedMarkets.includes(marketCategory)),
     [marketCategory, strategies],
   )
+  const timeframeOptions = useMemo(
+    () => Array.from(new Set(filteredStrategies.flatMap((strategy) => strategy.supportedTimeframes))).sort((a, b) => timeframeToMinutes(a) - timeframeToMinutes(b)),
+    [filteredStrategies],
+  )
+
+  useEffect(() => {
+    setAsset(DEFAULT_ASSETS[marketType])
+  }, [marketType])
+
+  useEffect(() => {
+    setStrategyKeys((current) => current.filter((key) => filteredStrategies.some((strategy: any) => strategy.strategyKey === key)).slice(0, 2))
+  }, [filteredStrategies])
+
+  useEffect(() => {
+    if (timeframeOptions.length === 0) return
+    const supportedBySelection = strategyKeys.length > 0
+      ? filteredStrategies
+          .filter((strategy) => strategyKeys.includes(strategy.strategyKey))
+          .every((strategy) => strategy.supportedTimeframes.includes(timeframe))
+      : timeframeOptions.includes(timeframe)
+
+    if (!supportedBySelection || !timeframeOptions.includes(timeframe)) {
+      setTimeframe(timeframeOptions[0])
+    }
+  }, [filteredStrategies, strategyKeys, timeframe, timeframeOptions])
 
   const runMutation = useMutation({
     mutationFn: async () => {
@@ -90,22 +134,44 @@ export default function BacktestsPage() {
   const metrics = result?.performance_metrics
   const equityCurve = result?.equity_curve ?? []
   const tradeSummary = result?.trade_summary ?? []
+  const selectedStrategyLabels = strategyKeys.length ? strategyKeys.join(' + ') : 'No strategies selected'
 
   return (
-    <div className="space-y-5 max-w-7xl mx-auto">
-      <div className="flex items-start justify-between">
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-5">
+      <div className="flex flex-col gap-3 rounded-2xl border border-gray-800 bg-gradient-to-br from-gray-900 via-slate-900 to-gray-950 p-5 sm:p-6 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-gray-100">Backtests</h1>
-          <p className="text-sm text-gray-500 mt-1">Run black-box strategies against historical data without exposing the internal logic.</p>
+          <h1 className="text-xl font-semibold text-gray-100 sm:text-2xl">Backtests</h1>
+          <p className="mt-1 max-w-3xl text-sm text-gray-400">
+            Run black-box strategies against historical data without exposing internal logic. The engine now paginates OHLCV requests so you can use the broadest exchange-supported date range.
+          </p>
         </div>
-        <div className="badge-gray">Server-side execution only</div>
+        <div className="flex flex-wrap gap-2">
+          <div className="badge-gray">Server-side execution only</div>
+          <div className="badge-gray">Max history enabled</div>
+        </div>
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <div className="card space-y-4">
+        <div className="card space-y-4 self-start xl:sticky xl:top-6">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-brand-500" />
             <h2 className="text-sm font-medium text-gray-200">Run Backtest</h2>
+          </div>
+
+          <div className="rounded-xl border border-brand-500/20 bg-brand-500/10 px-3 py-3 text-xs text-gray-300">
+            <div className="flex items-start gap-2">
+              <CalendarRange className="mt-0.5 h-4 w-4 flex-shrink-0 text-brand-400" />
+              <div className="space-y-2">
+                <p>{MAX_RANGE_HINT}</p>
+                <button
+                  type="button"
+                  onClick={() => setDateFrom(MAX_RANGE_START)}
+                  className="inline-flex rounded-lg border border-brand-500/25 bg-brand-500/10 px-2.5 py-1.5 text-[11px] font-medium text-brand-300 transition-colors hover:bg-brand-500/15"
+                >
+                  Use max range
+                </button>
+              </div>
+            </div>
           </div>
 
           {executionMode === 'AGGRESSIVE' && (
@@ -121,47 +187,49 @@ export default function BacktestsPage() {
           <div className="grid gap-3">
             <label className="space-y-1">
               <span className="text-xs text-gray-500">Market</span>
-              <select value={marketType} onChange={(e) => setMarketType(e.target.value as any)} className="w-full rounded-lg bg-gray-900 border border-gray-800 px-3 py-2 text-sm text-gray-100">
+              <select value={marketType} onChange={(e) => setMarketType(e.target.value as any)} className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100">
                 {MARKETS.map((market) => <option key={market.id} value={market.id}>{market.label}</option>)}
               </select>
             </label>
 
             <label className="space-y-1">
               <span className="text-xs text-gray-500">Asset</span>
-              <input value={asset} onChange={(e) => setAsset(e.target.value)} className="w-full rounded-lg bg-gray-900 border border-gray-800 px-3 py-2 text-sm text-gray-100" />
+              <input value={asset} onChange={(e) => setAsset(e.target.value)} className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100" />
             </label>
 
             <div className="grid gap-3 md:grid-cols-2">
               <label className="space-y-1">
                 <span className="text-xs text-gray-500">Timeframe</span>
-                <input value={timeframe} onChange={(e) => setTimeframe(e.target.value)} className="w-full rounded-lg bg-gray-900 border border-gray-800 px-3 py-2 text-sm text-gray-100" />
+                <select value={timeframe} onChange={(e) => setTimeframe(e.target.value)} className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100">
+                  {timeframeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
               </label>
               <label className="space-y-1">
                 <span className="text-xs text-gray-500">Initial Capital</span>
-                <input type="number" value={initialCapital} onChange={(e) => setInitialCapital(Number(e.target.value))} className="w-full rounded-lg bg-gray-900 border border-gray-800 px-3 py-2 text-sm text-gray-100" />
+                <input type="number" value={initialCapital} onChange={(e) => setInitialCapital(Number(e.target.value))} className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100" />
               </label>
             </div>
 
             <div className="grid gap-3 md:grid-cols-2">
               <label className="space-y-1">
                 <span className="text-xs text-gray-500">From</span>
-                <input type="datetime-local" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full rounded-lg bg-gray-900 border border-gray-800 px-3 py-2 text-sm text-gray-100" />
+                <input type="datetime-local" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100" />
               </label>
               <label className="space-y-1">
                 <span className="text-xs text-gray-500">To</span>
-                <input type="datetime-local" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full rounded-lg bg-gray-900 border border-gray-800 px-3 py-2 text-sm text-gray-100" />
+                <input type="datetime-local" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100" />
               </label>
             </div>
 
             <div className="space-y-2">
               <span className="text-xs text-gray-500">Execution Mode</span>
-              <div className="inline-flex rounded-lg border border-gray-800 overflow-hidden">
+              <div className="inline-flex w-full overflow-hidden rounded-xl border border-gray-800 sm:w-auto">
                 {(['SAFE', 'AGGRESSIVE'] as const).map((mode) => (
                   <button
                     key={mode}
                     type="button"
                     onClick={() => setExecutionMode(mode)}
-                    className={`px-3 py-2 text-xs font-medium ${executionMode === mode ? mode === 'AGGRESSIVE' ? 'bg-red-500/15 text-red-300' : 'bg-brand-500/15 text-brand-400' : 'text-gray-500'}`}
+                    className={`flex-1 px-3 py-2 text-xs font-medium ${executionMode === mode ? mode === 'AGGRESSIVE' ? 'bg-red-500/15 text-red-300' : 'bg-brand-500/15 text-brand-400' : 'text-gray-500'}`}
                   >
                     {mode}
                   </button>
@@ -172,21 +240,25 @@ export default function BacktestsPage() {
             <div className="space-y-2">
               <span className="text-xs text-gray-500">Strategies</span>
               <div className="grid gap-2">
-                {filteredStrategies.map((strategy: any) => {
+                {filteredStrategies.map((strategy) => {
                   const selected = strategyKeys.includes(strategy.strategyKey)
+                  const supported = strategy.supportedTimeframes.includes(timeframe)
                   return (
                     <button
                       key={strategy.strategyKey}
                       type="button"
-                      disabled={!selected && strategyKeys.length >= 2}
+                      disabled={(!selected && strategyKeys.length >= 2) || !supported}
                       onClick={() => toggleStrategy(strategy.strategyKey)}
-                      className={`rounded-lg border p-3 text-left ${selected ? 'border-brand-500/40 bg-brand-500/10' : 'border-gray-800 bg-gray-950/60'} disabled:opacity-50`}
+                      className={`rounded-xl border p-3 text-left transition-colors ${selected ? 'border-brand-500/40 bg-brand-500/10' : 'border-gray-800 bg-gray-950/60'} ${supported ? 'hover:border-gray-700' : 'opacity-50'} disabled:cursor-not-allowed`}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-medium text-gray-100">{strategy.name}</span>
                         <span className="text-[11px] text-gray-500">{strategy.riskLevel}</span>
                       </div>
                       <p className="text-xs text-gray-400 mt-1">{strategy.description}</p>
+                      <p className="mt-2 text-[11px] text-gray-500">
+                        {supported ? `Supports ${strategy.supportedTimeframes.join(', ')}` : `Not available on ${timeframe}`}
+                      </p>
                     </button>
                   )
                 })}
@@ -203,12 +275,12 @@ export default function BacktestsPage() {
 
         <div className="space-y-5">
           <div className="card">
-            <div className="flex items-center justify-between mb-4">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-sm font-medium text-gray-300">Performance</h2>
-              <span className="badge-gray">{result ? `${strategyKeys.join(' + ')} · ${executionMode}` : 'Awaiting run'}</span>
+              <span className="badge-gray">{result ? `${selectedStrategyLabels} · ${executionMode}` : 'Awaiting run'}</span>
             </div>
             {metrics ? (
-              <div className="grid gap-3 md:grid-cols-5">
+              <div className="grid gap-3 grid-cols-2 xl:grid-cols-5">
                 <Metric title="Return" value={`${metrics.totalReturnPct}%`} />
                 <Metric title="Win Rate" value={`${metrics.winRate}%`} />
                 <Metric title="Max DD" value={`${metrics.maxDrawdown}%`} />
@@ -221,11 +293,11 @@ export default function BacktestsPage() {
           </div>
 
           <div className="card">
-            <div className="flex items-center justify-between mb-4">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-sm font-medium text-gray-300">Equity Curve</h2>
               <span className="badge-gray">{equityCurve.length} points</span>
             </div>
-            <div className="h-80">
+            <div className="h-64 sm:h-80">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={equityCurve}>
                   <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" />
@@ -239,7 +311,7 @@ export default function BacktestsPage() {
           </div>
 
           <div className="card">
-            <div className="flex items-center justify-between mb-4">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-sm font-medium text-gray-300">Trade Summary</h2>
               <span className="badge-gray">{tradeSummary.length} trades</span>
             </div>
@@ -268,7 +340,7 @@ export default function BacktestsPage() {
           </div>
 
           <div className="card">
-            <div className="flex items-center justify-between mb-4">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-sm font-medium text-gray-300">Recent Runs</h2>
               <span className="badge-gray">{runsData?.runs?.length ?? 0}</span>
             </div>
@@ -299,4 +371,13 @@ function Metric({ title, value }: { title: string; value: string }) {
       <div className="text-lg font-semibold text-gray-100 mt-1">{value}</div>
     </div>
   )
+}
+
+function timeframeToMinutes(timeframe: string) {
+  const value = Number(timeframe.slice(0, -1))
+  const unit = timeframe.slice(-1)
+  if (unit === 'm') return value
+  if (unit === 'h') return value * 60
+  if (unit === 'd') return value * 60 * 24
+  return Number.MAX_SAFE_INTEGER
 }

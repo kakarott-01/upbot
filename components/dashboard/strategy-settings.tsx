@@ -123,12 +123,12 @@ export function StrategySettings() {
   }
 
   return (
-    <div className="card space-y-5">
+    <div className="card space-y-5 overflow-hidden">
       <div className="flex items-center gap-2 pb-3 border-b border-gray-800">
         <Layers3 className="w-4 h-4 text-brand-500" />
         <div>
           <h2 className="text-sm font-medium text-gray-200">Strategy Engine</h2>
-          <p className="text-xs text-gray-500 mt-0.5">Select up to 2 sealed strategies per market.</p>
+          <p className="text-xs text-gray-500 mt-0.5">Select up to 2 sealed strategies per market and save each market independently.</p>
         </div>
       </div>
 
@@ -152,22 +152,22 @@ export function StrategySettings() {
         const config = configs[market.id] ?? { executionMode: 'SAFE', strategyKeys: [] }
         const isAggressive = config.executionMode === 'AGGRESSIVE'
         return (
-          <div key={market.id} className="rounded-xl border border-gray-800 bg-gray-900/40 p-4 space-y-4">
-            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+          <div key={market.id} className="rounded-2xl border border-gray-800 bg-gray-900/40 p-4 sm:p-5 space-y-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-gray-100">{market.label}</h3>
-                <p className="text-xs text-gray-500 mt-1">
+                <h3 className="text-base font-semibold text-gray-100">{market.label}</h3>
+                <p className="text-xs text-gray-500 mt-1 max-w-2xl">
                   `SAFE` requires agreement. `AGGRESSIVE` allows separate strategy-scoped positions.
                 </p>
               </div>
 
-              <div className="inline-flex rounded-lg border border-gray-700 overflow-hidden">
+              <div className="inline-flex w-full overflow-hidden rounded-xl border border-gray-700 sm:w-auto">
                 {(['SAFE', 'AGGRESSIVE'] as const).map((mode) => (
                   <button
                     key={mode}
                     disabled={botIsLocked}
                     onClick={() => setMode(market.id, mode)}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                    className={`flex-1 px-3 py-2 text-xs font-medium transition-colors sm:flex-none ${
                       config.executionMode === mode
                         ? mode === 'AGGRESSIVE'
                           ? 'bg-red-500/15 text-red-300'
@@ -200,14 +200,14 @@ export function StrategySettings() {
                     type="button"
                     disabled={botIsLocked || (!selected && config.strategyKeys.length >= 2)}
                     onClick={() => toggleStrategy(market.id, strategy.strategyKey)}
-                    className={`text-left rounded-xl border p-3 transition-colors ${
+                    className={`text-left rounded-2xl border p-4 transition-colors ${
                       selected
                         ? 'border-brand-500/50 bg-brand-500/10'
                         : 'border-gray-800 bg-gray-950/60 hover:border-gray-700'
                     } disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm font-medium text-gray-100">{strategy.name}</span>
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-sm font-medium text-gray-100 break-words">{strategy.name}</span>
                       <span className={`text-[11px] px-2 py-0.5 rounded-full border ${
                         strategy.riskLevel === 'HIGH'
                           ? 'border-red-900/40 text-red-300 bg-red-950/30'
@@ -219,7 +219,7 @@ export function StrategySettings() {
                       </span>
                     </div>
                     <p className="text-xs text-gray-400 mt-2">{strategy.description}</p>
-                    <div className="mt-3 text-[11px] text-gray-500 space-y-1">
+                    <div className="mt-4 grid grid-cols-1 gap-1 text-[11px] text-gray-500 sm:grid-cols-3">
                       <div>Win rate {strategy.historicalPerformance.winRate}%</div>
                       <div>Avg return {strategy.historicalPerformance.averageReturn}%</div>
                       <div>Max DD {strategy.historicalPerformance.maxDrawdown}%</div>
@@ -229,14 +229,14 @@ export function StrategySettings() {
               })}
             </div>
 
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-gray-500">
+            <div className="flex flex-col gap-3 border-t border-gray-800/80 pt-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-gray-500 break-words">
                 Selected: {config.strategyKeys.length ? config.strategyKeys.join(', ') : 'None'}
               </p>
               <button
                 onClick={() => saveMutation.mutate({ marketType: market.id, config })}
                 disabled={botIsLocked || saveMutation.isPending || config.strategyKeys.length === 0}
-                className="btn-primary"
+                className="btn-primary w-full sm:w-auto"
               >
                 {saveMutation.isPending ? (
                   <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" />Saving…</span>

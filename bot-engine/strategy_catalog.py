@@ -5,7 +5,7 @@ PUBLIC_STRATEGY_CATALOG = [
         "description": "Captures sustained directional moves and avoids low-conviction chop.",
         "risk_level": "MEDIUM",
         "supported_markets": ["CRYPTO", "STOCKS", "FOREX"],
-        "supported_timeframes": ["5m", "15m", "1h"],
+        "supported_timeframes": ["5m", "15m", "30m", "1h", "4h", "1d"],
         "historical_performance": {
             "win_rate": 58.4,
             "average_return": 12.63,
@@ -19,7 +19,7 @@ PUBLIC_STRATEGY_CATALOG = [
         "description": "Looks for stretched moves that statistically tend to normalize over short horizons.",
         "risk_level": "LOW",
         "supported_markets": ["CRYPTO", "STOCKS"],
-        "supported_timeframes": ["5m", "15m", "30m"],
+        "supported_timeframes": ["5m", "15m", "30m", "1h", "4h", "1d"],
         "historical_performance": {
             "win_rate": 63.2,
             "average_return": 9.84,
@@ -33,7 +33,7 @@ PUBLIC_STRATEGY_CATALOG = [
         "description": "Prioritizes momentum expansion after compression and confirmed participation.",
         "risk_level": "HIGH",
         "supported_markets": ["CRYPTO", "FOREX", "STOCKS"],
-        "supported_timeframes": ["15m", "1h", "4h"],
+        "supported_timeframes": ["15m", "30m", "1h", "4h", "1d"],
         "historical_performance": {
             "win_rate": 51.7,
             "average_return": 15.94,
