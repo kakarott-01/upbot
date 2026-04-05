@@ -52,6 +52,7 @@ export async function PUT(req: NextRequest) {
       maxCapitalPerStrategyPct: parsed.data.maxCapitalPerStrategyPct,
       maxDrawdownPct: parsed.data.maxDrawdownPct,
       strategyKeys: parsed.data.strategyKeys,
+      strategySettings: parsed.data.strategySettings,
     })
 
     return NextResponse.json({ success: true, config })

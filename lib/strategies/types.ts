@@ -1,6 +1,7 @@
 export type MarketType = 'indian' | 'crypto' | 'commodities' | 'global'
 export type ExecutionMode = 'SAFE' | 'AGGRESSIVE'
 export type PositionMode = 'NET' | 'HEDGE'
+export type StrategyPriority = 'HIGH' | 'MEDIUM' | 'LOW'
 
 export type ConflictSeverity = 'info' | 'warning' | 'blocking'
 
@@ -25,6 +26,22 @@ export type StrategyRuntimeConfig = {
   maxCapitalPerStrategyPct: number
   maxDrawdownPct: number
   strategyKeys: string[]
+  strategySettings: Record<string, {
+    priority: StrategyPriority
+    cooldownAfterTradeSec: number
+    capitalAllocation: {
+      perTradePercent: number
+      maxActivePercent: number
+    }
+    health: {
+      minWinRatePct: number
+      maxDrawdownPct: number
+      maxLossStreak: number
+      isAutoDisabled: boolean
+      autoDisabledReason?: string | null
+      lastTradeAt?: string | null
+    }
+  }>
   conflictWarnings: StrategyConflict[]
   exchangeCapabilities: ExchangeCapabilities | null
 }

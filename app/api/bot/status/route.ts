@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { botStatuses, trades } from '@/lib/schema'
+import { botStatuses, killSwitchState, trades } from '@/lib/schema'
 import { eq, and, sql } from 'drizzle-orm'
 import { _doImmediateStop } from '@/lib/bot-stop'
 
@@ -21,6 +21,9 @@ export async function GET(req: NextRequest) {
 
   const status = await db.query.botStatuses.findFirst({
     where: eq(botStatuses.userId, session.id),
+  })
+  const killSwitch = await db.query.killSwitchState.findFirst({
+    where: eq(killSwitchState.userId, session.id),
   })
 
   if (!status) {
@@ -34,6 +37,7 @@ export async function GET(req: NextRequest) {
       errorMessage:    null,
       openTradeCount:  0,
       timeoutWarning:  false,
+      killSwitchActive: false,
     })
   }
 
@@ -76,6 +80,7 @@ export async function GET(req: NextRequest) {
       errorMessage:    null,
       openTradeCount:  0,
       timeoutWarning:  false,
+      killSwitchActive: Boolean(killSwitch?.isActive),
     })
   }
 
@@ -97,5 +102,6 @@ export async function GET(req: NextRequest) {
     errorMessage:    status.errorMessage,
     openTradeCount,
     timeoutWarning,
+    killSwitchActive: Boolean(killSwitch?.isActive),
   })
 }

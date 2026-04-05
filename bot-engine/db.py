@@ -236,7 +236,17 @@ class Database:
               c.max_drawdown_pct,
               c.exchange_capabilities,
               s.strategy_key,
-              sel.slot
+              sel.slot,
+              sel.priority,
+              sel.cooldown_after_trade_sec,
+              sel.per_trade_percent,
+              sel.max_active_percent,
+              sel.health_min_win_rate_pct,
+              sel.health_max_drawdown_pct,
+              sel.health_max_loss_streak,
+              sel.is_auto_disabled,
+              sel.auto_disabled_reason,
+              sel.last_trade_at
             FROM market_strategy_configs c
             LEFT JOIN market_strategy_selections sel ON sel.config_id = c.id
             LEFT JOIN strategies s ON s.id = sel.strategy_id
@@ -249,6 +259,27 @@ class Database:
             return {"execution_mode": "SAFE", "position_mode": "NET", "strategy_keys": []}
 
         strategy_keys = [row["strategy_key"] for row in rows if row["strategy_key"]]
+        strategy_settings = {}
+        for row in rows:
+            key = row["strategy_key"]
+            if not key:
+                continue
+            strategy_settings[key] = {
+                "priority": row["priority"] or "MEDIUM",
+                "cooldown_after_trade_sec": int(row["cooldown_after_trade_sec"] or 0),
+                "capital_allocation": {
+                    "per_trade_percent": float(row["per_trade_percent"] or 10),
+                    "max_active_percent": float(row["max_active_percent"] or 25),
+                },
+                "health": {
+                    "min_win_rate_pct": float(row["health_min_win_rate_pct"] or 30),
+                    "max_drawdown_pct": float(row["health_max_drawdown_pct"] or 15),
+                    "max_loss_streak": int(row["health_max_loss_streak"] or 5),
+                    "is_auto_disabled": bool(row["is_auto_disabled"]),
+                    "auto_disabled_reason": row["auto_disabled_reason"],
+                    "last_trade_at": row["last_trade_at"],
+                },
+            }
         return {
             "execution_mode": rows[0]["execution_mode"] or "SAFE",
             "position_mode": rows[0]["position_mode"] or "NET",
@@ -259,12 +290,247 @@ class Database:
             "max_drawdown_pct": float(rows[0]["max_drawdown_pct"] or 12),
             "exchange_capabilities": rows[0]["exchange_capabilities"],
             "strategy_keys": strategy_keys,
+            "strategy_settings": strategy_settings,
         }
 
     async def get_risk_settings(self, user_id: str) -> Dict:
         pool = await self.pool()
         row  = await pool.fetchrow("SELECT * FROM risk_settings WHERE user_id=$1", user_id)
         return dict(row) if row else {}
+
+    async def get_kill_switch_state(self, user_id: str) -> Dict[str, Any]:
+        pool = await self.pool()
+        row = await pool.fetchrow(
+            """SELECT is_active, close_positions, reason, activated_at, last_deactivated_at
+               FROM kill_switch_state WHERE user_id=$1""",
+            user_id,
+        )
+        return dict(row) if row else {
+            "is_active": False,
+            "close_positions": False,
+            "reason": None,
+            "activated_at": None,
+            "last_deactivated_at": None,
+        }
+
+    async def set_kill_switch_state(self, user_id: str, is_active: bool, close_positions: bool = False, reason: Optional[str] = None):
+        pool = await self.pool()
+        await pool.execute(
+            """INSERT INTO kill_switch_state
+               (user_id, is_active, close_positions, reason, activated_at, last_deactivated_at, updated_at)
+               VALUES ($1, $2, $3, $4, CASE WHEN $2 THEN NOW() ELSE NULL END, CASE WHEN NOT $2 THEN NOW() ELSE NULL END, NOW())
+               ON CONFLICT (user_id) DO UPDATE SET
+                 is_active=$2,
+                 close_positions=$3,
+                 reason=$4,
+                 activated_at=CASE WHEN $2 THEN NOW() ELSE kill_switch_state.activated_at END,
+                 last_deactivated_at=CASE WHEN NOT $2 THEN NOW() ELSE kill_switch_state.last_deactivated_at END,
+                 updated_at=NOW()""",
+            user_id, is_active, close_positions, reason,
+        )
+
+    async def get_global_risk_snapshot(self, user_id: str) -> Dict[str, Any]:
+        pool = await self.pool()
+        open_row = await pool.fetchrow(
+            """SELECT
+                 COALESCE(SUM(COALESCE(remaining_quantity, quantity) * entry_price), 0) AS total_exposure,
+                 COUNT(*)::int AS open_positions
+               FROM trades
+               WHERE user_id=$1 AND status='open'""",
+            user_id,
+        )
+        loss_row = await pool.fetchrow(
+            """SELECT COALESCE(SUM(daily_loss), 0) AS daily_loss
+               FROM risk_state
+               WHERE user_id=$1 AND day_date=CURRENT_DATE""",
+            user_id,
+        )
+        return {
+            "total_exposure": float(open_row["total_exposure"] or 0),
+            "open_positions": int(open_row["open_positions"] or 0),
+            "daily_loss": float(loss_row["daily_loss"] or 0),
+        }
+
+    async def get_exposure_snapshot(self, user_id: str, market_type: Optional[str] = None) -> Dict[str, Any]:
+        pool = await self.pool()
+        params: List[Any] = [user_id]
+        market_filter = ""
+        if market_type:
+            params.append(market_type)
+            market_filter = "AND market_type=$2"
+
+        rows = await pool.fetch(
+            f"""SELECT
+                   symbol,
+                   strategy_key,
+                   side,
+                   COALESCE(remaining_quantity, quantity) * entry_price AS notional
+                FROM trades
+                WHERE user_id=$1 {market_filter} AND status='open'""",
+            *params,
+        )
+
+        per_symbol: Dict[str, Dict[str, Any]] = {}
+        per_strategy: Dict[str, float] = {}
+        for row in rows:
+            symbol = row["symbol"]
+            strategy_key = row["strategy_key"] or "UNSCOPED"
+            direction = 1 if str(row["side"]).lower() == "buy" else -1
+            notional = float(row["notional"] or 0)
+
+            symbol_entry = per_symbol.setdefault(symbol, {"strategies": {}, "net": 0.0, "direction": "FLAT"})
+            symbol_entry["strategies"][strategy_key] = symbol_entry["strategies"].get(strategy_key, 0.0) + (direction * notional)
+            symbol_entry["net"] += direction * notional
+            symbol_entry["direction"] = "LONG" if symbol_entry["net"] > 0 else "SHORT" if symbol_entry["net"] < 0 else "FLAT"
+
+            per_strategy[strategy_key] = per_strategy.get(strategy_key, 0.0) + notional
+
+        return {"per_symbol": per_symbol, "per_strategy": per_strategy}
+
+    async def log_blocked_trade(
+        self,
+        user_id: str,
+        market_type: str,
+        symbol: str,
+        side: str,
+        reason_code: str,
+        reason_message: str,
+        strategy_key: Optional[str] = None,
+        position_scope_key: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        pool = await self.pool()
+        await pool.execute(
+            """INSERT INTO blocked_trades
+               (user_id, market_type, symbol, side, strategy_key, position_scope_key, reason_code, reason_message, details, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())""",
+            user_id, market_type, symbol, side.lower(), strategy_key, position_scope_key, reason_code, reason_message, json.dumps(details or {}),
+        )
+
+    async def log_risk_event(
+        self,
+        user_id: str,
+        event_type: str,
+        severity: str,
+        message: str,
+        market_type: Optional[str] = None,
+        symbol: Optional[str] = None,
+        strategy_key: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ):
+        pool = await self.pool()
+        await pool.execute(
+            """INSERT INTO risk_events
+               (user_id, market_type, symbol, strategy_key, event_type, severity, message, payload, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())""",
+            user_id, market_type, symbol, strategy_key, event_type, severity, message, json.dumps(payload or {}),
+        )
+
+    async def touch_strategy_trade(self, user_id: str, market_type: str, strategy_key: Optional[str]):
+        if not strategy_key:
+            return
+        pool = await self.pool()
+        await pool.execute(
+            """UPDATE market_strategy_selections sel
+               SET last_trade_at=NOW()
+               FROM market_strategy_configs cfg, strategies s
+               WHERE sel.config_id=cfg.id
+                 AND sel.strategy_id=s.id
+                 AND cfg.user_id=$1
+                 AND cfg.market_type=$2
+                 AND s.strategy_key=$3""",
+            user_id, market_type, strategy_key,
+        )
+
+    async def update_strategy_health(
+        self,
+        user_id: str,
+        market_type: str,
+        strategy_key: Optional[str],
+        pnl: float,
+    ) -> Dict[str, Any]:
+        if not strategy_key:
+            return {"auto_disabled": False}
+        pool = await self.pool()
+        row = await pool.fetchrow(
+            """SELECT id, total_trades, winning_trades, losing_trades, loss_streak, realized_pnl, best_equity, max_drawdown_pct
+               FROM strategy_performance
+               WHERE user_id=$1 AND market_type=$2 AND strategy_key=$3""",
+            user_id, market_type, strategy_key,
+        )
+
+        total_trades = int(row["total_trades"]) if row else 0
+        winning_trades = int(row["winning_trades"]) if row else 0
+        losing_trades = int(row["losing_trades"]) if row else 0
+        loss_streak = int(row["loss_streak"]) if row else 0
+        realized_pnl = float(row["realized_pnl"]) if row else 0.0
+        best_equity = float(row["best_equity"]) if row else 0.0
+
+        total_trades += 1
+        realized_pnl += pnl
+        if pnl >= 0:
+            winning_trades += 1
+            loss_streak = 0
+        else:
+            losing_trades += 1
+            loss_streak += 1
+        best_equity = max(best_equity, realized_pnl)
+        drawdown_pct = (((best_equity - realized_pnl) / best_equity) * 100) if best_equity > 0 else 0.0
+        win_rate = (winning_trades / total_trades) * 100 if total_trades else 0.0
+
+        if row:
+            await pool.execute(
+                """UPDATE strategy_performance
+                   SET total_trades=$4, winning_trades=$5, losing_trades=$6, loss_streak=$7,
+                       realized_pnl=$8, best_equity=$9, max_drawdown_pct=$10, last_trade_at=NOW(), updated_at=NOW()
+                   WHERE user_id=$1 AND market_type=$2 AND strategy_key=$3""",
+                user_id, market_type, strategy_key, total_trades, winning_trades, losing_trades, loss_streak,
+                _round_pnl(realized_pnl), _round_pnl(best_equity), _round_pct(drawdown_pct),
+            )
+        else:
+            await pool.execute(
+                """INSERT INTO strategy_performance
+                   (user_id, market_type, strategy_key, total_trades, winning_trades, losing_trades, loss_streak,
+                    realized_pnl, best_equity, max_drawdown_pct, last_trade_at, last_health_status, updated_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),'healthy',NOW())""",
+                user_id, market_type, strategy_key, total_trades, winning_trades, losing_trades, loss_streak,
+                _round_pnl(realized_pnl), _round_pnl(best_equity), _round_pct(drawdown_pct),
+            )
+
+        thresholds = await pool.fetchrow(
+            """SELECT sel.health_min_win_rate_pct, sel.health_max_drawdown_pct, sel.health_max_loss_streak
+               FROM market_strategy_selections sel
+               JOIN market_strategy_configs cfg ON cfg.id=sel.config_id
+               JOIN strategies s ON s.id=sel.strategy_id
+               WHERE cfg.user_id=$1 AND cfg.market_type=$2 AND s.strategy_key=$3""",
+            user_id, market_type, strategy_key,
+        )
+        auto_disabled = False
+        reason = None
+        if thresholds:
+            if total_trades >= 3 and win_rate < float(thresholds["health_min_win_rate_pct"] or 0):
+                auto_disabled = True
+                reason = f"Auto-disabled: win rate {win_rate:.2f}% below threshold."
+            elif drawdown_pct >= float(thresholds["health_max_drawdown_pct"] or 0):
+                auto_disabled = True
+                reason = f"Auto-disabled: drawdown {drawdown_pct:.2f}% exceeded threshold."
+            elif loss_streak >= int(thresholds["health_max_loss_streak"] or 999999):
+                auto_disabled = True
+                reason = f"Auto-disabled: loss streak {loss_streak} exceeded threshold."
+
+        if auto_disabled:
+            await pool.execute(
+                """UPDATE market_strategy_selections sel
+                   SET is_auto_disabled=true, auto_disabled_reason=$4
+                   FROM market_strategy_configs cfg, strategies s
+                   WHERE sel.config_id=cfg.id
+                     AND sel.strategy_id=s.id
+                     AND cfg.user_id=$1
+                     AND cfg.market_type=$2
+                     AND s.strategy_key=$3""",
+                user_id, market_type, strategy_key, reason,
+            )
+        return {"auto_disabled": auto_disabled, "reason": reason, "win_rate": win_rate, "drawdown_pct": drawdown_pct, "loss_streak": loss_streak}
 
     async def get_paper_balance(self, user_id: str) -> float:
         pool = await self.pool()

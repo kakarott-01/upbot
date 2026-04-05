@@ -10,6 +10,22 @@ type BacktestEngineRequest = {
   positionMode: 'NET' | 'HEDGE'
   allowHedgeOpposition: boolean
   strategyKeys: string[]
+  strategySettings: Record<string, {
+    priority: 'HIGH' | 'MEDIUM' | 'LOW'
+    cooldownAfterTradeSec: number
+    capitalAllocation: {
+      perTradePercent: number
+      maxActivePercent: number
+    }
+    health: {
+      minWinRatePct: number
+      maxDrawdownPct: number
+      maxLossStreak: number
+      isAutoDisabled: boolean
+      autoDisabledReason?: string | null
+      lastTradeAt?: string | null
+    }
+  }>
 }
 
 export async function runEngineBacktest(payload: BacktestEngineRequest) {
@@ -31,6 +47,7 @@ export async function runEngineBacktest(payload: BacktestEngineRequest) {
       position_mode: payload.positionMode,
       allow_hedge_opposition: payload.allowHedgeOpposition,
       strategy_keys: payload.strategyKeys,
+      strategy_settings: payload.strategySettings,
     }),
     signal: AbortSignal.timeout(60_000),
   })

@@ -46,7 +46,7 @@ from datetime import datetime, timedelta
 
 from exchange_connector import ExchangeConnector
 from fee_calculator import calculate_net_pnl
-from risk_manager import RiskManager
+from risk_manager import GlobalRiskManager, RiskManager
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +108,12 @@ class BaseAlgo(ABC):
         self.execution_mode = execution_mode
         self.position_mode = position_mode
         self.allow_hedge_opposition = allow_hedge_opposition
+        self.global_risk = GlobalRiskManager({
+            "max_total_exposure": getattr(risk_mgr.cfg, "max_total_exposure", 0.0),
+            "max_daily_loss": getattr(risk_mgr.cfg, "max_daily_loss", 0.0),
+            "max_open_positions": getattr(risk_mgr.cfg, "max_open_positions", 0),
+        })
+        self._strategy_runtime_config: Dict = {}
 
         self._reconciled  = False
         self._risk_loaded = False
@@ -286,11 +292,32 @@ class BaseAlgo(ABC):
             await self._load_risk_state()
 
         self.config = self._load_config()
+        self._strategy_runtime_config = await self.db.get_market_strategy_config(self.user_id, self.market_type)
         if not self.config.get("enabled", True):
             logger.info(f"[{self.name}] 🚫 Disabled by config")
             return
 
         await self._runtime_reconcile()
+
+        global_snapshot = await self.db.get_global_risk_snapshot(self.user_id)
+        can_continue, global_reason = self.global_risk.evaluate_trade(global_snapshot, proposed_notional=0.0)
+        if not can_continue:
+            await self.db.log_risk_event(
+                user_id=self.user_id,
+                market_type=self.market_type,
+                event_type="GLOBAL_RISK_BREACH",
+                severity="critical",
+                message=global_reason,
+                payload=global_snapshot,
+            )
+            await self.db.update_bot_status(self.user_id, "error", [], error=global_reason)
+            logger.error(f"[{self.name}] 🚨 Auto-stop triggered: {global_reason}")
+            return
+
+        kill_switch = await self.db.get_kill_switch_state(self.user_id)
+        if kill_switch.get("is_active"):
+            logger.warning(f"[{self.name}] Kill switch active — skipping cycle")
+            return
 
         stop_mode      = await self._get_bot_stop_mode()
         is_draining    = stop_mode == "graceful"
@@ -387,6 +414,30 @@ class BaseAlgo(ABC):
                 logger.warning(f"[{self.name}] ❌ Invalid qty for {symbol}")
                 return
 
+            runtime_settings = self._resolve_runtime_settings()
+            quantity, can_enter, block_reason, block_payload = await self._apply_entry_controls(
+                symbol=symbol,
+                signal=signal,
+                balance=balance,
+                price=price,
+                quantity=quantity,
+                runtime_settings=runtime_settings,
+            )
+            if not can_enter:
+                await self.db.log_blocked_trade(
+                    user_id=self.user_id,
+                    market_type=self.market_type,
+                    symbol=symbol,
+                    side=signal,
+                    strategy_key=self.strategy_key,
+                    position_scope_key=self.position_scope_key,
+                    reason_code="ENTRY_BLOCKED",
+                    reason_message=block_reason,
+                    details=block_payload,
+                )
+                logger.info(f"[{self.name}] ⛔ {symbol}: {block_reason}")
+                return
+
             strategy_exposure = await self.db.get_open_strategy_exposure(
                 self.user_id, self.market_type, self.strategy_key,
             )
@@ -399,6 +450,20 @@ class BaseAlgo(ABC):
                 drawdown_pct=max(0.0, abs(self.risk.daily_loss) / balance * 100) if balance > 0 else 0.0,
             )
             if not can_trade:
+                await self.db.log_blocked_trade(
+                    user_id=self.user_id,
+                    market_type=self.market_type,
+                    symbol=symbol,
+                    side=signal,
+                    strategy_key=self.strategy_key,
+                    position_scope_key=self.position_scope_key,
+                    reason_code="RISK_LIMIT",
+                    reason_message=reason,
+                    details={
+                        "strategy_capital_pct": strategy_capital_pct,
+                        "open_trades_for_symbol": len(open_trades_for_symbol),
+                    },
+                )
                 logger.info(f"[{self.name}] ⛔ {symbol}: {reason}")
                 return
 
@@ -416,6 +481,7 @@ class BaseAlgo(ABC):
                 if trade_id:
                     if hasattr(self, "_confirm_staged_open"):
                         self._confirm_staged_open(symbol)
+                    await self.db.touch_strategy_trade(self.user_id, self.market_type, self.strategy_key)
                     self.risk.record_trade_opened()
                     await self.risk.persist_state(self.db, self.user_id, self.market_type)
                     logger.info(f"[{self.name}] 🧪 PAPER OPEN {signal} {quantity:.6f} {symbol} @ {price}")
@@ -577,6 +643,18 @@ class BaseAlgo(ABC):
 
             self.risk.record_trade_closed(final_pnl)
             await self.risk.persist_state(self.db, self.user_id, self.market_type)
+            await self.db.touch_strategy_trade(self.user_id, self.market_type, self.strategy_key)
+            health = await self.db.update_strategy_health(self.user_id, self.market_type, self.strategy_key, final_pnl)
+            if health.get("auto_disabled"):
+                await self.db.log_risk_event(
+                    user_id=self.user_id,
+                    market_type=self.market_type,
+                    strategy_key=self.strategy_key,
+                    event_type="STRATEGY_AUTO_DISABLED",
+                    severity="critical",
+                    message=health.get("reason") or "Strategy auto-disabled by health monitor.",
+                    payload=health,
+                )
 
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Close trade failed {symbol}: {e}", exc_info=True)
@@ -636,6 +714,7 @@ class BaseAlgo(ABC):
             if trade_id:
                 if hasattr(self, "_confirm_staged_open"):
                     self._confirm_staged_open(symbol)
+                await self.db.touch_strategy_trade(self.user_id, self.market_type, self.strategy_key)
                 self.risk.record_trade_opened()
                 await self.risk.persist_state(self.db, self.user_id, self.market_type)
                 logger.info(
@@ -720,6 +799,83 @@ class BaseAlgo(ABC):
                         cancel_succeeded=False,
                     )
             raise
+
+    def _resolve_runtime_settings(self) -> Dict:
+        strategy_settings = self._strategy_runtime_config.get("strategy_settings", {}) if isinstance(self._strategy_runtime_config, dict) else {}
+        if self.strategy_key and self.strategy_key in strategy_settings:
+            return strategy_settings[self.strategy_key]
+        if strategy_settings:
+            first = next(iter(strategy_settings.values()))
+            return first
+        return {
+            "priority": "MEDIUM",
+            "cooldown_after_trade_sec": 0,
+            "capital_allocation": {"per_trade_percent": 10.0, "max_active_percent": 25.0},
+            "health": {"is_auto_disabled": False, "auto_disabled_reason": None, "last_trade_at": None},
+        }
+
+    async def _apply_entry_controls(
+        self,
+        symbol: str,
+        signal: str,
+        balance: float,
+        price: float,
+        quantity: float,
+        runtime_settings: Dict,
+    ) -> Tuple[float, bool, str, Dict]:
+        health = runtime_settings.get("health", {})
+        if health.get("is_auto_disabled"):
+            return quantity, False, health.get("auto_disabled_reason") or "Strategy is auto-disabled.", {"health": health}
+
+        cooldown_after_trade_sec = int(runtime_settings.get("cooldown_after_trade_sec", 0) or 0)
+        last_trade_at = health.get("last_trade_at")
+        if last_trade_at and cooldown_after_trade_sec > 0:
+            last_dt = last_trade_at if isinstance(last_trade_at, datetime) else datetime.fromisoformat(str(last_trade_at).replace("Z", "+00:00")).replace(tzinfo=None)
+            elapsed = (datetime.utcnow() - last_dt).total_seconds()
+            if elapsed < cooldown_after_trade_sec:
+                return quantity, False, f"Cooldown active for {cooldown_after_trade_sec - elapsed:.0f}s", {"cooldownRemaining": cooldown_after_trade_sec - elapsed}
+
+        global_snapshot = await self.db.get_global_risk_snapshot(self.user_id)
+
+        if self.execution_mode == "AGGRESSIVE" and self.strategy_key:
+            capital_allocation = runtime_settings.get("capital_allocation", {})
+            per_trade_capital = balance * (float(capital_allocation.get("per_trade_percent", 10.0)) / 100)
+            max_active_capital = balance * (float(capital_allocation.get("max_active_percent", 25.0)) / 100)
+            strategy_exposure = await self.db.get_open_strategy_exposure(self.user_id, self.market_type, self.strategy_key)
+            quantity = round(per_trade_capital / price, 8)
+            proposed_notional = quantity * price
+            if quantity <= 0:
+                return quantity, False, "Capital allocation produced zero quantity.", {"perTradeCapital": per_trade_capital}
+            if strategy_exposure + proposed_notional > max_active_capital:
+                return quantity, False, "Per-strategy active capital limit reached.", {
+                    "strategyExposure": strategy_exposure,
+                    "maxActiveCapital": max_active_capital,
+                }
+
+            available_capital = max(0.0, balance - float(global_snapshot.get("total_exposure", 0.0)))
+            if proposed_notional > available_capital + 1e-8:
+                exposure_snapshot = await self.db.get_exposure_snapshot(self.user_id, self.market_type)
+                priorities = self._strategy_runtime_config.get("strategy_settings", {})
+                priority_rank = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+                my_rank = priority_rank.get(runtime_settings.get("priority", "MEDIUM"), 2)
+                higher_priority_waiting = []
+                for other_key, other_cfg in priorities.items():
+                    if other_key == self.strategy_key:
+                        continue
+                    other_rank = priority_rank.get(other_cfg.get("priority", "MEDIUM"), 2)
+                    if other_rank <= my_rank:
+                        continue
+                    used = float(exposure_snapshot.get("per_strategy", {}).get(other_key, 0.0))
+                    room = max(0.0, balance * (float(other_cfg.get("capital_allocation", {}).get("max_active_percent", 25.0)) / 100) - used)
+                    if room > 0:
+                        higher_priority_waiting.append({"strategyKey": other_key, "availableRoom": room})
+                if higher_priority_waiting:
+                    return quantity, False, "Capital reserved for higher-priority strategy.", {"higherPriority": higher_priority_waiting}
+                return quantity, False, "Insufficient available capital.", {"availableCapital": available_capital}
+
+        proposed_notional = quantity * price
+        can_trade, reason = self.global_risk.evaluate_trade(global_snapshot, proposed_notional=proposed_notional)
+        return quantity, can_trade, reason, {"globalSnapshot": global_snapshot, "proposedNotional": proposed_notional}
 
     async def _persist_live_trade(
         self,

@@ -21,6 +21,22 @@ type RuntimeConfig = {
   maxCapitalPerStrategyPct: number
   maxDrawdownPct: number
   strategyKeys: string[]
+  strategySettings: Record<string, {
+    priority: 'HIGH' | 'MEDIUM' | 'LOW'
+    cooldownAfterTradeSec: number
+    capitalAllocation: {
+      perTradePercent: number
+      maxActivePercent: number
+    }
+    health: {
+      minWinRatePct: number
+      maxDrawdownPct: number
+      maxLossStreak: number
+      isAutoDisabled: boolean
+      autoDisabledReason?: string | null
+      lastTradeAt?: string | null
+    }
+  }>
   conflictWarnings?: Array<{ code: string; severity: 'info' | 'warning' | 'blocking'; message: string }>
   exchangeCapabilities?: { supportsHedgeMode: boolean; effectivePositionMode: 'NET' | 'HEDGE'; warning?: string } | null
 }
@@ -44,6 +60,25 @@ function marketCategory(market: MarketId) {
   if (market === 'crypto') return 'CRYPTO'
   if (market === 'commodities') return 'FOREX'
   return 'STOCKS'
+}
+
+function defaultStrategySettings() {
+  return {
+    priority: 'MEDIUM' as const,
+    cooldownAfterTradeSec: 0,
+    capitalAllocation: {
+      perTradePercent: 10,
+      maxActivePercent: 25,
+    },
+    health: {
+      minWinRatePct: 30,
+      maxDrawdownPct: 15,
+      maxLossStreak: 5,
+      isAutoDisabled: false,
+      autoDisabledReason: null,
+      lastTradeAt: null,
+    },
+  }
 }
 
 export function StrategySettings() {
@@ -80,6 +115,7 @@ export function StrategySettings() {
           maxCapitalPerStrategyPct: market.maxCapitalPerStrategyPct ?? 25,
           maxDrawdownPct: market.maxDrawdownPct ?? 12,
           strategyKeys: market.strategyKeys,
+          strategySettings: market.strategySettings ?? {},
           conflictWarnings: market.conflictWarnings ?? [],
           exchangeCapabilities: market.exchangeCapabilities ?? null,
         }
@@ -113,6 +149,7 @@ export function StrategySettings() {
           maxDrawdownPct: config.maxDrawdownPct,
           aggressiveConfirmed,
           strategyKeys: config.strategyKeys,
+          strategySettings: config.strategySettings,
         }),
       })
       const data = await res.json()
@@ -148,12 +185,16 @@ export function StrategySettings() {
         maxCapitalPerStrategyPct: 25,
         maxDrawdownPct: 12,
         strategyKeys: [],
+        strategySettings: {},
       }
       const exists = current.strategyKeys.includes(strategyKey)
       const nextKeys = exists
         ? current.strategyKeys.filter((key) => key !== strategyKey)
         : [...current.strategyKeys, strategyKey].slice(0, 2)
-      return { ...prev, [marketType]: { ...current, strategyKeys: nextKeys } }
+      const nextSettings = Object.fromEntries(
+        nextKeys.map((key) => [key, current.strategySettings[key] ?? defaultStrategySettings()]),
+      )
+      return { ...prev, [marketType]: { ...current, strategyKeys: nextKeys, strategySettings: nextSettings } }
     })
   }
 
@@ -169,6 +210,7 @@ export function StrategySettings() {
         maxCapitalPerStrategyPct: prev[marketType]?.maxCapitalPerStrategyPct ?? 25,
         maxDrawdownPct: prev[marketType]?.maxDrawdownPct ?? 12,
         strategyKeys: prev[marketType]?.strategyKeys ?? [],
+        strategySettings: prev[marketType]?.strategySettings ?? {},
       },
     }))
   }
@@ -209,6 +251,7 @@ export function StrategySettings() {
           maxCapitalPerStrategyPct: 25,
           maxDrawdownPct: 12,
           strategyKeys: [],
+          strategySettings: {},
           conflictWarnings: [],
           exchangeCapabilities: null,
         }
@@ -248,7 +291,7 @@ export function StrategySettings() {
                 <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <p className="text-xs text-red-200/85">
-                    AGGRESSIVE MODE ENABLED: strategies run independently, volatility is higher, and opposite trades may occur when hedge mode is active.
+                    AGGRESSIVE MODE: Each strategy uses independent capital. Improper configuration may increase risk, especially when priorities or hedge behavior allow strategies to compete for exposure.
                   </p>
                   {config.exchangeCapabilities?.warning && (
                     <p className="text-xs text-amber-300/85">{config.exchangeCapabilities.warning}</p>
@@ -307,6 +350,215 @@ export function StrategySettings() {
                 />
               </label>
             </div>
+
+            {config.strategyKeys.length > 0 && (
+              <div className="space-y-3">
+                <div>
+                  <h4 className="text-sm font-medium text-gray-200">Per-strategy runtime controls</h4>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Priority, cooldown, health guardrails, and AGGRESSIVE capital allocation are enforced per selected strategy.
+                  </p>
+                </div>
+                <div className="grid gap-3">
+                  {config.strategyKeys.map((strategyKey) => {
+                    const settings = config.strategySettings[strategyKey] ?? defaultStrategySettings()
+                    const strategy = strategiesByMarket[market.id].find((item) => item.strategyKey === strategyKey)
+                    return (
+                      <div key={strategyKey} className="rounded-xl border border-gray-800 bg-gray-950/40 p-4 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-sm font-medium text-gray-100">{strategy?.name ?? strategyKey}</div>
+                            <div className="text-xs text-gray-500">{strategyKey}</div>
+                          </div>
+                          {settings.health.isAutoDisabled && (
+                            <div className="rounded-full border border-red-500/30 bg-red-500/10 px-2 py-1 text-[11px] text-red-300">
+                              Auto-disabled
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <label className="space-y-1">
+                            <span className="text-xs text-gray-500">Priority</span>
+                            <select
+                              disabled={botIsLocked}
+                              value={settings.priority}
+                              onChange={(e) => setConfigs((prev) => ({
+                                ...prev,
+                                [market.id]: {
+                                  ...config,
+                                  strategySettings: {
+                                    ...config.strategySettings,
+                                    [strategyKey]: { ...settings, priority: e.target.value as 'HIGH' | 'MEDIUM' | 'LOW' },
+                                  },
+                                },
+                              }))}
+                              className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100"
+                            >
+                              <option value="HIGH">HIGH</option>
+                              <option value="MEDIUM">MEDIUM</option>
+                              <option value="LOW">LOW</option>
+                            </select>
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-xs text-gray-500">Cooldown after trade (sec)</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={86400}
+                              disabled={botIsLocked}
+                              value={settings.cooldownAfterTradeSec}
+                              onChange={(e) => setConfigs((prev) => ({
+                                ...prev,
+                                [market.id]: {
+                                  ...config,
+                                  strategySettings: {
+                                    ...config.strategySettings,
+                                    [strategyKey]: { ...settings, cooldownAfterTradeSec: Number(e.target.value) || 0 },
+                                  },
+                                },
+                              }))}
+                              className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100"
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-xs text-gray-500">Per trade %</span>
+                            <input
+                              type="number"
+                              min={0.1}
+                              max={100}
+                              step="0.1"
+                              disabled={botIsLocked || !isAggressive}
+                              value={settings.capitalAllocation.perTradePercent}
+                              onChange={(e) => setConfigs((prev) => ({
+                                ...prev,
+                                [market.id]: {
+                                  ...config,
+                                  strategySettings: {
+                                    ...config.strategySettings,
+                                    [strategyKey]: {
+                                      ...settings,
+                                      capitalAllocation: { ...settings.capitalAllocation, perTradePercent: Number(e.target.value) || 0.1 },
+                                    },
+                                  },
+                                },
+                              }))}
+                              className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100 disabled:opacity-60"
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-xs text-gray-500">Max active %</span>
+                            <input
+                              type="number"
+                              min={0.1}
+                              max={100}
+                              step="0.1"
+                              disabled={botIsLocked || !isAggressive}
+                              value={settings.capitalAllocation.maxActivePercent}
+                              onChange={(e) => setConfigs((prev) => ({
+                                ...prev,
+                                [market.id]: {
+                                  ...config,
+                                  strategySettings: {
+                                    ...config.strategySettings,
+                                    [strategyKey]: {
+                                      ...settings,
+                                      capitalAllocation: { ...settings.capitalAllocation, maxActivePercent: Number(e.target.value) || 0.1 },
+                                    },
+                                  },
+                                },
+                              }))}
+                              className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100 disabled:opacity-60"
+                            />
+                          </label>
+                        </div>
+
+                        <div className="grid gap-3 md:grid-cols-3">
+                          <label className="space-y-1">
+                            <span className="text-xs text-gray-500">Min win rate %</span>
+                            <input
+                              type="number"
+                              min={0}
+                              max={100}
+                              disabled={botIsLocked}
+                              value={settings.health.minWinRatePct}
+                              onChange={(e) => setConfigs((prev) => ({
+                                ...prev,
+                                [market.id]: {
+                                  ...config,
+                                  strategySettings: {
+                                    ...config.strategySettings,
+                                    [strategyKey]: {
+                                      ...settings,
+                                      health: { ...settings.health, minWinRatePct: Number(e.target.value) || 0 },
+                                    },
+                                  },
+                                },
+                              }))}
+                              className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100"
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-xs text-gray-500">Health max drawdown %</span>
+                            <input
+                              type="number"
+                              min={0.1}
+                              max={100}
+                              disabled={botIsLocked}
+                              value={settings.health.maxDrawdownPct}
+                              onChange={(e) => setConfigs((prev) => ({
+                                ...prev,
+                                [market.id]: {
+                                  ...config,
+                                  strategySettings: {
+                                    ...config.strategySettings,
+                                    [strategyKey]: {
+                                      ...settings,
+                                      health: { ...settings.health, maxDrawdownPct: Number(e.target.value) || 0.1 },
+                                    },
+                                  },
+                                },
+                              }))}
+                              className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100"
+                            />
+                          </label>
+                          <label className="space-y-1">
+                            <span className="text-xs text-gray-500">Max loss streak</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={100}
+                              disabled={botIsLocked}
+                              value={settings.health.maxLossStreak}
+                              onChange={(e) => setConfigs((prev) => ({
+                                ...prev,
+                                [market.id]: {
+                                  ...config,
+                                  strategySettings: {
+                                    ...config.strategySettings,
+                                    [strategyKey]: {
+                                      ...settings,
+                                      health: { ...settings.health, maxLossStreak: Number(e.target.value) || 1 },
+                                    },
+                                  },
+                                },
+                              }))}
+                              className="w-full rounded-xl bg-gray-900 border border-gray-800 px-3 py-2.5 text-sm text-gray-100"
+                            />
+                          </label>
+                        </div>
+
+                        {settings.health.autoDisabledReason && (
+                          <div className="rounded-lg border border-red-900/30 bg-red-950/20 px-3 py-2 text-xs text-red-200/85">
+                            {settings.health.autoDisabledReason}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-wrap gap-4 text-xs text-gray-400">
               <label className="inline-flex items-center gap-2">

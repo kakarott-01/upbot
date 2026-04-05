@@ -64,6 +64,11 @@ export default function BacktestsPage() {
     queryFn: () => fetch('/api/backtests').then((r) => r.json()),
   })
 
+  const { data: strategyConfigData } = useQuery({
+    queryKey: ['strategy-configs'],
+    queryFn: () => fetch('/api/strategy-config').then((r) => r.json()),
+  })
+
   const strategies: StrategyItem[] = strategyData?.strategies ?? []
   const marketCategory = MARKETS.find((market) => market.id === marketType)?.category ?? 'CRYPTO'
   const filteredStrategies = useMemo(
@@ -105,6 +110,15 @@ export default function BacktestsPage() {
 
   const runMutation = useMutation({
     mutationFn: async () => {
+      const savedMarketConfig = strategyConfigData?.markets?.find((market: any) => market.marketType === marketType)
+      const strategySettings = Object.fromEntries(
+        strategyKeys.map((key) => [key, savedMarketConfig?.strategySettings?.[key] ?? {
+          priority: 'MEDIUM',
+          cooldownAfterTradeSec: 0,
+          capitalAllocation: { perTradePercent: 10, maxActivePercent: 25 },
+          health: { minWinRatePct: 30, maxDrawdownPct: 15, maxLossStreak: 5, isAutoDisabled: false },
+        }]),
+      )
       const res = await fetch('/api/backtests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -119,6 +133,7 @@ export default function BacktestsPage() {
           dateFrom: new Date(dateFrom).toISOString(),
           dateTo: new Date(dateTo).toISOString(),
           strategyKeys,
+          strategySettings,
         }),
       })
       const data = await res.json()

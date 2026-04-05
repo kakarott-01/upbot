@@ -19,7 +19,7 @@ All other logic from v2 unchanged.
 
 import logging
 import time
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,9 @@ class RiskConfig:
     take_profit_pct:    float = 3.0
     max_daily_loss_pct: float = 5.0
     max_open_trades:    int   = 3
+    max_total_exposure: float = 0.0
+    max_daily_loss:     float = 0.0
+    max_open_positions: int   = 0
     max_positions_per_symbol: int = 2
     max_capital_per_strategy_pct: float = 25.0
     max_drawdown_pct: float = 12.0
@@ -47,6 +50,9 @@ class RiskManager:
             take_profit_pct    = float(cfg.get("take_profit_pct",    3.0)),
             max_daily_loss_pct = float(cfg.get("max_daily_loss_pct", 5.0)),
             max_open_trades    = int(cfg.get("max_open_trades",      3)),
+            max_total_exposure = float(cfg.get("max_total_exposure", 0.0) or 0.0),
+            max_daily_loss     = float(cfg.get("max_daily_loss", 0.0) or 0.0),
+            max_open_positions = int(cfg.get("max_open_positions", 0) or 0),
             max_positions_per_symbol = int(cfg.get("max_positions_per_symbol", 2)),
             max_capital_per_strategy_pct = float(cfg.get("max_capital_per_strategy_pct", 25.0)),
             max_drawdown_pct = float(cfg.get("max_drawdown_pct", 12.0)),
@@ -210,3 +216,43 @@ class RiskManager:
         self.daily_loss     = 0.0
         self.last_loss_time = None
         logger.info("Daily loss counter reset")
+
+
+@dataclass
+class GlobalRiskConfig:
+    max_total_exposure: float = 0.0
+    max_daily_loss: float = 0.0
+    max_open_positions: int = 0
+
+
+class GlobalRiskManager:
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        cfg = config or {}
+        self.cfg = GlobalRiskConfig(
+            max_total_exposure=float(cfg.get("max_total_exposure", 0.0) or 0.0),
+            max_daily_loss=float(cfg.get("max_daily_loss", 0.0) or 0.0),
+            max_open_positions=int(cfg.get("max_open_positions", 0) or 0),
+        )
+
+    def evaluate_trade(
+        self,
+        snapshot: Dict[str, Any],
+        proposed_notional: float = 0.0,
+    ) -> tuple[bool, str]:
+        total_exposure = float(snapshot.get("total_exposure", 0.0))
+        open_positions = int(snapshot.get("open_positions", 0))
+        daily_loss = abs(float(snapshot.get("daily_loss", 0.0)))
+
+        if self.cfg.max_total_exposure > 0 and (total_exposure + proposed_notional) > self.cfg.max_total_exposure:
+            return False, f"Global exposure limit ({self.cfg.max_total_exposure:.2f}) would be exceeded"
+
+        if self.cfg.max_daily_loss > 0 and daily_loss >= self.cfg.max_daily_loss:
+            return False, f"Global daily loss limit ({self.cfg.max_daily_loss:.2f}) breached"
+
+        if self.cfg.max_open_positions > 0 and open_positions >= self.cfg.max_open_positions:
+            return False, f"Global open position limit ({self.cfg.max_open_positions}) reached"
+
+        return True, "ok"
+
+    def should_stop(self, snapshot: Dict[str, Any]) -> tuple[bool, str]:
+        return self.evaluate_trade(snapshot, proposed_notional=0.0)

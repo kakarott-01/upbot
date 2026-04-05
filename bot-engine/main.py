@@ -184,6 +184,7 @@ class BacktestRequest(BaseModel):
     position_mode: str = "NET"
     allow_hedge_opposition: bool = False
     strategy_keys: List[str]
+    strategy_settings: Dict[str, Dict] = {}
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -310,6 +311,7 @@ async def run_backtest_endpoint(req: BacktestRequest):
             position_mode=req.position_mode,
             allow_hedge_opposition=req.allow_hedge_opposition,
             initial_capital=req.initial_capital,
+            strategy_settings=req.strategy_settings,
         )
         return result
     except HTTPException:

@@ -1,6 +1,23 @@
 import { z } from 'zod'
 import { PUBLIC_STRATEGY_CATALOG, mapPlatformMarketToStrategyMarket } from './catalog'
 
+const strategyRuntimeSettingsSchema = z.object({
+  priority: z.enum(['HIGH', 'MEDIUM', 'LOW']).default('MEDIUM'),
+  cooldownAfterTradeSec: z.number().int().min(0).max(86_400).default(0),
+  capitalAllocation: z.object({
+    perTradePercent: z.number().min(0.1).max(100).default(10),
+    maxActivePercent: z.number().min(0.1).max(100).default(25),
+  }),
+  health: z.object({
+    minWinRatePct: z.number().min(0).max(100).default(30),
+    maxDrawdownPct: z.number().min(0.1).max(100).default(15),
+    maxLossStreak: z.number().int().min(1).max(100).default(5),
+    isAutoDisabled: z.boolean().default(false),
+    autoDisabledReason: z.string().max(500).nullable().optional(),
+    lastTradeAt: z.string().datetime().nullable().optional(),
+  }),
+})
+
 export const strategyConfigSchema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
   executionMode: z.enum(['SAFE', 'AGGRESSIVE']).default('SAFE'),
@@ -12,6 +29,7 @@ export const strategyConfigSchema = z.object({
   maxCapitalPerStrategyPct: z.number().min(1).max(100).default(25),
   maxDrawdownPct: z.number().min(1).max(100).default(12),
   strategyKeys: z.array(z.string().min(1)).min(1).max(2),
+  strategySettings: z.record(z.string(), strategyRuntimeSettingsSchema).default({}),
 })
 
 export const backtestRequestSchema = z.object({
@@ -25,6 +43,7 @@ export const backtestRequestSchema = z.object({
   positionMode: z.enum(['NET', 'HEDGE']).default('NET'),
   allowHedgeOpposition: z.boolean().default(false),
   strategyKeys: z.array(z.string().min(1)).min(1).max(2),
+  strategySettings: z.record(z.string(), strategyRuntimeSettingsSchema).default({}),
   comparisonLabel: z.string().max(150).optional(),
 })
 

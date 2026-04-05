@@ -29,6 +29,7 @@ export async function POST(req: NextRequest) {
       positionMode: parsed.data.positionMode,
       allowHedgeOpposition: parsed.data.allowHedgeOpposition,
       strategyKeys: parsed.data.strategyKeys,
+      strategySettings: parsed.data.strategySettings,
       asset: parsed.data.asset,
       timeframe: parsed.data.timeframe,
       initialCapital: parsed.data.initialCapital.toFixed(2),
@@ -50,6 +51,11 @@ export async function POST(req: NextRequest) {
       allowHedgeOpposition: parsed.data.allowHedgeOpposition,
       strategyConfigId: configSnapshot.id,
       comparisonLabel: parsed.data.comparisonLabel,
+      backtestAssumptions: {
+        feeRate: 0.001,
+        slippagePct: 0.05,
+        executionDelayBars: 1,
+      },
       status: 'queued',
     }).returning({ id: backtestRuns.id })
 
@@ -65,6 +71,7 @@ export async function POST(req: NextRequest) {
       positionMode: parsed.data.positionMode,
       allowHedgeOpposition: parsed.data.allowHedgeOpposition,
       strategyKeys: parsed.data.strategyKeys,
+      strategySettings: parsed.data.strategySettings,
     })
 
     await db.update(backtestRuns)

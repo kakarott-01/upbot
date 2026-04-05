@@ -1,6 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { botSessions, botStatuses, exchangeApis, marketConfigs } from '@/lib/schema'
+import { botSessions, botStatuses, exchangeApis, killSwitchState, marketConfigs } from '@/lib/schema'
 import { getUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import type { MarketType } from '@/lib/strategies/types'
 
@@ -11,6 +11,16 @@ export async function startBotForUser(userId: string, rawMarkets: MarketType[]) 
     where: eq(botStatuses.userId, userId),
     columns: { status: true },
   })
+  const killSwitch = await db.query.killSwitchState.findFirst({
+    where: eq(killSwitchState.userId, userId),
+    columns: { isActive: true, reason: true },
+  })
+
+  if (killSwitch?.isActive) {
+    const error = new Error(killSwitch.reason || 'Kill switch is active. Clear it before restarting the bot.')
+    ;(error as Error & { status?: number }).status = 409
+    throw error
+  }
 
   if (existing?.status === 'running') {
     const error = new Error('Bot is already running')

@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
         positionMode: left.positionMode,
         allowHedgeOpposition: left.allowHedgeOpposition,
         strategyKeys: left.strategyKeys,
+        strategySettings: {},
       }),
       runEngineBacktest({
         userId: session.id,
@@ -67,6 +68,7 @@ export async function POST(req: NextRequest) {
         positionMode: right.positionMode,
         allowHedgeOpposition: right.allowHedgeOpposition,
         strategyKeys: right.strategyKeys,
+        strategySettings: {},
       }),
     ])
 

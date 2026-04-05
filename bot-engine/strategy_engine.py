@@ -150,6 +150,11 @@ def _run_single_strategy_backtest(
     strategy_keys: List[str],
     execution_mode: str,
     initial_capital: float,
+    strategy_key: Optional[str] = None,
+    strategy_settings: Optional[Dict[str, Dict]] = None,
+    fee_rate: float = 0.001,
+    slippage_pct: float = 0.05,
+    execution_delay_bars: int = 1,
     engine_cfg: Optional[EngineConfig] = None,
 ) -> Dict:
     cfg = engine_cfg or EngineConfig()
@@ -162,6 +167,9 @@ def _run_single_strategy_backtest(
     equity_curve: List[Dict] = []
     trades: List[Dict] = []
     position = None
+    settings = (strategy_settings or {}).get(strategy_key or (strategy_keys[0] if strategy_keys else ""), {})
+    cooldown_after_trade_sec = int(settings.get("cooldown_after_trade_sec", 0) or 0)
+    last_trade_time = None
 
     for idx in range(required_lookback(), len(df)):
         window = df.iloc[: idx + 1]
@@ -182,23 +190,47 @@ def _run_single_strategy_backtest(
                 )
             )
             if should_exit:
-                equity *= (1 + pnl_pct / 100)
+                execution_index = min(idx + execution_delay_bars, len(df) - 1)
+                execution_price = float(df["open"].iloc[execution_index])
+                exit_price = execution_price * (1 - slippage_pct / 100) if position["side"] == "BUY" else execution_price * (1 + slippage_pct / 100)
+                pnl_pct = _calc_pct(position["side"], position["entry_price"], exit_price)
+                gross_pnl = (equity * (pnl_pct / 100))
+                fees = (equity * fee_rate) + (abs(gross_pnl) * fee_rate)
+                net_pnl = gross_pnl - fees
+                equity += net_pnl
                 trades.append({
                     "tradeNumber": len(trades) + 1,
                     "tradeType": position["side"],
-                    "result": round(pnl_pct, 4),
+                    "result": round((net_pnl / max(position["capital_base"], 1e-8)) * 100, 4),
                     "duration": hold_bars,
+                    "strategyKey": strategy_key,
+                    "entryPrice": round(position["entry_price"], 8),
+                    "exitPrice": round(exit_price, 8),
+                    "fees": round(fees, 6),
+                    "slippagePct": slippage_pct,
                 })
                 position = None
+                last_trade_time = ts
 
         if position is None:
+            if last_trade_time is not None and cooldown_after_trade_sec > 0:
+                if (ts - last_trade_time).total_seconds() < cooldown_after_trade_sec:
+                    equity_curve.append({
+                        "timestamp": ts.isoformat(),
+                        "equity": round(equity, 2),
+                    })
+                    continue
             signal = executor.evaluate(window, strategy_keys, execution_mode)
             if signal in ("BUY", "SELL"):
+                execution_index = min(idx + execution_delay_bars, len(df) - 1)
+                execution_price = float(df["open"].iloc[execution_index])
+                entry_price = execution_price * (1 + slippage_pct / 100) if signal == "BUY" else execution_price * (1 - slippage_pct / 100)
                 position = {
                     "side": signal,
-                    "entry_price": close,
+                    "entry_price": entry_price,
                     "entry_index": idx,
                     "entry_time": ts,
+                    "capital_base": equity,
                 }
 
         equity_curve.append({
@@ -234,24 +266,68 @@ def run_backtest(
     initial_capital: float,
     position_mode: str = "NET",
     allow_hedge_opposition: bool = False,
+    strategy_settings: Optional[Dict[str, Dict]] = None,
     engine_cfg: Optional[EngineConfig] = None,
 ) -> Dict:
-    if execution_mode == "AGGRESSIVE" and position_mode == "HEDGE" and len(strategy_keys) > 1:
-        per_strategy_capital = initial_capital / len(strategy_keys)
+    strategy_settings = strategy_settings or {}
+    fee_rate = 0.001
+    slippage_pct = 0.05
+    execution_delay_bars = 1
+
+    if execution_mode == "AGGRESSIVE" and len(strategy_keys) > 1:
         strategy_breakdown: Dict[str, Dict] = {}
         aggregate_curve: List[Dict] = []
         aggregate_trades: List[Dict] = []
         trade_returns: List[float] = []
+        per_strategy_pnl: Dict[str, float] = {}
 
-        for strategy_key in strategy_keys:
+        priorities = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+        ordered_keys = sorted(
+            strategy_keys,
+            key=lambda key: priorities.get((strategy_settings.get(key, {}) or {}).get("priority", "MEDIUM"), 2),
+            reverse=True,
+        )
+        available_capital = float(initial_capital)
+
+        for strategy_key in ordered_keys:
+            allocation = (strategy_settings.get(strategy_key, {}) or {}).get("capital_allocation", {})
+            configured_capital = (
+                initial_capital * (float(allocation.get("max_active_percent", 100 / max(len(strategy_keys), 1))) / 100)
+                if execution_mode == "AGGRESSIVE"
+                else initial_capital / max(len(strategy_keys), 1)
+            )
+            per_strategy_capital = min(available_capital, configured_capital)
+            if per_strategy_capital <= 0:
+                strategy_breakdown[strategy_key] = {
+                    "totalReturnPct": 0.0,
+                    "winRate": 0.0,
+                    "maxDrawdown": 0.0,
+                    "sharpeRatio": 0.0,
+                    "profitFactor": 0.0,
+                    "blocked": True,
+                    "reason": "Insufficient capital after higher-priority allocations.",
+                }
+                continue
             result = _run_single_strategy_backtest(
                 df=df,
                 strategy_keys=[strategy_key],
                 execution_mode="AGGRESSIVE",
                 initial_capital=per_strategy_capital,
+                strategy_key=strategy_key,
+                strategy_settings=strategy_settings,
+                fee_rate=fee_rate,
+                slippage_pct=slippage_pct,
+                execution_delay_bars=execution_delay_bars,
                 engine_cfg=engine_cfg,
             )
             strategy_breakdown[strategy_key] = result["performance_metrics"]
+            strategy_breakdown[strategy_key]["capitalAllocated"] = round(per_strategy_capital, 2)
+            strategy_breakdown[strategy_key]["pnlContribution"] = round(
+                float(result["equity_curve"][-1]["equity"]) - per_strategy_capital if result["equity_curve"] else 0.0,
+                2,
+            )
+            per_strategy_pnl[strategy_key] = strategy_breakdown[strategy_key]["pnlContribution"]
+            available_capital = max(0.0, available_capital - per_strategy_capital)
 
             for index, point in enumerate(result["equity_curve"]):
                 if len(aggregate_curve) <= index:
@@ -264,10 +340,7 @@ def run_backtest(
                 )
 
             for trade in result["trade_summary"]:
-                aggregate_trades.append({
-                    **trade,
-                    "strategyKey": strategy_key,
-                })
+                aggregate_trades.append({ **trade, "strategyKey": strategy_key })
                 trade_returns.append(float(trade["result"]))
 
         aggregate_trades.sort(key=lambda item: item.get("tradeNumber", 0))
@@ -290,6 +363,12 @@ def run_backtest(
             "equity_curve": aggregate_curve,
             "trade_summary": aggregate_trades,
             "strategy_breakdown": strategy_breakdown,
+            "backtest_assumptions": {
+                "feeRate": fee_rate,
+                "slippagePct": slippage_pct,
+                "executionDelayBars": execution_delay_bars,
+                "perStrategyPnlContribution": per_strategy_pnl,
+            },
             "position_mode": position_mode,
             "allow_hedge_opposition": allow_hedge_opposition,
         }
@@ -299,6 +378,11 @@ def run_backtest(
         strategy_keys=strategy_keys,
         execution_mode=execution_mode,
         initial_capital=initial_capital,
+        strategy_key=strategy_keys[0] if len(strategy_keys) == 1 else None,
+        strategy_settings=strategy_settings,
+        fee_rate=fee_rate,
+        slippage_pct=slippage_pct,
+        execution_delay_bars=execution_delay_bars,
         engine_cfg=engine_cfg,
     )
     strategy_breakdown = {
@@ -307,6 +391,11 @@ def run_backtest(
             strategy_keys=[strategy_key],
             execution_mode="AGGRESSIVE",
             initial_capital=initial_capital / max(len(strategy_keys), 1),
+            strategy_key=strategy_key,
+            strategy_settings=strategy_settings,
+            fee_rate=fee_rate,
+            slippage_pct=slippage_pct,
+            execution_delay_bars=execution_delay_bars,
             engine_cfg=engine_cfg,
         )["performance_metrics"]
         for strategy_key in strategy_keys
@@ -314,6 +403,11 @@ def run_backtest(
     return {
         **overall,
         "strategy_breakdown": strategy_breakdown,
+        "backtest_assumptions": {
+            "feeRate": fee_rate,
+            "slippagePct": slippage_pct,
+            "executionDelayBars": execution_delay_bars,
+        },
         "position_mode": position_mode,
         "allow_hedge_opposition": allow_hedge_opposition,
     }

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { backtestRuns } from '@/lib/schema'
+import { backtestRuns, strategyConfigs } from '@/lib/schema'
 import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
 import { upsertUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import { startBotForUser } from '@/lib/bot/start-service'
@@ -22,6 +22,13 @@ export async function POST(_: Request, { params }: { params: { id: string } }) {
       return NextResponse.json({ error: 'Backtest not found.' }, { status: 404 })
     }
 
+    const configSnapshot = run.strategyConfigId
+      ? await db.query.strategyConfigs.findFirst({
+          where: eq(strategyConfigs.id, run.strategyConfigId),
+          columns: { strategySettings: true },
+        })
+      : null
+
     await upsertUserMarketStrategyConfig({
       userId: session.id,
       marketType: run.marketType,
@@ -34,6 +41,7 @@ export async function POST(_: Request, { params }: { params: { id: string } }) {
       maxCapitalPerStrategyPct: 25,
       maxDrawdownPct: 12,
       strategyKeys: run.strategyKeys ?? [],
+      strategySettings: (configSnapshot?.strategySettings as Record<string, any> | undefined) ?? {},
     })
 
     const result = await startBotForUser(session.id, [run.marketType])
