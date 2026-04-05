@@ -842,9 +842,12 @@ class BaseAlgo(ABC):
             per_trade_capital = balance * (float(capital_allocation.get("per_trade_percent", 10.0)) / 100)
             max_active_capital = balance * (float(capital_allocation.get("max_active_percent", 25.0)) / 100)
             strategy_exposure = await self.db.get_open_strategy_exposure(self.user_id, self.market_type, self.strategy_key)
-            quantity = round(per_trade_capital / price, 8)
+            global_max_position_capital = balance * (float(self.risk.cfg.max_position_pct) / 100)
+            available_capital = max(0.0, balance - float(global_snapshot.get("total_exposure", 0.0)))
+            effective_capital = min(per_trade_capital, global_max_position_capital, available_capital)
+            quantity = round(effective_capital / price, 8)
             proposed_notional = quantity * price
-            if quantity <= 0:
+            if quantity <= 0 or proposed_notional <= 0:
                 return quantity, False, "Capital allocation produced zero quantity.", {"perTradeCapital": per_trade_capital}
             if strategy_exposure + proposed_notional > max_active_capital:
                 return quantity, False, "Per-strategy active capital limit reached.", {
@@ -852,7 +855,6 @@ class BaseAlgo(ABC):
                     "maxActiveCapital": max_active_capital,
                 }
 
-            available_capital = max(0.0, balance - float(global_snapshot.get("total_exposure", 0.0)))
             if proposed_notional > available_capital + 1e-8:
                 exposure_snapshot = await self.db.get_exposure_snapshot(self.user_id, self.market_type)
                 priorities = self._strategy_runtime_config.get("strategy_settings", {})
@@ -872,6 +874,20 @@ class BaseAlgo(ABC):
                 if higher_priority_waiting:
                     return quantity, False, "Capital reserved for higher-priority strategy.", {"higherPriority": higher_priority_waiting}
                 return quantity, False, "Insufficient available capital.", {"availableCapital": available_capital}
+
+            block_reasons = []
+            if per_trade_capital > global_max_position_capital:
+                block_reasons.append("global_max_position_size")
+            if per_trade_capital > available_capital:
+                block_reasons.append("available_capital")
+            if block_reasons:
+                runtime_settings["effective_position_details"] = {
+                    "per_trade_capital": per_trade_capital,
+                    "global_max_position_capital": global_max_position_capital,
+                    "available_capital": available_capital,
+                    "effective_capital": effective_capital,
+                    "capped_by": block_reasons,
+                }
 
         proposed_notional = quantity * price
         can_trade, reason = self.global_risk.evaluate_trade(global_snapshot, proposed_notional=proposed_notional)

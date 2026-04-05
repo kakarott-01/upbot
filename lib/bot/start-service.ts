@@ -1,15 +1,20 @@
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { botSessions, botStatuses, exchangeApis, killSwitchState, marketConfigs } from '@/lib/schema'
+import { botSessions, botStatuses, exchangeApis, killSwitchState, marketConfigs, trades } from '@/lib/schema'
 import { getUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import type { MarketType } from '@/lib/strategies/types'
 
-export async function startBotForUser(userId: string, rawMarkets: MarketType[]) {
+export async function startBotForUser(
+  userId: string,
+  rawMarkets: MarketType[],
+  options?: { conflictOverrides?: MarketType[] },
+) {
   const markets: MarketType[] = Array.from(new Set(rawMarkets))
+  const conflictOverrides = new Set(options?.conflictOverrides ?? [])
 
   const existing = await db.query.botStatuses.findFirst({
     where: eq(botStatuses.userId, userId),
-    columns: { status: true },
+    columns: { status: true, activeMarkets: true, startedAt: true },
   })
   const killSwitch = await db.query.killSwitchState.findFirst({
     where: eq(killSwitchState.userId, userId),
@@ -22,25 +27,25 @@ export async function startBotForUser(userId: string, rawMarkets: MarketType[]) 
     throw error
   }
 
-  if (existing?.status === 'running') {
-    const error = new Error('Bot is already running')
-    ;(error as Error & { status?: number }).status = 409
-    throw error
-  }
-
   if (existing?.status === 'stopping') {
     const error = new Error('Bot is currently stopping. Wait for it to finish before restarting.')
     ;(error as Error & { status?: number }).status = 409
     throw error
   }
+  const isRunning = existing?.status === 'running'
+  const currentMarkets = ((existing?.activeMarkets as MarketType[] | null) ?? []).filter(Boolean)
+  const marketsToStart = markets.filter((market) => !currentMarkets.includes(market))
+  const marketsToStop = currentMarkets.filter((market) => !markets.includes(market))
 
-  await db
-    .update(botSessions)
-    .set({ status: 'stopped', endedAt: new Date() })
-    .where(and(
-      eq(botSessions.userId, userId),
-      eq(botSessions.status, 'running'),
-    ))
+  if (!isRunning) {
+    await db
+      .update(botSessions)
+      .set({ status: 'stopped', endedAt: new Date() })
+      .where(and(
+        eq(botSessions.userId, userId),
+        eq(botSessions.status, 'running'),
+      ))
+  }
 
   const [allApis, allConfigs] = await Promise.all([
     db.query.exchangeApis.findMany({
@@ -74,9 +79,26 @@ export async function startBotForUser(userId: string, rawMarkets: MarketType[]) 
       ;(error as Error & { status?: number }).status = 400
       throw error
     }
-    if (config.conflictBlocking && config.conflictWarnings.length > 0) {
+    if (config.conflictBlocking && config.conflictWarnings.length > 0 && !conflictOverrides.has(market)) {
       const error = new Error(`Strategy conflicts block startup for ${market}.`)
       ;(error as Error & { status?: number }).status = 400
+      throw error
+    }
+  }
+
+  for (const market of marketsToStop) {
+    const rows = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(trades)
+      .where(and(
+        eq(trades.userId, userId),
+        eq(trades.marketType, market as any),
+        eq(trades.status, 'open' as any),
+      ))
+
+    if ((rows[0]?.count ?? 0) > 0) {
+      const error = new Error(`Cannot stop ${market} while it still has open trades. Close or drain those positions first.`)
+      ;(error as Error & { status?: number }).status = 409
       throw error
     }
   }
@@ -84,8 +106,9 @@ export async function startBotForUser(userId: string, rawMarkets: MarketType[]) 
   const now = new Date()
   const sessionIds: Record<string, string> = {}
   const createdSessionIds: string[] = []
+  const stoppedSessionIds: string[] = []
 
-  for (const market of markets) {
+  for (const market of marketsToStart) {
     const api = apiByMarket.get(market)
     const config = configByMarket.get(market)
     const strategyConfig = marketConfigsForEngine.find((item) => item.market === market)?.config
@@ -109,21 +132,42 @@ export async function startBotForUser(userId: string, rawMarkets: MarketType[]) 
     createdSessionIds.push(newSession.id)
   }
 
+  if (marketsToStop.length > 0) {
+    const stoppableSessions = await db.query.botSessions.findMany({
+      where: and(
+        eq(botSessions.userId, userId),
+        inArray(botSessions.market, marketsToStop as any[]),
+        eq(botSessions.status, 'running'),
+      ),
+      columns: { id: true },
+    })
+    stoppedSessionIds.push(...stoppableSessions.map((session) => session.id))
+    await db
+      .update(botSessions)
+      .set({ status: 'stopped', endedAt: now })
+      .where(and(
+        eq(botSessions.userId, userId),
+        inArray(botSessions.market, marketsToStop as any[]),
+        eq(botSessions.status, 'running'),
+      ))
+  }
+
+  const nextStatus = markets.length > 0 ? 'running' : 'stopped'
   await db.insert(botStatuses)
     .values({
       userId,
-      status: 'running',
+      status: nextStatus,
       activeMarkets: markets,
-      startedAt: now,
+      startedAt: isRunning ? existing?.startedAt ?? now : now,
       stopMode: null,
       stoppingAt: null,
     })
     .onConflictDoUpdate({
       target: botStatuses.userId,
       set: {
-        status: 'running',
+        status: nextStatus,
         activeMarkets: markets,
-        startedAt: now,
+        startedAt: isRunning ? existing?.startedAt ?? now : now,
         errorMessage: null,
         stopMode: null,
         stoppingAt: null,
@@ -131,9 +175,19 @@ export async function startBotForUser(userId: string, rawMarkets: MarketType[]) 
       },
     })
 
+  if (markets.length === 0) {
+    return {
+      success: true,
+      status: 'stopped' as const,
+      markets: [],
+      sessionIds: {},
+      marketConfigs: [],
+    }
+  }
+
   let botRes: Response | null = null
   try {
-    botRes = await fetch(`${process.env.BOT_ENGINE_URL}/bot/start`, {
+    botRes = await fetch(`${process.env.BOT_ENGINE_URL}${isRunning ? '/bot/sync' : '/bot/start'}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -143,7 +197,11 @@ export async function startBotForUser(userId: string, rawMarkets: MarketType[]) 
       signal: AbortSignal.timeout(15_000),
     })
   } catch {
-    await rollbackBotStart(userId, createdSessionIds)
+    if (isRunning) {
+      await rollbackBotSync({ userId, createdSessionIds, stoppedSessionIds, marketsToRestore: currentMarkets })
+    } else {
+      await rollbackBotStart(userId, createdSessionIds)
+    }
     const error = new Error('Bot engine is unreachable. Is the Render service running?')
     ;(error as Error & { status?: number }).status = 503
     throw error
@@ -151,7 +209,11 @@ export async function startBotForUser(userId: string, rawMarkets: MarketType[]) 
 
   if (!botRes.ok) {
     const engineBody = await botRes.json().catch(() => ({}))
-    await rollbackBotStart(userId, createdSessionIds)
+    if (isRunning) {
+      await rollbackBotSync({ userId, createdSessionIds, stoppedSessionIds, marketsToRestore: currentMarkets })
+    } else {
+      await rollbackBotStart(userId, createdSessionIds)
+    }
     const error = new Error(engineBody.detail ?? 'Bot engine returned an error')
     ;(error as Error & { status?: number; detail?: unknown }).status = botRes.status
     ;(error as Error & { detail?: unknown }).detail = engineBody
@@ -181,4 +243,35 @@ export async function rollbackBotStart(userId: string, sessionIds: string[]) {
       })
       .where(eq(botStatuses.userId, userId)),
   ])
+}
+
+export async function rollbackBotSync(params: {
+  userId: string
+  createdSessionIds: string[]
+  stoppedSessionIds: string[]
+  marketsToRestore: MarketType[]
+}) {
+  const now = new Date()
+  const work = [
+    ...params.createdSessionIds.map((sid) =>
+      db.update(botSessions).set({ status: 'stopped', endedAt: now }).where(eq(botSessions.id, sid)),
+    ),
+    db.update(botStatuses)
+      .set({
+        status: 'running',
+        activeMarkets: params.marketsToRestore,
+        updatedAt: now,
+      })
+      .where(eq(botStatuses.userId, params.userId)),
+  ]
+
+  if (params.stoppedSessionIds.length > 0) {
+    work.push(
+      db.update(botSessions)
+        .set({ status: 'running', endedAt: null })
+        .where(inArray(botSessions.id, params.stoppedSessionIds as any[])),
+    )
+  }
+
+  await Promise.all(work)
 }

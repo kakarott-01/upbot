@@ -29,6 +29,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}))
     const rawMarkets = body?.markets
+    const rawConflictOverrides = Array.isArray(body?.conflictOverrides) ? body.conflictOverrides : []
 
     if (!rawMarkets || !Array.isArray(rawMarkets) || rawMarkets.length === 0) {
       return NextResponse.json({ error: 'No markets specified' }, { status: 400 })
@@ -42,7 +43,17 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const result = await startBotForUser(session.id, rawMarkets as MarketName[])
+    const invalidConflictOverrides = rawConflictOverrides.filter((market: unknown) => !isMarketName(market))
+    if (invalidConflictOverrides.length > 0) {
+      return NextResponse.json(
+        { error: `Invalid conflict override market(s): ${invalidConflictOverrides.join(', ')}` },
+        { status: 400 },
+      )
+    }
+
+    const result = await startBotForUser(session.id, rawMarkets as MarketName[], {
+      conflictOverrides: rawConflictOverrides as MarketName[],
+    })
     return NextResponse.json(result)
   } catch (error) {
     const status = (error as Error & { status?: number }).status ?? 400

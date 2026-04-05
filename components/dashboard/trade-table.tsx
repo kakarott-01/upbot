@@ -11,8 +11,9 @@ interface Props {
 export function TradeTable({ trades, compact }: Props) {
   if (!trades.length) {
     return (
-      <div className="text-center py-8 text-sm text-gray-600">
-        No trades yet. Start the bot to begin trading.
+      <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-950/30 px-4 py-10 text-center">
+        <p className="text-sm font-medium text-gray-200">No trades yet</p>
+        <p className="mt-2 text-sm text-gray-500">Enable a market session and the first live or paper trades will appear here.</p>
       </div>
     )
   }

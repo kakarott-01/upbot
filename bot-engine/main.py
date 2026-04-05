@@ -163,6 +163,11 @@ class StartRequest(BaseModel):
     # Optional for backwards compatibility with watchdog auto-restart.
     session_ids: Optional[Dict[str, str]] = None
 
+class SyncRequest(BaseModel):
+    user_id: str
+    markets: List[str]
+    session_ids: Optional[Dict[str, str]] = None
+
 class StopRequest(BaseModel):
     user_id: str
 
@@ -224,6 +229,27 @@ async def start_bot(req: StartRequest):
         "status":      "started",
         "user_id":     req.user_id,
         "markets":     req.markets,
+        "session_ids": req.session_ids,
+    }
+
+
+@app.post("/bot/sync", dependencies=[Depends(_verify)])
+async def sync_bot(req: SyncRequest):
+    if not _scheduler:
+        raise HTTPException(500, "Scheduler not initialized")
+    try:
+        await _scheduler.sync_user_bot(
+            req.user_id,
+            req.markets,
+            session_ids=req.session_ids,
+        )
+    except Exception as e:
+        logger.error(f"sync_bot failed user={req.user_id}: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+    return {
+        "status": "synced",
+        "user_id": req.user_id,
+        "markets": req.markets,
         "session_ids": req.session_ids,
     }
 

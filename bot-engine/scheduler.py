@@ -55,6 +55,7 @@ class BotContext:
     session_ids:      Dict[str, str]         = field(default_factory=dict)
     connectors:       Dict[str, object]      = field(default_factory=dict)
     job_ids:          List[str]              = field(default_factory=list)
+    market_job_ids:   Dict[str, List[str]]   = field(default_factory=dict)
     started_at:       datetime               = field(default_factory=datetime.utcnow)
     last_heartbeat:   Optional[datetime]     = None
     close_all_task:   Optional[asyncio.Task] = None
@@ -138,142 +139,17 @@ class BotScheduler:
             started_markets: List[str] = []
 
             for market in markets:
-                cfg = exchange_configs.get(market)
-                if not cfg:
-                    logger.warning(f"⚠️  No exchange config for market={market}, skipping")
-                    continue
-
-                api_key    = cfg.get("api_key")
-                api_secret = cfg.get("api_secret")
-                if not api_key or not api_secret:
-                    logger.error(f"❌ Missing API keys for market={market}, skipping")
-                    continue
-
-                connector = ExchangeConnector(
-                    exchange_name=cfg["exchange_name"],
-                    api_key=api_key,
-                    api_secret=api_secret,
-                    extra=cfg.get("extra", {}),
-                    market_type=market,
+                started = await self._start_market(
+                    ctx=ctx,
+                    user_id=user_id,
+                    market=market,
+                    exchange_configs=exchange_configs,
+                    risk_cfg=risk_cfg,
+                    market_modes=market_modes,
+                    session_ids=session_ids,
                 )
-                ctx.connectors[market] = connector
-
-                paper_mode = market_modes.get(market, True)
-                strategy_cfg = await self._db.get_market_strategy_config(user_id, market)
-                strategy_keys = strategy_cfg.get("strategy_keys", [])
-                execution_mode = strategy_cfg.get("execution_mode", "SAFE")
-                position_mode = strategy_cfg.get("position_mode", "NET")
-                allow_hedge_opposition = bool(strategy_cfg.get("allow_hedge_opposition", False))
-                if not strategy_keys:
-                    logger.warning(f"⚠️  No strategy config for market={market}, skipping")
-                    continue
-                real_session_id = (session_ids or {}).get(market)
-                session_ref     = real_session_id if real_session_id else f"{user_id}:{market}"
-
-                # FIX K: Create a per-market RiskManager and load its persisted state.
-                # Each market has independent daily_loss and open_trade_count.
-                # Using a shared RiskManager across markets was incorrect because
-                # Indian market max trades shouldn't block Crypto from opening.
-                risk_mgr = RiskManager(risk_cfg)
-                risk_mgr.cfg.max_positions_per_symbol = int(strategy_cfg.get("max_positions_per_symbol", risk_mgr.cfg.max_positions_per_symbol))
-                risk_mgr.cfg.max_capital_per_strategy_pct = float(strategy_cfg.get("max_capital_per_strategy_pct", risk_mgr.cfg.max_capital_per_strategy_pct))
-                risk_mgr.cfg.max_drawdown_pct = float(strategy_cfg.get("max_drawdown_pct", risk_mgr.cfg.max_drawdown_pct))
-                try:
-                    await risk_mgr.load_state(self._db, user_id, market)
-                except Exception as e:
-                    logger.warning(
-                        f"⚠️  Could not load risk state for market={market}: {e}. "
-                        "Starting with zero values."
-                    )
-
-                interval = MARKET_INTERVAL.get(market, 60)
-                scopes = (
-                    [{"strategy_keys": strategy_keys, "execution_mode": "SAFE", "position_scope_key": "|".join(strategy_keys)}]
-                    if execution_mode == "SAFE" or len(strategy_keys) == 1
-                    else [
-                        {"strategy_keys": [strategy_key], "execution_mode": "AGGRESSIVE", "position_scope_key": strategy_key}
-                        for strategy_key in strategy_keys
-                    ]
-                )
-
-                for scope in scopes:
-                    algo = ConfiguredMultiStrategyAlgo(
-                        connector=connector,
-                        risk_mgr=risk_mgr,
-                        db=self._db,
-                        user_id=user_id,
-                        paper_mode=paper_mode,
-                        session_ref=session_ref,
-                        market_type_name=market,
-                        strategy_keys=scope["strategy_keys"],
-                        execution_mode=scope["execution_mode"],
-                        position_mode=position_mode,
-                        allow_hedge_opposition=allow_hedge_opposition,
-                        position_scope_key=scope["position_scope_key"],
-                    )
-                    algo._risk_loaded = True
-
-                    safe_scope = scope["position_scope_key"].replace("/", "_").replace("|", "_")
-                    job_id = f"{user_id}_{market}_{safe_scope}"
-
-                    async def _wrapped_cycle(
-                        _algo=algo,
-                        _uid=user_id,
-                        _scheduler=self,
-                    ):
-                        await _algo.run_cycle()
-                        now = datetime.utcnow()
-                        if _uid in _scheduler.active_bots:
-                            _scheduler.active_bots[_uid].last_heartbeat = now
-                        try:
-                            await _scheduler._db.update_heartbeat(_uid)
-                        except Exception as e:
-                            logger.warning(f"⚠️  Heartbeat update failed: {e}")
-
-                        try:
-                            stop_mode = await _scheduler._db.get_bot_stop_mode(_uid)
-                            if stop_mode == "graceful":
-                                open_count = await _scheduler._db.count_open_trades(_uid)
-                                if open_count == 0:
-                                    ctx = _scheduler.active_bots.get(_uid)
-                                    if ctx and ctx.drain_completing:
-                                        return
-                                    if ctx:
-                                        ctx.drain_completing = True
-                                    await _scheduler._stop_jobs(_uid)
-                                    try:
-                                        await _scheduler._db.force_set_status(_uid, "stopped")
-                                    except Exception as e:
-                                        logger.error(
-                                            f"❌ Failed to update DB stop status "
-                                            f"for user={_uid[:8]}…: {e}"
-                                        )
-                                    asyncio.create_task(
-                                        _scheduler._complete_stop_callback(_uid),
-                                        name=f"complete_stop_cb_{_uid}",
-                                    )
-                                    clear_ohlcv_cache()
-                        except Exception as e:
-                            logger.error(f"❌ Drain completion check error: {e}")
-
-                    self._scheduler.add_job(
-                        _wrapped_cycle,
-                        trigger=IntervalTrigger(seconds=interval),
-                        id=job_id,
-                        replace_existing=True,
-                        max_instances=1,
-                        coalesce=True,
-                        misfire_grace_time=10,
-                    )
-
-                    ctx.job_ids.append(job_id)
-                    logger.info(
-                        f"✅ Scheduled {ConfiguredMultiStrategyAlgo.__name__} market={market} "
-                        f"scope={scope['position_scope_key']} every {interval}s "
-                        f"[{'PAPER' if paper_mode else '🔴 LIVE'}] session_ref={session_ref}"
-                    )
-
-                started_markets.append(market)
+                if started:
+                    started_markets.append(market)
 
             if not started_markets:
                 raise RuntimeError("No markets could be started — check exchange API keys")
@@ -291,6 +167,67 @@ class BotScheduler:
             logger.error(f"❌ start_user_bot failed user={user_id}: {e}", exc_info=True)
             await self._db.update_bot_status(user_id, "error", [], error=str(e))
             raise
+
+    async def sync_user_bot(
+        self,
+        user_id: str,
+        markets: List[str],
+        session_ids: Optional[Dict[str, str]] = None,
+    ):
+        desired_markets = list(dict.fromkeys(markets))
+        ctx = self.active_bots.get(user_id)
+
+        if not ctx:
+            if not desired_markets:
+                await self._db.update_bot_status(user_id, "stopped", [])
+                return
+            await self.start_user_bot(user_id, desired_markets, session_ids=session_ids)
+            return
+
+        if not desired_markets:
+            await self.stop_user_bot(user_id)
+            return
+
+        exchange_configs = await self._db.get_exchange_apis(user_id)
+        risk_cfg = await self._db.get_risk_settings(user_id)
+        market_modes = await self._db.get_market_modes(user_id)
+
+        current_markets = set(ctx.markets)
+        desired_set = set(desired_markets)
+
+        for market in list(current_markets - desired_set):
+            await self._stop_market_jobs(user_id, market)
+
+        for market in desired_markets:
+            if market in current_markets:
+                continue
+            started = await self._start_market(
+                ctx=ctx,
+                user_id=user_id,
+                market=market,
+                exchange_configs=exchange_configs,
+                risk_cfg=risk_cfg,
+                market_modes=market_modes,
+                session_ids=session_ids,
+            )
+            if not started:
+                logger.warning(f"⚠️  Sync skipped market={market} for user={user_id[:8]}…")
+
+        ctx.markets = [market for market in desired_markets if market in ctx.market_job_ids]
+        if session_ids:
+            ctx.session_ids.update(session_ids)
+
+        if not ctx.markets:
+            await self.stop_user_bot(user_id)
+            return
+
+        await self._db.update_bot_status(
+            user_id,
+            "running",
+            ctx.markets,
+            started_at=ctx.started_at,
+        )
+        logger.info(f"🔄 Bot synced user={user_id} markets={ctx.markets}")
 
     # ── Drain (graceful stop) ──────────────────────────────────────────────────
 
@@ -385,6 +322,176 @@ class BotScheduler:
                 logger.info(f"  ✂️  Removed job {job_id}")
             except Exception:
                 pass
+
+    async def _stop_market_jobs(self, user_id: str, market: str):
+        ctx = self.active_bots.get(user_id)
+        if not ctx:
+            return
+
+        for job_id in ctx.market_job_ids.get(market, []):
+            try:
+                self._scheduler.remove_job(job_id)
+                logger.info(f"  ✂️  Removed job {job_id}")
+            except Exception:
+                pass
+            if job_id in ctx.job_ids:
+                ctx.job_ids.remove(job_id)
+
+        ctx.market_job_ids.pop(market, None)
+        ctx.connectors.pop(market, None)
+        ctx.session_ids.pop(market, None)
+        ctx.markets = [item for item in ctx.markets if item != market]
+
+    async def _start_market(
+        self,
+        ctx: BotContext,
+        user_id: str,
+        market: str,
+        exchange_configs: Dict[str, Dict],
+        risk_cfg: Dict,
+        market_modes: Dict[str, bool],
+        session_ids: Optional[Dict[str, str]] = None,
+    ) -> bool:
+        cfg = exchange_configs.get(market)
+        if not cfg:
+            logger.warning(f"⚠️  No exchange config for market={market}, skipping")
+            return False
+
+        api_key = cfg.get("api_key")
+        api_secret = cfg.get("api_secret")
+        if not api_key or not api_secret:
+            logger.error(f"❌ Missing API keys for market={market}, skipping")
+            return False
+
+        connector = ExchangeConnector(
+            exchange_name=cfg["exchange_name"],
+            api_key=api_key,
+            api_secret=api_secret,
+            extra=cfg.get("extra", {}),
+            market_type=market,
+        )
+        ctx.connectors[market] = connector
+
+        paper_mode = market_modes.get(market, True)
+        strategy_cfg = await self._db.get_market_strategy_config(user_id, market)
+        strategy_keys = strategy_cfg.get("strategy_keys", [])
+        execution_mode = strategy_cfg.get("execution_mode", "SAFE")
+        position_mode = strategy_cfg.get("position_mode", "NET")
+        allow_hedge_opposition = bool(strategy_cfg.get("allow_hedge_opposition", False))
+
+        if not strategy_keys:
+            logger.warning(f"⚠️  No strategy config for market={market}, skipping")
+            return False
+
+        real_session_id = (session_ids or {}).get(market)
+        session_ref = real_session_id if real_session_id else ctx.session_ids.get(market, f"{user_id}:{market}")
+        ctx.session_ids[market] = session_ref
+
+        risk_mgr = RiskManager(risk_cfg)
+        risk_mgr.cfg.max_positions_per_symbol = int(strategy_cfg.get("max_positions_per_symbol", risk_mgr.cfg.max_positions_per_symbol))
+        risk_mgr.cfg.max_capital_per_strategy_pct = float(strategy_cfg.get("max_capital_per_strategy_pct", risk_mgr.cfg.max_capital_per_strategy_pct))
+        risk_mgr.cfg.max_drawdown_pct = float(strategy_cfg.get("max_drawdown_pct", risk_mgr.cfg.max_drawdown_pct))
+        try:
+            await risk_mgr.load_state(self._db, user_id, market)
+        except Exception as e:
+            logger.warning(
+                f"⚠️  Could not load risk state for market={market}: {e}. "
+                "Starting with zero values."
+            )
+
+        interval = MARKET_INTERVAL.get(market, 60)
+        scopes = (
+            [{"strategy_keys": strategy_keys, "execution_mode": "SAFE", "position_scope_key": "|".join(strategy_keys)}]
+            if execution_mode == "SAFE" or len(strategy_keys) == 1
+            else [
+                {"strategy_keys": [strategy_key], "execution_mode": "AGGRESSIVE", "position_scope_key": strategy_key}
+                for strategy_key in strategy_keys
+            ]
+        )
+
+        job_ids: List[str] = []
+        for scope in scopes:
+            algo = ConfiguredMultiStrategyAlgo(
+                connector=connector,
+                risk_mgr=risk_mgr,
+                db=self._db,
+                user_id=user_id,
+                paper_mode=paper_mode,
+                session_ref=session_ref,
+                market_type_name=market,
+                strategy_keys=scope["strategy_keys"],
+                execution_mode=scope["execution_mode"],
+                position_mode=position_mode,
+                allow_hedge_opposition=allow_hedge_opposition,
+                position_scope_key=scope["position_scope_key"],
+            )
+            algo._risk_loaded = True
+
+            safe_scope = scope["position_scope_key"].replace("/", "_").replace("|", "_")
+            job_id = f"{user_id}_{market}_{safe_scope}"
+
+            async def _wrapped_cycle(
+                _algo=algo,
+                _uid=user_id,
+                _scheduler=self,
+            ):
+                await _algo.run_cycle()
+                now = datetime.utcnow()
+                if _uid in _scheduler.active_bots:
+                    _scheduler.active_bots[_uid].last_heartbeat = now
+                try:
+                    await _scheduler._db.update_heartbeat(_uid)
+                except Exception as e:
+                    logger.warning(f"⚠️  Heartbeat update failed: {e}")
+
+                try:
+                    stop_mode = await _scheduler._db.get_bot_stop_mode(_uid)
+                    if stop_mode == "graceful":
+                        open_count = await _scheduler._db.count_open_trades(_uid)
+                        if open_count == 0:
+                            running_ctx = _scheduler.active_bots.get(_uid)
+                            if running_ctx and running_ctx.drain_completing:
+                                return
+                            if running_ctx:
+                                running_ctx.drain_completing = True
+                            await _scheduler._stop_jobs(_uid)
+                            try:
+                                await _scheduler._db.force_set_status(_uid, "stopped")
+                            except Exception as e:
+                                logger.error(
+                                    f"❌ Failed to update DB stop status "
+                                    f"for user={_uid[:8]}…: {e}"
+                                )
+                            asyncio.create_task(
+                                _scheduler._complete_stop_callback(_uid),
+                                name=f"complete_stop_cb_{_uid}",
+                            )
+                            clear_ohlcv_cache()
+                except Exception as e:
+                    logger.error(f"❌ Drain completion check error: {e}")
+
+            self._scheduler.add_job(
+                _wrapped_cycle,
+                trigger=IntervalTrigger(seconds=interval),
+                id=job_id,
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+                misfire_grace_time=10,
+            )
+
+            job_ids.append(job_id)
+            ctx.job_ids.append(job_id)
+            logger.info(
+                f"✅ Scheduled {ConfiguredMultiStrategyAlgo.__name__} market={market} "
+                f"scope={scope['position_scope_key']} every {interval}s "
+                f"[{'PAPER' if paper_mode else '🔴 LIVE'}] session_ref={session_ref}"
+            )
+
+        ctx.market_job_ids[market] = job_ids
+        if market not in ctx.markets:
+            ctx.markets.append(market)
+        return True
 
     async def _complete_stop_callback(self, user_id: str):
         """

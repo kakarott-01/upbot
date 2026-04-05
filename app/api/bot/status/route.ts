@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
-import { botStatuses, killSwitchState, trades } from '@/lib/schema'
+import { botStatuses, botSessions, killSwitchState, trades } from '@/lib/schema'
 import { eq, and, sql } from 'drizzle-orm'
 import { _doImmediateStop } from '@/lib/bot-stop'
 
@@ -19,11 +19,42 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const status = await db.query.botStatuses.findFirst({
-    where: eq(botStatuses.userId, session.id),
-  })
-  const killSwitch = await db.query.killSwitchState.findFirst({
-    where: eq(killSwitchState.userId, session.id),
+  const [status, killSwitch, sessionRows] = await Promise.all([
+    db.query.botStatuses.findFirst({
+      where: eq(botStatuses.userId, session.id),
+    }),
+    db.query.killSwitchState.findFirst({
+      where: eq(killSwitchState.userId, session.id),
+    }),
+    db.query.botSessions.findMany({
+      where: eq(botSessions.userId, session.id),
+      orderBy: (table, { desc }) => [desc(table.startedAt)],
+      limit: 24,
+    }),
+  ])
+
+  const latestSessionByMarket = new Map<string, (typeof sessionRows)[number]>()
+  for (const row of sessionRows) {
+    if (!latestSessionByMarket.has(row.market)) {
+      latestSessionByMarket.set(row.market, row)
+    }
+  }
+  const sessions = ['crypto', 'indian', 'global', 'commodities'].map((market) => {
+    const row = latestSessionByMarket.get(market)
+    const isActive = (status?.activeMarkets ?? []).includes(market)
+    return {
+      market,
+      status: isActive ? 'running' : row?.status ?? 'stopped',
+      sessionId: row?.id ?? null,
+      mode: row?.mode ?? null,
+      startedAt: isActive ? status?.startedAt ?? row?.startedAt ?? null : row?.startedAt ?? null,
+      endedAt: isActive ? null : row?.endedAt ?? null,
+      exchange: row?.exchange ?? null,
+      openTrades: row?.openTrades ?? 0,
+      totalTrades: row?.totalTrades ?? 0,
+      totalPnl: row?.totalPnl ?? null,
+      metadata: row?.metadata ?? null,
+    }
   })
 
   if (!status) {
@@ -37,6 +68,7 @@ export async function GET(req: NextRequest) {
       errorMessage:    null,
       openTradeCount:  0,
       timeoutWarning:  false,
+      sessions,
       killSwitchActive: false,
     })
   }
@@ -80,6 +112,7 @@ export async function GET(req: NextRequest) {
       errorMessage:    null,
       openTradeCount:  0,
       timeoutWarning:  false,
+      sessions:        sessions.map((item) => ({ ...item, status: 'stopped' })),
       killSwitchActive: Boolean(killSwitch?.isActive),
     })
   }
@@ -102,6 +135,7 @@ export async function GET(req: NextRequest) {
     errorMessage:    status.errorMessage,
     openTradeCount,
     timeoutWarning,
+    sessions,
     killSwitchActive: Boolean(killSwitch?.isActive),
   })
 }
