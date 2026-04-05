@@ -7,6 +7,7 @@ import {
   ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Activity,
 } from 'lucide-react'
 import { format } from 'date-fns'
+import { formatINR, formatPnl } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Trade {
@@ -14,9 +15,12 @@ interface Trade {
   symbol:       string
   side:         'buy' | 'sell'
   marketType:   string
+  quantity:     string
   entryPrice:   string
   exitPrice:    string | null
   pnl:          string | null
+  netPnl:       string | null
+  feeAmount:    string | null
   status:       string
   isPaper:      boolean
   openedAt:     string
@@ -74,12 +78,15 @@ function ConfirmModal({ title, message, onConfirm, onClose }: {
 
 // ─── Export CSV ───────────────────────────────────────────────────────────────
 function exportCSV(trades: Trade[]) {
-  const headers = ['Symbol','Side','Market','Exchange','Entry','Exit','P&L','Status','Mode','Date']
+  const headers = ['Symbol','Side','Market','Exchange','Quantity','Entry','Amount Used','Exit','Fees','Net P&L','Status','Mode','Date']
   const rows = trades.map(t => [
     t.symbol, t.side, t.marketType, t.exchangeName,
+    Number(t.quantity).toFixed(4),
     Number(t.entryPrice).toFixed(2),
+    (Number(t.quantity) * Number(t.entryPrice)).toFixed(2),
     t.exitPrice ? Number(t.exitPrice).toFixed(2) : '',
-    t.pnl ? Number(t.pnl).toFixed(2) : '',
+    t.feeAmount ? Number(t.feeAmount).toFixed(2) : '',
+    t.netPnl ? Number(t.netPnl).toFixed(2) : t.pnl ? Number(t.pnl).toFixed(2) : '',
     t.status, t.isPaper ? 'paper' : 'live',
     format(new Date(t.openedAt), 'dd/MM/yyyy HH:mm'),
   ])
@@ -368,9 +375,9 @@ export default function TradesPage() {
       {/* Summary stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
         <StatCard
-          label="Total P&L"
-          value={`₹${summary.totalPnl.toFixed(2)}`}
-          sub="all closed trades"
+          label="Net P&L"
+          value={formatPnl(summary.totalPnl)}
+          sub={`all closed trades${typeof summary.totalFees === 'number' ? ` · Fees ${formatINR(summary.totalFees)}` : ''}`}
           color={summary.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}
           icon={summary.totalPnl >= 0 ? TrendingUp : TrendingDown}
         />
@@ -439,7 +446,7 @@ export default function TradesPage() {
                     {allSelected ? <CheckSquare className="w-4 h-4 text-brand-500" /> : <Square className="w-4 h-4" />}
                   </button>
                 </th>
-                {['Symbol','Side','Market','Entry','Exit','P&L','Status','Mode','Date',''].map(h => (
+                {['Symbol','Side','Market','Entry','Amount','Exit','Net P&L','Status','Mode','Date',''].map(h => (
                   <th key={h} className="text-left text-xs text-gray-600 font-medium pb-3 pt-3 px-2 last:pr-4">{h}</th>
                 ))}
               </tr>
@@ -460,9 +467,11 @@ export default function TradesPage() {
                   </td>
                 </tr>
               ) : trades.map(trade => {
-                const pnl      = Number(trade.pnl ?? 0)
+                const pnl      = Number(trade.netPnl ?? trade.pnl ?? 0)
                 const isProfit = pnl > 0
                 const isChecked = selected.has(trade.id)
+                const amountUsed = Number(trade.quantity ?? 0) * Number(trade.entryPrice ?? 0)
+                const feeAmount = Number(trade.feeAmount ?? 0)
                 return (
                   <tr key={trade.id} className={`hover:bg-gray-800/30 transition-colors group ${isChecked ? 'bg-brand-500/5' : ''}`}>
                     <td className="py-2.5 pl-4 w-10">
@@ -484,16 +493,25 @@ export default function TradesPage() {
                       <span className="badge-gray capitalize">{trade.marketType}</span>
                     </td>
                     <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
-                      ₹{Number(trade.entryPrice).toLocaleString('en-IN')}
+                      {formatINR(Number(trade.entryPrice))}
                     </td>
                     <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
-                      {trade.exitPrice ? `₹${Number(trade.exitPrice).toLocaleString('en-IN')}` : '—'}
+                      <div>{formatINR(amountUsed)}</div>
+                      <div className="text-[11px] text-gray-600">qty {Number(trade.quantity ?? 0).toFixed(4)}</div>
+                    </td>
+                    <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
+                      {trade.exitPrice ? formatINR(Number(trade.exitPrice)) : '—'}
                     </td>
                     <td className="py-2.5 px-2">
-                      {trade.pnl != null ? (
-                        <span className={`text-xs font-semibold font-mono ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {isProfit ? '+' : ''}₹{Math.abs(pnl).toFixed(2)}
-                        </span>
+                      {trade.netPnl != null || trade.pnl != null ? (
+                        <div>
+                          <span className={`text-xs font-semibold font-mono ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {formatPnl(pnl)}
+                          </span>
+                          {feeAmount > 0 && (
+                            <div className="text-[11px] text-gray-600">fees {formatINR(feeAmount)}</div>
+                          )}
+                        </div>
                       ) : <span className="text-gray-600 text-xs">—</span>}
                     </td>
                     <td className="py-2.5 px-2">

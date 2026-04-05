@@ -75,13 +75,16 @@ export default function DashboardPage() {
 
         <div className="stat-card">
           <div className="flex items-center justify-between mb-1">
-            <span className="stat-label">Total P&L</span>
+            <span className="stat-label">Net P&L</span>
             <DollarSign className="w-4 h-4 text-gray-700" />
           </div>
           <div className={`stat-value ${summary.totalPnl >= 0 ? 'pnl-positive' : 'pnl-negative'}`}>
             {formatCurrency(summary.totalPnl)}
           </div>
-          <span className="stat-sub">All time</span>
+          <span className="stat-sub">
+            All time
+            {typeof summary.totalFees === 'number' ? ` · Fees ${formatCurrency(summary.totalFees)}` : ''}
+          </span>
         </div>
 
         <div className="stat-card">

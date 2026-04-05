@@ -13,6 +13,18 @@ export function formatCurrency(amount: number, currency = 'INR'): string {
   }).format(amount)
 }
 
+export function formatINR(amount: number): string {
+  return `₹${Math.abs(amount).toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+export function formatPnl(amount: number): string {
+  const sign = amount >= 0 ? '+' : '-'
+  return `${sign}${formatINR(amount)}`
+}
+
 export function formatPct(value: number): string {
   return `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`
 }

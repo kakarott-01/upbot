@@ -9,6 +9,7 @@ import {
   TrendingUp, TrendingDown, Target, Activity,
   Award, AlertTriangle, BarChart2, Filter,
 } from 'lucide-react'
+import { formatINR, formatPnl } from '@/lib/utils'
 
 // ─── Custom Tooltip ───────────────────────────────────────────────────────────
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -18,7 +19,7 @@ const CustomTooltip = ({ active, payload, label }: any) => {
     <div className="bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-xs shadow-xl">
       <p className="text-gray-500 mb-0.5">{label}</p>
       <p className={`font-semibold ${val >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-        {val >= 0 ? '+' : ''}₹{Number(val).toFixed(2)}
+        {formatPnl(Number(val))}
       </p>
     </div>
   )
@@ -59,11 +60,18 @@ export default function PerformancePage() {
 
   const metrics = s ? [
     {
-      label: 'Total P&L',
-      value: `₹${s.totalPnl.toFixed(2)}`,
+      label: 'Net P&L',
+      value: formatPnl(s.totalPnl),
       sub:   `${s.closed} closed trades`,
       color: s.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400',
       icon:  s.totalPnl >= 0 ? TrendingUp : TrendingDown,
+    },
+    {
+      label: 'Fees Paid',
+      value: formatINR(s.totalFees),
+      sub:   'Entry + exit costs',
+      color: 'text-amber-400',
+      icon:  AlertTriangle,
     },
     {
       label: 'Win Rate',
@@ -81,15 +89,15 @@ export default function PerformancePage() {
     },
     {
       label: 'Avg Win',
-      value: `₹${s.avgWin.toFixed(2)}`,
-      sub:   `Best: ₹${s.bestTrade.toFixed(2)}`,
+      value: formatINR(s.avgWin),
+      sub:   `Best: ${formatINR(s.bestTrade)}`,
       color: 'text-emerald-400',
       icon:  TrendingUp,
     },
     {
       label: 'Avg Loss',
-      value: `₹${Math.abs(s.avgLoss).toFixed(2)}`,
-      sub:   `Worst: ₹${Math.abs(s.worstTrade).toFixed(2)}`,
+      value: formatINR(Math.abs(s.avgLoss)),
+      sub:   `Worst: ${formatINR(Math.abs(s.worstTrade))}`,
       color: 'text-red-400',
       icon:  TrendingDown,
     },
@@ -147,7 +155,7 @@ export default function PerformancePage() {
       {/* Metric cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {isLoading
-          ? Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} />)
+          ? Array.from({ length: 9 }).map((_, i) => <SkeletonCard key={i} />)
           : metrics.map(m => {
               const Icon = m.icon
               return (
@@ -165,7 +173,7 @@ export default function PerformancePage() {
 
       {/* Cumulative P&L curve */}
       <div className="card">
-        <h2 className="text-sm font-medium text-gray-400 mb-4">Cumulative P&L</h2>
+        <h2 className="text-sm font-medium text-gray-400 mb-4">Cumulative Net P&L</h2>
         {isLoading ? (
           <div className="h-44 bg-gray-800/40 rounded-lg animate-pulse" />
         ) : cumPnl.length === 0 ? (
@@ -239,9 +247,11 @@ export default function PerformancePage() {
                 <div key={m} className="bg-gray-800/50 rounded-xl p-3 border border-gray-700/50">
                   <p className="text-xs text-gray-500 capitalize mb-1.5">{m}</p>
                   <p className={`text-lg font-semibold ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    ₹{pnl >= 0 ? '' : '-'}{Math.abs(pnl).toFixed(0)}
+                    {formatPnl(pnl).replace('.00', '')}
                   </p>
-                  <p className="text-xs text-gray-600 mt-0.5">{total} trades · {wr}% WR</p>
+                  <p className="text-xs text-gray-600 mt-0.5">
+                    {total} trades · {wr}% WR · Fees {formatINR(mData?.fees ?? 0).replace('.00', '')}
+                  </p>
                 </div>
               )
             })}

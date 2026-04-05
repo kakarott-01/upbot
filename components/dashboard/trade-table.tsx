@@ -1,5 +1,5 @@
 'use client'
-import { formatCurrency } from '@/lib/utils'
+import { formatINR, formatPnl } from '@/lib/utils'
 import { format } from 'date-fns'
 import { ArrowUpRight, ArrowDownRight } from 'lucide-react'
 
@@ -22,7 +22,7 @@ export function TradeTable({ trades, compact }: Props) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-gray-800">
-            {['Symbol', 'Side', 'Market', 'Entry', 'Exit', 'P&L', 'Status', 'Date'].map(h => (
+            {['Symbol', 'Side', 'Market', 'Entry', 'Amount', 'Exit', 'Net P&L', 'Status', 'Date'].map(h => (
               <th key={h} className="text-left text-xs text-gray-600 font-medium pb-2.5 px-2 first:pl-4 last:pr-4">
                 {h}
               </th>
@@ -31,8 +31,10 @@ export function TradeTable({ trades, compact }: Props) {
         </thead>
         <tbody className="divide-y divide-gray-800/50">
           {trades.map(trade => {
-            const pnl = Number(trade.pnl ?? 0)
+            const pnl = Number(trade.netPnl ?? trade.pnl ?? 0)
             const isProfit = pnl > 0
+            const amountUsed = Number(trade.quantity ?? 0) * Number(trade.entryPrice ?? 0)
+            const feeAmount = Number(trade.feeAmount ?? 0)
             return (
               <tr key={trade.id} className="hover:bg-gray-800/30 transition-colors group">
                 <td className="py-2.5 px-2 pl-4 font-mono text-xs text-gray-300 font-medium">
@@ -53,16 +55,25 @@ export function TradeTable({ trades, compact }: Props) {
                   <span className="badge-gray capitalize">{trade.marketType}</span>
                 </td>
                 <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
-                  ₹{Number(trade.entryPrice).toLocaleString('en-IN')}
+                  {formatINR(Number(trade.entryPrice))}
                 </td>
                 <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
-                  {trade.exitPrice ? `₹${Number(trade.exitPrice).toLocaleString('en-IN')}` : '—'}
+                  <div>{formatINR(amountUsed)}</div>
+                  <div className="text-[11px] text-gray-600">qty {Number(trade.quantity ?? 0).toFixed(4)}</div>
+                </td>
+                <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
+                  {trade.exitPrice ? formatINR(Number(trade.exitPrice)) : '—'}
                 </td>
                 <td className="py-2.5 px-2">
-                  {trade.pnl != null ? (
-                    <span className={`text-xs font-semibold font-mono ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {isProfit ? '+' : ''}₹{Math.abs(pnl).toFixed(2)}
-                    </span>
+                  {trade.netPnl != null || trade.pnl != null ? (
+                    <div>
+                      <span className={`text-xs font-semibold font-mono ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {formatPnl(pnl)}
+                      </span>
+                      {feeAmount > 0 && (
+                        <div className="text-[11px] text-gray-600">fees {formatINR(feeAmount)}</div>
+                      )}
+                    </div>
                   ) : <span className="text-gray-600 text-xs">—</span>}
                 </td>
                 <td className="py-2.5 px-2">

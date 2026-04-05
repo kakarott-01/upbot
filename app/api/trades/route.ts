@@ -55,8 +55,9 @@ export async function GET(req: NextRequest) {
       .where(and(...conditions)),
     db.select({
       closed:   sql<number>`count(*) filter (where status = 'closed')::int`,
-      winners:  sql<number>`count(*) filter (where status = 'closed' and pnl > 0)::int`,
-      totalPnl: sql<number>`coalesce(sum(pnl) filter (where status = 'closed'), 0)::float`,
+      winners:  sql<number>`count(*) filter (where status = 'closed' and coalesce(net_pnl, pnl) > 0)::int`,
+      totalPnl: sql<number>`coalesce(sum(coalesce(net_pnl, pnl)) filter (where status = 'closed'), 0)::float`,
+      totalFees: sql<number>`coalesce(sum(coalesce(fee_amount, 0)) filter (where status = 'closed'), 0)::float`,
     })
       .from(trades)
       .where(and(...conditions)),
@@ -79,6 +80,7 @@ export async function GET(req: NextRequest) {
       total,
       closed:   s.closed,
       totalPnl: Math.round((s.totalPnl ?? 0) * 100) / 100,
+      totalFees: Math.round((s.totalFees ?? 0) * 100) / 100,
       winRate:  Math.round(winRate * 10) / 10,
     },
   })

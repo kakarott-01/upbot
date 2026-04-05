@@ -24,13 +24,14 @@ export async function GET(req: NextRequest) {
       total:       sql<number>`count(*)::int`,
       open:        sql<number>`count(*) filter (where status = 'open')::int`,
       closed:      sql<number>`count(*) filter (where status = 'closed')::int`,
-      winners:     sql<number>`count(*) filter (where status = 'closed' and pnl > 0)::int`,
-      losers:      sql<number>`count(*) filter (where status = 'closed' and pnl <= 0)::int`,
-      totalPnl:    sql<number>`coalesce(sum(pnl) filter (where status = 'closed'), 0)::float`,
-      avgWin:      sql<number>`coalesce(avg(pnl) filter (where status = 'closed' and pnl > 0), 0)::float`,
-      avgLoss:     sql<number>`coalesce(avg(pnl) filter (where status = 'closed' and pnl <= 0), 0)::float`,
-      bestTrade:   sql<number>`coalesce(max(pnl) filter (where status = 'closed'), 0)::float`,
-      worstTrade:  sql<number>`coalesce(min(pnl) filter (where status = 'closed'), 0)::float`,
+      winners:     sql<number>`count(*) filter (where status = 'closed' and coalesce(net_pnl, pnl) > 0)::int`,
+      losers:      sql<number>`count(*) filter (where status = 'closed' and coalesce(net_pnl, pnl) <= 0)::int`,
+      totalPnl:    sql<number>`coalesce(sum(coalesce(net_pnl, pnl)) filter (where status = 'closed'), 0)::float`,
+      totalFees:   sql<number>`coalesce(sum(coalesce(fee_amount, 0)) filter (where status = 'closed'), 0)::float`,
+      avgWin:      sql<number>`coalesce(avg(coalesce(net_pnl, pnl)) filter (where status = 'closed' and coalesce(net_pnl, pnl) > 0), 0)::float`,
+      avgLoss:     sql<number>`coalesce(avg(coalesce(net_pnl, pnl)) filter (where status = 'closed' and coalesce(net_pnl, pnl) <= 0), 0)::float`,
+      bestTrade:   sql<number>`coalesce(max(coalesce(net_pnl, pnl)) filter (where status = 'closed'), 0)::float`,
+      worstTrade:  sql<number>`coalesce(min(coalesce(net_pnl, pnl)) filter (where status = 'closed'), 0)::float`,
       paperCount:  sql<number>`count(*) filter (where is_paper = true)::int`,
       liveCount:   sql<number>`count(*) filter (where is_paper = false)::int`,
     })
@@ -47,9 +48,9 @@ export async function GET(req: NextRequest) {
   const dailyPnl = await db
     .select({
       date: sql<string>`date(closed_at)::text`,
-      pnl:  sql<number>`coalesce(sum(pnl), 0)::float`,
-      wins: sql<number>`count(*) filter (where pnl > 0)::int`,
-      losses: sql<number>`count(*) filter (where pnl <= 0)::int`,
+      pnl:  sql<number>`coalesce(sum(coalesce(net_pnl, pnl)), 0)::float`,
+      wins: sql<number>`count(*) filter (where coalesce(net_pnl, pnl) > 0)::int`,
+      losses: sql<number>`count(*) filter (where coalesce(net_pnl, pnl) <= 0)::int`,
     })
     .from(trades)
     .where(and(
@@ -66,8 +67,9 @@ export async function GET(req: NextRequest) {
       market:  trades.marketType,
       total:   sql<number>`count(*)::int`,
       closed:  sql<number>`count(*) filter (where status = 'closed')::int`,
-      winners: sql<number>`count(*) filter (where status = 'closed' and pnl > 0)::int`,
-      pnl:     sql<number>`coalesce(sum(pnl) filter (where status = 'closed'), 0)::float`,
+      winners: sql<number>`count(*) filter (where status = 'closed' and coalesce(net_pnl, pnl) > 0)::int`,
+      pnl:     sql<number>`coalesce(sum(coalesce(net_pnl, pnl)) filter (where status = 'closed'), 0)::float`,
+      fees:    sql<number>`coalesce(sum(coalesce(fee_amount, 0)) filter (where status = 'closed'), 0)::float`,
     })
     .from(trades)
     .where(and(...conditions))
@@ -83,7 +85,7 @@ export async function GET(req: NextRequest) {
   const closedTradeDays = await db
     .select({
       date: sql<string>`date(closed_at)::text`,
-      pnl: sql<number>`coalesce(sum(pnl), 0)::float`,
+      pnl: sql<number>`coalesce(sum(coalesce(net_pnl, pnl)), 0)::float`,
     })
     .from(trades)
     .where(and(
@@ -111,6 +113,7 @@ export async function GET(req: NextRequest) {
       winners:     summary.winners,
       losers:      summary.losers,
       totalPnl:    Math.round(summary.totalPnl * 100) / 100,
+      totalFees:   Math.round(summary.totalFees * 100) / 100,
       avgWin:      Math.round(summary.avgWin * 100) / 100,
       avgLoss:     Math.round(summary.avgLoss * 100) / 100,
       bestTrade:   Math.round(summary.bestTrade * 100) / 100,

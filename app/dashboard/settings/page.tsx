@@ -13,6 +13,7 @@ const defaults = {
   maxOpenTrades:   3,
   cooldownSeconds: 300,
   trailingStop:    false,
+  paperBalance:    10000,
 }
 
 export default function SettingsPage() {
@@ -35,6 +36,7 @@ export default function SettingsPage() {
         maxOpenTrades:   Number(data.maxOpenTrades   ?? defaults.maxOpenTrades),
         cooldownSeconds: Number(data.cooldownSeconds ?? defaults.cooldownSeconds),
         trailingStop:    data.trailingStop ?? defaults.trailingStop,
+        paperBalance:    Number(data.paperBalance ?? defaults.paperBalance),
       })
     }
   }, [data])
@@ -172,6 +174,25 @@ export default function SettingsPage() {
             checked={form.trailingStop}
             onChange={v => set('trailingStop', v)}
           />
+        </div>
+
+        <div className="pt-2 border-t border-gray-800">
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-sm text-gray-300">Paper Trading Balance</label>
+            <span className="text-sm font-mono text-brand-500 font-medium">
+              ₹{form.paperBalance.toLocaleString('en-IN')}
+            </span>
+          </div>
+          <input
+            type="range" min={1000} max={1000000} step={1000}
+            value={form.paperBalance}
+            onChange={e => set('paperBalance', Number(e.target.value))}
+            className="w-full h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer
+                       [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4
+                       [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-brand-500
+                       [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
+          />
+          <p className="text-xs text-gray-600 mt-1">Simulated capital used for paper-mode position sizing</p>
         </div>
 
         <button
