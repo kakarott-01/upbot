@@ -2,7 +2,10 @@
 
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Loader2, Power, ShieldAlert, Square, X, Zap } from 'lucide-react'
+import {
+  AlertTriangle, Loader2, Power, ShieldAlert, Square,
+  X, Zap, Play, Swords, Shield,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { InlineAlert } from '@/components/ui/inline-alert'
 import { StatusBadge } from '@/components/ui/status-badge'
@@ -10,18 +13,18 @@ import { useToastStore } from '@/lib/toast-store'
 import { cn } from '@/lib/utils'
 
 const MARKETS = [
-  { id: 'crypto', label: 'Crypto', shortLabel: 'Crypto' },
-  { id: 'indian', label: 'Indian', shortLabel: 'Indian' },
-  { id: 'global', label: 'Forex', shortLabel: 'Forex' },
-  { id: 'commodities', label: 'Commodities', shortLabel: 'Commodities' },
+  { id: 'crypto',      label: 'Crypto',       shortLabel: 'Crypto' },
+  { id: 'indian',      label: 'Indian',        shortLabel: 'Indian' },
+  { id: 'global',      label: 'Forex',         shortLabel: 'Forex' },
+  { id: 'commodities', label: 'Commodities',   shortLabel: 'Commodities' },
 ] as const
 
 type MarketId = typeof MARKETS[number]['id']
 
 type SessionItem = {
-  market: MarketId
-  status: 'running' | 'stopped' | 'error'
-  mode?: 'paper' | 'live' | null
+  market:     MarketId
+  status:     'running' | 'stopped' | 'error'
+  mode?:      'paper' | 'live' | null
   openTrades?: number
 }
 
@@ -29,30 +32,33 @@ async function safeJson(res: Response): Promise<any> {
   try { return await res.json() } catch { return {} }
 }
 
-function StopModal({
+// ── Stop ALL modal (unchanged) ────────────────────────────────────────────────
+function StopAllModal({
   openTradeCount,
   hasLiveMarkets,
   onCloseAll,
   onGraceful,
   onClose,
 }: {
-  openTradeCount: number
-  hasLiveMarkets: boolean
-  onCloseAll: () => void
-  onGraceful: () => void
-  onClose: () => void
+  openTradeCount:  number
+  hasLiveMarkets:  boolean
+  onCloseAll:      () => void
+  onGraceful:      () => void
+  onClose:         () => void
 }) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(3,7,18,0.88)', backdropFilter: 'blur(4px)' }}
-      onClick={(event) => { if (event.target === event.currentTarget) onClose() }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
       <div className="w-full max-w-lg rounded-3xl border border-gray-800 bg-gray-950 shadow-2xl">
         <div className="flex items-center justify-between border-b border-gray-800 px-5 py-4">
           <div>
             <p className="text-sm font-semibold text-gray-100">Stop all active sessions</p>
-            <p className="mt-1 text-xs text-gray-500">{openTradeCount} open trade{openTradeCount === 1 ? '' : 's'} still need protection</p>
+            <p className="mt-1 text-xs text-gray-500">
+              {openTradeCount} open trade{openTradeCount === 1 ? '' : 's'} still need protection
+            </p>
           </div>
           <button onClick={onClose} className="rounded-full p-1 text-gray-500 transition hover:bg-gray-800 hover:text-gray-200">
             <X className="h-4 w-4" />
@@ -60,17 +66,14 @@ function StopModal({
         </div>
 
         <div className="space-y-4 px-5 py-5">
-          {hasLiveMarkets ? (
+          {hasLiveMarkets && (
             <InlineAlert tone="danger" title="Live positions are exposed if monitoring stops.">
               Stopping the bot removes automated SL/TP supervision for live positions until you restart or close them manually.
             </InlineAlert>
-          ) : null}
+          )}
 
-          <button
-            type="button"
-            onClick={onCloseAll}
-            className="w-full rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-4 text-left transition hover:bg-red-500/15"
-          >
+          <button type="button" onClick={onCloseAll}
+            className="w-full rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-4 text-left transition hover:bg-red-500/15">
             <div className="flex items-start gap-3">
               <div className="rounded-2xl bg-red-500/15 p-2">
                 <Zap className="h-4 w-4 text-red-300" />
@@ -82,11 +85,8 @@ function StopModal({
             </div>
           </button>
 
-          <button
-            type="button"
-            onClick={onGraceful}
-            className="w-full rounded-2xl border border-brand-500/25 bg-brand-500/10 px-4 py-4 text-left transition hover:bg-brand-500/15"
-          >
+          <button type="button" onClick={onGraceful}
+            className="w-full rounded-2xl border border-brand-500/25 bg-brand-500/10 px-4 py-4 text-left transition hover:bg-brand-500/15">
             <div className="flex items-start gap-3">
               <div className="rounded-2xl bg-brand-500/15 p-2">
                 <ShieldAlert className="h-4 w-4 text-brand-400" />
@@ -103,13 +103,207 @@ function StopModal({
   )
 }
 
+// ── Confirm start market modal ────────────────────────────────────────────────
+function StartMarketModal({
+  market,
+  isLive,
+  strategyKeys,
+  onConfirm,
+  onClose,
+}: {
+  market:       string
+  isLive:       boolean
+  strategyKeys: string[]
+  onConfirm:    () => void
+  onClose:      () => void
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(3,7,18,0.88)', backdropFilter: 'blur(4px)' }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="w-full max-w-sm rounded-3xl border border-gray-800 bg-gray-950 shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className={cn(
+          'flex items-center gap-3 px-5 py-4 border-b',
+          isLive
+            ? 'border-red-900/40 bg-red-950/20'
+            : 'border-brand-500/20 bg-brand-500/5'
+        )}>
+          <div className={cn(
+            'w-9 h-9 rounded-2xl flex items-center justify-center flex-shrink-0',
+            isLive ? 'bg-red-500/15' : 'bg-brand-500/15'
+          )}>
+            <Play className={cn('h-4 w-4', isLive ? 'text-red-400' : 'text-brand-400')} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-gray-100">Start {market}</p>
+            <p className={cn('text-xs mt-0.5', isLive ? 'text-red-400' : 'text-gray-500')}>
+              {isLive ? '🔴 LIVE mode — real funds at risk' : '🟡 Paper mode — simulated trading'}
+            </p>
+          </div>
+          <button onClick={onClose} className="ml-auto text-gray-600 hover:text-gray-300 transition-colors flex-shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="px-5 py-5 space-y-4">
+          {isLive && (
+            <InlineAlert tone="danger" title="Real capital will be used">
+              All signals for {market} will place real orders on the exchange. Losses are unrecoverable.
+            </InlineAlert>
+          )}
+
+          {strategyKeys.length > 0 && (
+            <div className="rounded-2xl border border-gray-800 bg-gray-900/60 px-4 py-3 space-y-2">
+              <p className="text-xs text-gray-500 uppercase tracking-wide font-medium">Strategies to activate</p>
+              {strategyKeys.map((key) => (
+                <div key={key} className="flex items-center gap-2">
+                  <span className={cn(
+                    'w-1.5 h-1.5 rounded-full flex-shrink-0',
+                    isLive ? 'bg-red-400' : 'bg-brand-500'
+                  )} />
+                  <span className="text-xs font-mono text-gray-300">{key}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2 pt-1">
+            <button onClick={onClose}
+              className="flex-1 py-2.5 rounded-xl text-sm bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 transition-colors">
+              Cancel
+            </button>
+            <button
+              onClick={onConfirm}
+              className={cn(
+                'flex-1 py-2.5 rounded-xl text-sm font-semibold text-white transition-colors',
+                isLive
+                  ? 'bg-red-600 hover:bg-red-500'
+                  : 'bg-brand-500 hover:bg-brand-600'
+              )}
+            >
+              {isLive ? 'Start Live Trading' : 'Start Market'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Per-market stop modal ─────────────────────────────────────────────────────
+function MarketStopModal({
+  market,
+  isLive,
+  openTradeCount,
+  onDrain,
+  onCloseAll,
+  onClose,
+}: {
+  market:         string
+  isLive:         boolean
+  openTradeCount: number
+  onDrain:        () => void
+  onCloseAll:     () => void
+  onClose:        () => void
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(3,7,18,0.88)', backdropFilter: 'blur(4px)' }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="w-full max-w-sm rounded-3xl border border-gray-800 bg-gray-950 shadow-2xl overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-800">
+          <div className="w-9 h-9 rounded-2xl bg-amber-500/15 flex items-center justify-center flex-shrink-0">
+            <Square className="h-4 w-4 text-amber-400" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-gray-100">Stop {market}</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {openTradeCount > 0
+                ? `${openTradeCount} open position${openTradeCount !== 1 ? 's' : ''} · other markets continue running`
+                : 'No open positions · other markets continue running'}
+            </p>
+          </div>
+          <button onClick={onClose} className="ml-auto text-gray-600 hover:text-gray-300 transition-colors flex-shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="px-5 py-5 space-y-3">
+          {isLive && openTradeCount > 0 && (
+            <InlineAlert tone="danger" title="Live positions need manual supervision if unmonitored.">
+              After stopping, open positions won't have automated SL/TP until you restart or close them.
+            </InlineAlert>
+          )}
+
+          {/* Close all positions */}
+          <button type="button" onClick={onCloseAll}
+            className={cn(
+              'w-full rounded-2xl border px-4 py-4 text-left transition',
+              openTradeCount > 0
+                ? 'border-red-500/25 bg-red-500/10 hover:bg-red-500/15'
+                : 'border-gray-800 bg-gray-900/60 hover:bg-gray-800/80 opacity-60'
+            )}>
+            <div className="flex items-start gap-3">
+              <div className={cn(
+                'rounded-2xl p-2',
+                openTradeCount > 0 ? 'bg-red-500/15' : 'bg-gray-800'
+              )}>
+                <Swords className={cn('h-4 w-4', openTradeCount > 0 ? 'text-red-300' : 'text-gray-500')} />
+              </div>
+              <div>
+                <p className={cn(
+                  'text-sm font-semibold',
+                  openTradeCount > 0 ? 'text-red-200' : 'text-gray-400'
+                )}>
+                  Close all positions &amp; stop
+                </p>
+                <p className={cn(
+                  'mt-1 text-xs',
+                  openTradeCount > 0 ? 'text-red-100/80' : 'text-gray-600'
+                )}>
+                  {openTradeCount > 0
+                    ? `Immediately close ${openTradeCount} open position${openTradeCount !== 1 ? 's' : ''} and stop ${market}.`
+                    : 'No open positions to close.'}
+                </p>
+              </div>
+            </div>
+          </button>
+
+          {/* Drain gracefully */}
+          <button type="button" onClick={onDrain}
+            className="w-full rounded-2xl border border-brand-500/25 bg-brand-500/10 px-4 py-4 text-left transition hover:bg-brand-500/15">
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-brand-500/15 p-2">
+                <Shield className="h-4 w-4 text-brand-400" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-brand-300">Drain &amp; stop</p>
+                <p className="mt-1 text-xs text-gray-300/80">
+                  Stop new entries for {market}. Existing positions close on their own exit signals.
+                </p>
+              </div>
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Conflict modal (unchanged) ────────────────────────────────────────────────
 function ConflictModal({
   market,
   warnings,
   onCancel,
   onConfirm,
 }: {
-  market: string
+  market:   string
   warnings: string[]
   onCancel: () => void
   onConfirm: () => void
@@ -118,7 +312,7 @@ function ConflictModal({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(3,7,18,0.88)', backdropFilter: 'blur(4px)' }}
-      onClick={(event) => { if (event.target === event.currentTarget) onCancel() }}
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}
     >
       <div className="w-full max-w-lg rounded-3xl border border-amber-500/20 bg-gray-950 shadow-2xl">
         <div className="border-b border-amber-500/15 px-5 py-4">
@@ -130,8 +324,8 @@ function ConflictModal({
             Override is available, but the bot may block lower-priority strategies when capital is tight.
           </InlineAlert>
           <div className="space-y-2 rounded-2xl border border-gray-800 bg-gray-900/60 p-3">
-            {warnings.map((warning) => (
-              <p key={warning} className="text-xs leading-relaxed text-gray-300">{warning}</p>
+            {warnings.map((w) => (
+              <p key={w} className="text-xs leading-relaxed text-gray-300">{w}</p>
             ))}
           </div>
           <div className="flex gap-3">
@@ -144,54 +338,64 @@ function ConflictModal({
   )
 }
 
+// ── Main component ────────────────────────────────────────────────────────────
 export function BotControls({ botData }: { botData: any }) {
-  const qc = useQueryClient()
-  const pushToast = useToastStore((state) => state.push)
+  const qc        = useQueryClient()
+  const pushToast = useToastStore((s) => s.push)
   const isFiringRef = useRef(false)
-  const [showStopModal, setShowStopModal] = useState(false)
-  const [conflictState, setConflictState] = useState<{ market: MarketId; warnings: string[] } | null>(null)
+
+  // Modal state
+  const [showStopAllModal, setShowStopAllModal]   = useState(false)
+  const [startModal, setStartModal]               = useState<{ market: MarketId } | null>(null)
+  const [stopModal, setStopModal]                 = useState<{ market: MarketId; openTrades: number } | null>(null)
+  const [conflictState, setConflictState]         = useState<{ market: MarketId; warnings: string[] } | null>(null)
+  // Pending action after conflict override
+  const [pendingStart, setPendingStart]           = useState<MarketId | null>(null)
 
   const { data: modeData } = useQuery({
     queryKey: ['market-modes'],
-    queryFn: () => fetch('/api/mode').then((response) => response.json()),
+    queryFn:  () => fetch('/api/mode').then((r) => r.json()),
     staleTime: 30_000,
   })
 
   const { data: strategyConfigData } = useQuery({
     queryKey: ['strategy-configs'],
-    queryFn: () => fetch('/api/strategy-config').then((response) => response.json()),
+    queryFn:  () => fetch('/api/strategy-config').then((r) => r.json()),
     staleTime: 30_000,
   })
 
-  const status: string = botData?.status ?? 'stopped'
-  const openTradeCount: number = botData?.openTradeCount ?? 0
-  const sessions: SessionItem[] = botData?.sessions ?? []
-  const activeMarkets: MarketId[] = botData?.activeMarkets ?? []
+  const status:         string    = botData?.status        ?? 'stopped'
+  const openTradeCount: number    = botData?.openTradeCount ?? 0
+  const sessions:       SessionItem[] = botData?.sessions  ?? []
+  const activeMarkets:  MarketId[] = botData?.activeMarkets ?? []
   const botErrorMessage: string | null = botData?.errorMessage ?? null
   const isStopping = status === 'stopping'
+
   const hasLiveMarkets = (modeData?.markets ?? []).some(
-    (market: any) => market.mode === 'live' && activeMarkets.includes(market.marketType),
+    (m: any) => m.mode === 'live' && activeMarkets.includes(m.marketType),
   )
 
   const sessionByMarket = useMemo(
-    () => new Map(sessions.map((session) => [session.market, session])),
+    () => new Map(sessions.map((s) => [s.market, s])),
     [sessions],
   )
 
   const configByMarket = useMemo(
-    () => new Map((strategyConfigData?.markets ?? []).map((market: any) => [market.marketType, market])),
+    () => new Map((strategyConfigData?.markets ?? []).map((m: any) => [m.marketType, m])),
     [strategyConfigData],
   )
 
+  // ── Mutations ───────────────────────────────────────────────────────────────
+
   const syncMutation = useMutation({
     mutationFn: async ({ markets, conflictOverrides = [] }: { markets: MarketId[]; conflictOverrides?: MarketId[] }) => {
-      const response = await fetch('/api/bot/start', {
+      const res  = await fetch('/api/bot/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ markets, conflictOverrides }),
       })
-      const data = await safeJson(response)
-      if (!response.ok) throw new Error(data.error ?? `Failed to sync bot (HTTP ${response.status})`)
+      const data = await safeJson(res)
+      if (!res.ok) throw new Error(data.error ?? `Failed to sync bot (HTTP ${res.status})`)
       return data
     },
     onMutate: async ({ markets }) => {
@@ -199,30 +403,26 @@ export function BotControls({ botData }: { botData: any }) {
       const previous = qc.getQueryData(['bot-status'])
       qc.setQueryData(['bot-status'], (old: any) => ({
         ...old,
-        status: 'running',
+        status:        'running',
         activeMarkets: markets,
-        sessions: MARKETS.map((market) => ({
-          ...(sessionByMarket.get(market.id) ?? { market: market.id }),
-          market: market.id,
-          status: markets.includes(market.id) ? 'running' : 'stopped',
+        sessions: MARKETS.map((m) => ({
+          ...(sessionByMarket.get(m.id) ?? { market: m.id }),
+          market: m.id,
+          status: markets.includes(m.id) ? 'running' : 'stopped',
         })),
       }))
       return { previous }
     },
-    onError: (error: Error, _variables, context) => {
-      if (context?.previous) qc.setQueryData(['bot-status'], context.previous)
-      pushToast({
-        tone: 'error',
-        title: 'Session update failed',
-        description: error.message,
-      })
+    onError: (err: Error, _v, ctx) => {
+      if (ctx?.previous) qc.setQueryData(['bot-status'], ctx.previous)
+      pushToast({ tone: 'error', title: 'Session update failed', description: err.message })
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (_d, vars) => {
       pushToast({
         tone: 'success',
         title: 'Market sessions updated',
-        description: variables.markets.length
-          ? `Running on ${variables.markets.join(', ')}.`
+        description: vars.markets.length
+          ? `Running on ${vars.markets.join(', ')}.`
           : 'All sessions stopped.',
       })
     },
@@ -233,25 +433,21 @@ export function BotControls({ botData }: { botData: any }) {
     },
   })
 
-  const stopMutation = useMutation({
+  const stopAllMutation = useMutation({
     mutationFn: async (mode: 'close_all' | 'graceful') => {
-      const response = await fetch('/api/bot/stop', {
+      const res  = await fetch('/api/bot/stop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode }),
       })
-      const data = await safeJson(response)
-      if (!response.ok) throw new Error(data.error ?? `Failed to stop bot (HTTP ${response.status})`)
+      const data = await safeJson(res)
+      if (!res.ok) throw new Error(data.error ?? `Failed to stop bot (HTTP ${res.status})`)
       return data
     },
-    onError: (error: Error) => {
-      pushToast({
-        tone: 'error',
-        title: 'Stop request failed',
-        description: error.message,
-      })
+    onError: (err: Error) => {
+      pushToast({ tone: 'error', title: 'Stop request failed', description: err.message })
     },
-    onSuccess: (_data, mode) => {
+    onSuccess: (_d, mode) => {
       pushToast({
         tone: mode === 'close_all' ? 'warning' : 'success',
         title: mode === 'close_all' ? 'Emergency stop requested' : 'Graceful drain started',
@@ -262,79 +458,188 @@ export function BotControls({ botData }: { botData: any }) {
     },
     onSettled: () => {
       isFiringRef.current = false
-      setShowStopModal(false)
+      setShowStopAllModal(false)
       qc.invalidateQueries({ queryKey: ['bot-status'] })
       qc.invalidateQueries({ queryKey: ['bot-history'] })
     },
   })
 
+  const stopMarketMutation = useMutation({
+    mutationFn: async ({ marketType, mode }: { marketType: MarketId; mode: 'graceful' | 'close_all' }) => {
+      const res  = await fetch('/api/bot/stop-market', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ marketType, mode }),
+      })
+      const data = await safeJson(res)
+      if (!res.ok) throw new Error(data.error ?? `Failed to stop ${marketType}`)
+      return data
+    },
+    onMutate: async ({ marketType }) => {
+      await qc.cancelQueries({ queryKey: ['bot-status'] })
+      const previous = qc.getQueryData(['bot-status'])
+      qc.setQueryData(['bot-status'], (old: any) => ({
+        ...old,
+        activeMarkets: (old?.activeMarkets ?? []).filter((m: string) => m !== marketType),
+        sessions: (old?.sessions ?? []).map((s: any) =>
+          s.market === marketType ? { ...s, status: 'stopped' } : s
+        ),
+      }))
+      return { previous }
+    },
+    onError: (err: Error, vars, ctx) => {
+      if (ctx?.previous) qc.setQueryData(['bot-status'], ctx.previous)
+      pushToast({ tone: 'error', title: `Failed to stop ${vars.marketType}`, description: err.message })
+    },
+    onSuccess: (data) => {
+      const label = MARKETS.find((m) => m.id === data.stoppedMarket)?.label ?? data.stoppedMarket
+      pushToast({
+        tone: data.mode === 'close_all' ? 'warning' : 'success',
+        title: data.mode === 'close_all'
+          ? `${label} — closing positions`
+          : `${label} drained`,
+        description: data.mode === 'close_all'
+          ? `Closing ${data.openPositionsClosed} position${data.openPositionsClosed !== 1 ? 's' : ''}.`
+          : 'Market stopped, existing positions remain open.',
+      })
+    },
+    onSettled: () => {
+      setStopModal(null)
+      isFiringRef.current = false
+      qc.invalidateQueries({ queryKey: ['bot-status'] })
+      qc.invalidateQueries({ queryKey: ['bot-history'] })
+    },
+  })
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
   function marketWarnings(marketId: MarketId) {
-    const config = configByMarket.get(marketId) as any
-    return (config?.conflictWarnings ?? []).map((warning: any) => warning.message)
+    const cfg = configByMarket.get(marketId) as any
+    return (cfg?.conflictWarnings ?? []).map((w: any) => w.message)
   }
 
-  function handleToggle(marketId: MarketId, forceOverride = false) {
-    if (isFiringRef.current || syncMutation.isPending || stopMutation.isPending || isStopping) return
+  function isMarketLive(marketId: MarketId): boolean {
+    const market = (modeData?.markets ?? []).find((m: any) => m.marketType === marketId)
+    return market?.mode === 'live'
+  }
 
-    const currentlyActive = activeMarkets.includes(marketId)
-    const nextMarkets = currentlyActive
-      ? activeMarkets.filter((market) => market !== marketId)
-      : [...activeMarkets, marketId]
+  function marketStrategyKeys(marketId: MarketId): string[] {
+    const cfg = configByMarket.get(marketId) as any
+    return cfg?.strategyKeys ?? []
+  }
 
-    if (!currentlyActive) {
+  function marketOpenTrades(marketId: MarketId): number {
+    const s = sessionByMarket.get(marketId)
+    return s?.openTrades ?? 0
+  }
+
+  // ── Click handler ────────────────────────────────────────────────────────────
+
+  function handleMarketClick(marketId: MarketId) {
+    if (isFiringRef.current || syncMutation.isPending || stopAllMutation.isPending || stopMarketMutation.isPending || isStopping) return
+
+    const isActive = activeMarkets.includes(marketId)
+
+    if (isActive) {
+      // Show per-market stop modal
+      const trades = marketOpenTrades(marketId)
+      setStopModal({ market: marketId, openTrades: trades })
+    } else {
+      // Check for conflicts first
       const warnings = marketWarnings(marketId)
-      if (warnings.length > 0 && !forceOverride) {
+      if (warnings.length > 0) {
         setConflictState({ market: marketId, warnings })
-        return
+        setPendingStart(marketId)
+      } else {
+        setStartModal({ market: marketId })
       }
     }
+  }
 
+  function confirmStart(marketId: MarketId, overrideConflicts = false) {
     isFiringRef.current = true
-    if (nextMarkets.length === 0) {
-      stopMutation.mutate('graceful')
-      return
-    }
-
+    const nextMarkets = [...activeMarkets, marketId]
     syncMutation.mutate({
       markets: nextMarkets,
-      conflictOverrides: forceOverride ? [marketId] : [],
+      conflictOverrides: overrideConflicts ? [marketId] : [],
     })
+    setStartModal(null)
+    setPendingStart(null)
   }
+
+  function confirmMarketStop(marketId: MarketId, mode: 'graceful' | 'close_all') {
+    isFiringRef.current = true
+    stopMarketMutation.mutate({ marketType: marketId, mode })
+  }
+
+  const ALL_MARKETS = MARKETS
 
   return (
     <>
-      {showStopModal ? (
-        <StopModal
-          openTradeCount={openTradeCount}
-          hasLiveMarkets={hasLiveMarkets}
-          onClose={() => setShowStopModal(false)}
-          onCloseAll={() => stopMutation.mutate('close_all')}
-          onGraceful={() => stopMutation.mutate('graceful')}
+      {/* Start confirmation modal */}
+      {startModal && (
+        <StartMarketModal
+          market={MARKETS.find((m) => m.id === startModal.market)?.label ?? startModal.market}
+          isLive={isMarketLive(startModal.market)}
+          strategyKeys={marketStrategyKeys(startModal.market)}
+          onConfirm={() => confirmStart(startModal.market)}
+          onClose={() => setStartModal(null)}
         />
-      ) : null}
+      )}
 
-      {conflictState ? (
+      {/* Per-market stop modal */}
+      {stopModal && (
+        <MarketStopModal
+          market={MARKETS.find((m) => m.id === stopModal.market)?.label ?? stopModal.market}
+          isLive={isMarketLive(stopModal.market)}
+          openTradeCount={stopModal.openTrades}
+          onDrain={() => confirmMarketStop(stopModal.market, 'graceful')}
+          onCloseAll={() => confirmMarketStop(stopModal.market, 'close_all')}
+          onClose={() => setStopModal(null)}
+        />
+      )}
+
+      {/* Conflict warning modal */}
+      {conflictState && (
         <ConflictModal
-          market={MARKETS.find((item) => item.id === conflictState.market)?.label ?? conflictState.market}
+          market={MARKETS.find((m) => m.id === conflictState.market)?.label ?? conflictState.market}
           warnings={conflictState.warnings}
-          onCancel={() => setConflictState(null)}
+          onCancel={() => { setConflictState(null); setPendingStart(null) }}
           onConfirm={() => {
             const market = conflictState.market
             setConflictState(null)
-            handleToggle(market, true)
+            // After conflict override, show start confirmation modal
+            setStartModal({ market })
           }}
         />
-      ) : null}
+      )}
+
+      {/* Stop ALL modal */}
+      {showStopAllModal && (
+        <StopAllModal
+          openTradeCount={openTradeCount}
+          hasLiveMarkets={hasLiveMarkets}
+          onClose={() => setShowStopAllModal(false)}
+          onCloseAll={() => stopAllMutation.mutate('close_all')}
+          onGraceful={() => stopAllMutation.mutate('graceful')}
+        />
+      )}
 
       <div className="surface-panel w-full max-w-md p-4">
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Bot Status</p>
             <div className="mt-2 flex items-center gap-2">
-              <StatusBadge tone={status === 'running' ? 'success' : status === 'stopping' ? 'warning' : status === 'error' ? 'danger' : 'neutral'}>
+              <StatusBadge tone={
+                status === 'running'  ? 'success' :
+                status === 'stopping' ? 'warning' :
+                status === 'error'    ? 'danger'  : 'neutral'
+              }>
                 {status.toUpperCase()}
               </StatusBadge>
-              <span className="text-xs text-gray-500">{activeMarkets.length} active market{activeMarkets.length === 1 ? '' : 's'}</span>
+              <span className="text-xs text-gray-500">
+                {activeMarkets.length} active market{activeMarkets.length === 1 ? '' : 's'}
+              </span>
             </div>
           </div>
           <StatusBadge tone={hasLiveMarkets ? 'danger' : 'info'}>
@@ -343,76 +648,128 @@ export function BotControls({ botData }: { botData: any }) {
         </div>
 
         <div className="mt-4 space-y-2">
-          {MARKETS.map((market) => {
-            const session = sessionByMarket.get(market.id)
-            const isActive = activeMarkets.includes(market.id)
-            const config = configByMarket.get(market.id) as any
+          {ALL_MARKETS.map((market) => {
+            const session    = sessionByMarket.get(market.id)
+            const isActive   = activeMarkets.includes(market.id)
+            const config     = configByMarket.get(market.id) as any
             const hasStrategies = (config?.strategyKeys ?? []).length > 0
-            const warnings = marketWarnings(market.id)
-            const disabled = syncMutation.isPending || stopMutation.isPending || isStopping || !hasStrategies
+            const warnings   = marketWarnings(market.id)
+            const isLive     = isMarketLive(market.id)
+            const openTrades = marketOpenTrades(market.id)
+
+            const isMutating = (
+              (syncMutation.isPending || stopMarketMutation.isPending) &&
+              (
+                // syncing this market in or out
+                (syncMutation.variables?.markets?.includes(market.id) || !syncMutation.variables?.markets?.includes(market.id)) ||
+                stopMarketMutation.variables?.marketType === market.id
+              )
+            )
+            const isThisMarketMutating = stopMarketMutation.isPending && stopMarketMutation.variables?.marketType === market.id
+            const disabled = isStopping || !hasStrategies || stopAllMutation.isPending || isThisMarketMutating
+
             return (
               <button
                 key={market.id}
                 type="button"
                 disabled={disabled}
-                onClick={() => handleToggle(market.id)}
+                onClick={() => handleMarketClick(market.id)}
                 className={cn(
-                  'flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition',
+                  'flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition group',
                   isActive
-                    ? 'border-brand-500/30 bg-brand-500/10'
+                    ? isLive
+                      ? 'border-red-500/30 bg-red-950/20 hover:bg-red-950/30'
+                      : 'border-brand-500/30 bg-brand-500/10 hover:bg-brand-500/15'
                     : 'border-gray-800 bg-gray-950/60 hover:border-gray-700',
-                  disabled ? 'cursor-not-allowed opacity-60' : '',
+                  disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
                 )}
               >
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-medium text-gray-100">{market.shortLabel}</span>
-                    <StatusBadge tone={isActive ? 'success' : session?.status === 'error' ? 'danger' : 'neutral'}>
+
+                    <StatusBadge tone={
+                      isActive              ? (isLive ? 'danger' : 'success') :
+                      session?.status === 'error' ? 'danger' : 'neutral'
+                    }>
                       {isActive ? 'Running' : 'Stopped'}
                     </StatusBadge>
-                    {session?.mode === 'live' ? <StatusBadge tone="danger">Live</StatusBadge> : null}
+
+                    {isActive && isLive && (
+                      <StatusBadge tone="danger">Live</StatusBadge>
+                    )}
+
+                    {isActive && openTrades > 0 && (
+                      <span className="text-xs text-amber-400 bg-amber-900/20 border border-amber-800/30 px-1.5 py-0.5 rounded-full">
+                        {openTrades} open
+                      </span>
+                    )}
                   </div>
                   <p className="mt-1 text-xs text-gray-500">
                     {hasStrategies
-                      ? `${config?.strategyKeys?.length ?? 0} strategy slot${(config?.strategyKeys?.length ?? 0) === 1 ? '' : 's'} configured`
+                      ? `${config?.strategyKeys?.length ?? 0} strategy slot${(config?.strategyKeys?.length ?? 0) === 1 ? '' : 's'}`
                       : 'No strategies selected'}
-                    {warnings.length ? ` · ${warnings.length} conflict warning${warnings.length === 1 ? '' : 's'}` : ''}
+                    {warnings.length > 0 ? ` · ${warnings.length} conflict${warnings.length === 1 ? '' : 's'}` : ''}
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  {(syncMutation.isPending || stopMutation.isPending) && isActive ? (
-                    <Loader2 className="h-4 w-4 animate-spin text-brand-400" />
+
+                <div className="flex items-center gap-2 ml-2 flex-shrink-0">
+                  {isThisMarketMutating ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                   ) : null}
-                  <div className={cn('h-3 w-3 rounded-full', isActive ? 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.6)]' : 'bg-gray-600')} />
+
+                  {/* Action hint on hover */}
+                  {!disabled && !isThisMarketMutating && (
+                    <span className={cn(
+                      'text-[10px] font-medium px-2 py-0.5 rounded-lg border opacity-0 group-hover:opacity-100 transition-opacity',
+                      isActive
+                        ? 'text-amber-400 bg-amber-900/20 border-amber-800/30'
+                        : 'text-brand-400 bg-brand-500/10 border-brand-500/20'
+                    )}>
+                      {isActive ? 'Stop' : 'Start'}
+                    </span>
+                  )}
+
+                  <div className={cn(
+                    'h-3 w-3 rounded-full transition-all',
+                    isActive
+                      ? isLive
+                        ? 'bg-red-400 shadow-[0_0_12px_rgba(248,113,113,0.6)]'
+                        : 'bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.6)]'
+                      : 'bg-gray-600',
+                    isActive && 'animate-pulse'
+                  )} />
                 </div>
               </button>
             )
           })}
         </div>
 
-        {botErrorMessage ? (
+        {botErrorMessage && (
           <InlineAlert tone="danger" title="Bot error" className="mt-4">
             {botErrorMessage}
           </InlineAlert>
-        ) : null}
+        )}
 
-        {!activeMarkets.length ? (
+        {!activeMarkets.length && !isStopping && (
           <InlineAlert tone="info" title="No markets running" className="mt-4">
-            Enable a market session to start scheduling only that market. The bot stays available without a full restart cycle.
+            Click any market to start it. Each market runs independently — you can start and stop them one at a time.
           </InlineAlert>
-        ) : null}
+        )}
 
         <div className="mt-4 flex items-center justify-between gap-3">
           <div className="text-xs text-gray-500">
-            {openTradeCount > 0 ? `${openTradeCount} open trade${openTradeCount === 1 ? '' : 's'} across active sessions` : 'No open trades'}
+            {openTradeCount > 0
+              ? `${openTradeCount} open trade${openTradeCount === 1 ? '' : 's'} across active sessions`
+              : 'No open trades'}
           </div>
           <Button
             variant="danger"
             className="min-w-[8.5rem]"
-            disabled={stopMutation.isPending || syncMutation.isPending || (!activeMarkets.length && !openTradeCount)}
-            onClick={() => setShowStopModal(true)}
+            disabled={stopAllMutation.isPending || syncMutation.isPending || (!activeMarkets.length && !openTradeCount)}
+            onClick={() => setShowStopAllModal(true)}
           >
-            {stopMutation.isPending ? (
+            {stopAllMutation.isPending ? (
               <><Loader2 className="h-4 w-4 animate-spin" />Stopping…</>
             ) : (
               <><Square className="h-4 w-4" />Stop All</>
@@ -420,19 +777,19 @@ export function BotControls({ botData }: { botData: any }) {
           </Button>
         </div>
 
-        {isStopping ? (
+        {isStopping && (
           <div className="mt-3 flex items-center gap-2 rounded-2xl border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
             <Power className="h-3.5 w-3.5" />
             Graceful stop is in progress. Market toggles are temporarily locked.
           </div>
-        ) : null}
+        )}
 
-        {(strategyConfigData?.markets ?? []).some((market: any) => market.executionMode === 'AGGRESSIVE') ? (
+        {(strategyConfigData?.markets ?? []).some((m: any) => m.executionMode === 'AGGRESSIVE') && (
           <div className="mt-3 flex items-start gap-2 rounded-2xl border border-red-500/15 bg-red-500/10 px-3 py-2 text-xs text-red-100">
             <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
             At least one market is configured for AGGRESSIVE mode. Capital is managed per strategy and lower-priority entries can be blocked when exposure tightens.
           </div>
-        ) : null}
+        )}
       </div>
     </>
   )
