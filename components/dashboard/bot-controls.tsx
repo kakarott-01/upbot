@@ -32,7 +32,7 @@ async function safeJson(res: Response): Promise<any> {
   try { return await res.json() } catch { return {} }
 }
 
-// ── Stop ALL modal (unchanged) ────────────────────────────────────────────────
+// ── Stop ALL modal ────────────────────────────────────────────────────────────
 function StopAllModal({
   openTradeCount,
   hasLiveMarkets,
@@ -241,13 +241,16 @@ function MarketStopModal({
             </InlineAlert>
           )}
 
-          {/* Close all positions */}
-          <button type="button" onClick={onCloseAll}
+          {/* Close all positions — always shown, greyed when no trades */}
+          <button
+            type="button"
+            onClick={openTradeCount > 0 ? onCloseAll : undefined}
+            disabled={openTradeCount === 0}
             className={cn(
               'w-full rounded-2xl border px-4 py-4 text-left transition',
               openTradeCount > 0
-                ? 'border-red-500/25 bg-red-500/10 hover:bg-red-500/15'
-                : 'border-gray-800 bg-gray-900/60 hover:bg-gray-800/80 opacity-60'
+                ? 'border-red-500/25 bg-red-500/10 hover:bg-red-500/15 cursor-pointer'
+                : 'border-gray-800 bg-gray-900/40 cursor-not-allowed opacity-50'
             )}>
             <div className="flex items-start gap-3">
               <div className={cn(
@@ -259,7 +262,7 @@ function MarketStopModal({
               <div>
                 <p className={cn(
                   'text-sm font-semibold',
-                  openTradeCount > 0 ? 'text-red-200' : 'text-gray-400'
+                  openTradeCount > 0 ? 'text-red-200' : 'text-gray-500'
                 )}>
                   Close all positions &amp; stop
                 </p>
@@ -275,9 +278,9 @@ function MarketStopModal({
             </div>
           </button>
 
-          {/* Drain gracefully */}
+          {/* Drain gracefully — always available */}
           <button type="button" onClick={onDrain}
-            className="w-full rounded-2xl border border-brand-500/25 bg-brand-500/10 px-4 py-4 text-left transition hover:bg-brand-500/15">
+            className="w-full rounded-2xl border border-brand-500/25 bg-brand-500/10 px-4 py-4 text-left transition hover:bg-brand-500/15 cursor-pointer">
             <div className="flex items-start gap-3">
               <div className="rounded-2xl bg-brand-500/15 p-2">
                 <Shield className="h-4 w-4 text-brand-400" />
@@ -296,7 +299,7 @@ function MarketStopModal({
   )
 }
 
-// ── Conflict modal (unchanged) ────────────────────────────────────────────────
+// ── Conflict modal ────────────────────────────────────────────────────────────
 function ConflictModal({
   market,
   warnings,
@@ -349,7 +352,6 @@ export function BotControls({ botData }: { botData: any }) {
   const [startModal, setStartModal]               = useState<{ market: MarketId } | null>(null)
   const [stopModal, setStopModal]                 = useState<{ market: MarketId; openTrades: number } | null>(null)
   const [conflictState, setConflictState]         = useState<{ market: MarketId; warnings: string[] } | null>(null)
-  // Pending action after conflict override
   const [pendingStart, setPendingStart]           = useState<MarketId | null>(null)
 
   const { data: modeData } = useQuery({
@@ -370,6 +372,9 @@ export function BotControls({ botData }: { botData: any }) {
   const activeMarkets:  MarketId[] = botData?.activeMarkets ?? []
   const botErrorMessage: string | null = botData?.errorMessage ?? null
   const isStopping = status === 'stopping'
+
+  // ── FIX: Use perMarketOpenTrades from API for accurate per-market counts ──
+  const perMarketOpenTrades: Record<string, number> = botData?.perMarketOpenTrades ?? {}
 
   const hasLiveMarkets = (modeData?.markets ?? []).some(
     (m: any) => m.mode === 'live' && activeMarkets.includes(m.marketType),
@@ -528,9 +533,9 @@ export function BotControls({ botData }: { botData: any }) {
     return cfg?.strategyKeys ?? []
   }
 
+  // ── FIX: Read per-market open trade count from the API (not stale session data) ──
   function marketOpenTrades(marketId: MarketId): number {
-    const s = sessionByMarket.get(marketId)
-    return s?.openTrades ?? 0
+    return perMarketOpenTrades[marketId] ?? 0
   }
 
   // ── Click handler ────────────────────────────────────────────────────────────
@@ -541,11 +546,9 @@ export function BotControls({ botData }: { botData: any }) {
     const isActive = activeMarkets.includes(marketId)
 
     if (isActive) {
-      // Show per-market stop modal
       const trades = marketOpenTrades(marketId)
       setStopModal({ market: marketId, openTrades: trades })
     } else {
-      // Check for conflicts first
       const warnings = marketWarnings(marketId)
       if (warnings.length > 0) {
         setConflictState({ market: marketId, warnings })
@@ -576,7 +579,6 @@ export function BotControls({ botData }: { botData: any }) {
 
   return (
     <>
-      {/* Start confirmation modal */}
       {startModal && (
         <StartMarketModal
           market={MARKETS.find((m) => m.id === startModal.market)?.label ?? startModal.market}
@@ -587,7 +589,6 @@ export function BotControls({ botData }: { botData: any }) {
         />
       )}
 
-      {/* Per-market stop modal */}
       {stopModal && (
         <MarketStopModal
           market={MARKETS.find((m) => m.id === stopModal.market)?.label ?? stopModal.market}
@@ -599,7 +600,6 @@ export function BotControls({ botData }: { botData: any }) {
         />
       )}
 
-      {/* Conflict warning modal */}
       {conflictState && (
         <ConflictModal
           market={MARKETS.find((m) => m.id === conflictState.market)?.label ?? conflictState.market}
@@ -608,13 +608,11 @@ export function BotControls({ botData }: { botData: any }) {
           onConfirm={() => {
             const market = conflictState.market
             setConflictState(null)
-            // After conflict override, show start confirmation modal
             setStartModal({ market })
           }}
         />
       )}
 
-      {/* Stop ALL modal */}
       {showStopAllModal && (
         <StopAllModal
           openTradeCount={openTradeCount}
@@ -655,16 +653,9 @@ export function BotControls({ botData }: { botData: any }) {
             const hasStrategies = (config?.strategyKeys ?? []).length > 0
             const warnings   = marketWarnings(market.id)
             const isLive     = isMarketLive(market.id)
+            // ── FIX: use live count from API ──
             const openTrades = marketOpenTrades(market.id)
 
-            const isMutating = (
-              (syncMutation.isPending || stopMarketMutation.isPending) &&
-              (
-                // syncing this market in or out
-                (syncMutation.variables?.markets?.includes(market.id) || !syncMutation.variables?.markets?.includes(market.id)) ||
-                stopMarketMutation.variables?.marketType === market.id
-              )
-            )
             const isThisMarketMutating = stopMarketMutation.isPending && stopMarketMutation.variables?.marketType === market.id
             const disabled = isStopping || !hasStrategies || stopAllMutation.isPending || isThisMarketMutating
 
@@ -718,7 +709,6 @@ export function BotControls({ botData }: { botData: any }) {
                     <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
                   ) : null}
 
-                  {/* Action hint on hover */}
                   {!disabled && !isThisMarketMutating && (
                     <span className={cn(
                       'text-[10px] font-medium px-2 py-0.5 rounded-lg border opacity-0 group-hover:opacity-100 transition-opacity',

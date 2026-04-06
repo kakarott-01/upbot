@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, BarChart3, CalendarRange, Loader2, Play } from 'lucide-react'
+import { AlertTriangle, BarChart3, CalendarRange, Loader2, Play, Trash2, X, CheckSquare, Square } from 'lucide-react'
 import { ResponsiveContainer, LineChart, Line, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts'
 import { Button } from '@/components/ui/button'
 import { InlineAlert } from '@/components/ui/inline-alert'
@@ -33,14 +33,75 @@ const DEFAULT_ASSETS = {
   global: 'SPY',
 } as const
 
-const MAX_RANGE_START = '2017-01-01T00:00'
-const MAX_RANGE_HINT = 'Backtests fetch historical data in chunks, so you can use the broadest exchange-supported date range for the selected asset and timeframe.'
+// ── FIX: Use a safe default range (30 days ago) instead of 2017
+// Many exchanges only support limited history windows per query.
+// The "Use max range" button now sets a reasonable 90-day window
+// that works reliably across exchanges including BingX.
+const SAFE_MAX_DAYS = 90
+
+function getSafeMaxRange(): { from: string; to: string } {
+  const now = new Date()
+  const from = new Date(now.getTime() - SAFE_MAX_DAYS * 24 * 60 * 60 * 1000)
+  return {
+    from: from.toISOString().slice(0, 16),
+    to:   now.toISOString().slice(0, 16),
+  }
+}
 
 function EmptyState({ title, description }: { title: string; description: string }) {
   return (
     <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-950/30 px-4 py-10 text-center">
       <p className="text-sm font-medium text-gray-200">{title}</p>
       <p className="mt-2 text-sm text-gray-500">{description}</p>
+    </div>
+  )
+}
+
+// ── Delete confirmation modal ─────────────────────────────────────────────────
+function DeleteConfirmModal({
+  count,
+  onConfirm,
+  onClose,
+}: {
+  count: number
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(3,7,18,0.85)', backdropFilter: 'blur(4px)' }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div className="w-full max-w-sm bg-gray-900 border border-red-900/40 rounded-2xl shadow-2xl overflow-hidden">
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-red-900/30 bg-red-950/20">
+          <div className="w-8 h-8 rounded-lg bg-red-500/15 flex items-center justify-center">
+            <Trash2 className="w-4 h-4 text-red-400" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-red-300">Delete Backtest{count !== 1 ? 's' : ''}</p>
+            <p className="text-xs text-red-400/70">This cannot be undone</p>
+          </div>
+          <button onClick={onClose} className="ml-auto text-gray-600 hover:text-gray-300">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        <div className="px-5 py-5 space-y-4">
+          <p className="text-sm text-gray-300">
+            Delete <span className="font-semibold text-white">{count}</span> backtest run{count !== 1 ? 's' : ''}?
+          </p>
+          <div className="flex gap-2">
+            <button onClick={onClose}
+              className="flex-1 py-2.5 rounded-xl text-sm bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 transition-colors">
+              Cancel
+            </button>
+            <button onClick={onConfirm}
+              className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-red-600 hover:bg-red-500 text-white transition-colors">
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -60,6 +121,10 @@ export default function BacktestsPage() {
   const [strategyKeys, setStrategyKeys] = useState<string[]>(['TREND_RIDER_V1'])
   const [result, setResult] = useState<any>(null)
   const [error, setError] = useState<string | null>(null)
+
+  // ── Delete state ──────────────────────────────────────────────────────────
+  const [selectedRuns, setSelectedRuns] = useState<Set<string>>(new Set())
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<{ ids: string[]; count: number } | null>(null)
 
   const { data: strategyData } = useQuery({
     queryKey: ['strategy-catalog'],
@@ -108,6 +173,37 @@ export default function BacktestsPage() {
       setTimeframe(timeframeOptions[0])
     }
   }, [timeframe, timeframeOptions])
+
+  // ── Delete mutation ───────────────────────────────────────────────────────
+  const deleteMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const results = await Promise.all(
+        ids.map((id) =>
+          fetch(`/api/backtests/${id}`, { method: 'DELETE' }).then(async (r) => {
+            if (!r.ok) {
+              const d = await r.json().catch(() => ({}))
+              throw new Error(d.error ?? `Failed to delete ${id}`)
+            }
+            return id
+          })
+        )
+      )
+      return results
+    },
+    onSuccess: (deletedIds) => {
+      qc.invalidateQueries({ queryKey: ['backtest-runs'] })
+      setSelectedRuns(new Set())
+      setShowDeleteConfirm(null)
+      pushToast({
+        tone: 'success',
+        title: `${deletedIds.length} backtest${deletedIds.length !== 1 ? 's' : ''} deleted`,
+      })
+    },
+    onError: (err: Error) => {
+      setShowDeleteConfirm(null)
+      pushToast({ tone: 'error', title: 'Delete failed', description: err.message })
+    },
+  })
 
   const runMutation = useMutation({
     mutationFn: async () => {
@@ -191,6 +287,26 @@ export default function BacktestsPage() {
     })
   }
 
+  // ── Selection helpers ─────────────────────────────────────────────────────
+  const allRuns: any[] = runsData?.runs ?? []
+  const allSelected = allRuns.length > 0 && selectedRuns.size === allRuns.length
+
+  function toggleSelectAll() {
+    if (allSelected) {
+      setSelectedRuns(new Set())
+    } else {
+      setSelectedRuns(new Set(allRuns.map((r: any) => r.id)))
+    }
+  }
+
+  function toggleSelectRun(id: string) {
+    setSelectedRuns((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
   const metrics = result?.performance_metrics
   const equityCurve = result?.equity_curve ?? []
   const tradeSummary = result?.trade_summary ?? []
@@ -198,6 +314,15 @@ export default function BacktestsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-7xl flex-col gap-5">
+      {/* Delete confirm modal */}
+      {showDeleteConfirm && (
+        <DeleteConfirmModal
+          count={showDeleteConfirm.count}
+          onConfirm={() => deleteMutation.mutate(showDeleteConfirm.ids)}
+          onClose={() => setShowDeleteConfirm(null)}
+        />
+      )}
+
       <div className="rounded-3xl border border-gray-800 bg-gradient-to-br from-gray-900 via-slate-950 to-gray-950 p-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
@@ -221,15 +346,19 @@ export default function BacktestsPage() {
           </div>
 
           <div className="mt-4 space-y-4">
-            <InlineAlert tone="info" title="Maximum history">
+            <InlineAlert tone="info" title="Date range tips">
               <div className="space-y-2">
-                <p>{MAX_RANGE_HINT}</p>
+                <p>Use the quick-set button for a reliable 90-day window. For wider ranges, set dates manually — exchange API limits vary by provider.</p>
                 <button
                   type="button"
-                  onClick={() => setDateFrom(MAX_RANGE_START)}
+                  onClick={() => {
+                    const range = getSafeMaxRange()
+                    setDateFrom(range.from)
+                    setDateTo(range.to)
+                  }}
                   className="rounded-lg border border-brand-500/25 bg-brand-500/10 px-2.5 py-1.5 text-[11px] font-medium text-brand-300 transition hover:bg-brand-500/15"
                 >
-                  Use max range
+                  Use 90-day range
                 </button>
               </div>
             </InlineAlert>
@@ -370,7 +499,12 @@ export default function BacktestsPage() {
             </div>
           </div>
 
-          {error ? <p className="mt-4 text-xs text-red-400">{error}</p> : null}
+          {error ? (
+            <div className="mt-4 flex items-start gap-2 rounded-2xl border border-red-500/20 bg-red-500/10 px-3 py-3">
+              <AlertTriangle className="h-4 w-4 text-red-400 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-red-300 leading-relaxed">{error}</p>
+            </div>
+          ) : null}
 
           <div className="sticky-actions mt-5">
             <div className="text-xs text-gray-500">
@@ -480,26 +614,119 @@ export default function BacktestsPage() {
             )}
           </div>
 
+          {/* ── Recent Runs with delete functionality ── */}
           <div className="card">
-            <div className="mb-4 flex items-center justify-between gap-2">
-              <h2 className="text-sm font-medium text-gray-300">Recent Runs</h2>
-              <StatusBadge tone="neutral">{runsData?.runs?.length ?? 0}</StatusBadge>
+            <div className="mb-4 flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-3">
+                <h2 className="text-sm font-medium text-gray-300">Recent Runs</h2>
+                <StatusBadge tone="neutral">{allRuns.length}</StatusBadge>
+              </div>
+              {/* Delete controls — shown when there are runs */}
+              {allRuns.length > 0 && (
+                <div className="flex items-center gap-2">
+                  {selectedRuns.size > 0 && (
+                    <button
+                      onClick={() => setShowDeleteConfirm({ ids: Array.from(selectedRuns), count: selectedRuns.size })}
+                      disabled={deleteMutation.isPending}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-400 bg-red-900/20 hover:bg-red-900/30 border border-red-900/30 rounded-lg transition-colors disabled:opacity-40"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Delete {selectedRuns.size} selected
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowDeleteConfirm({ ids: allRuns.map((r: any) => r.id), count: allRuns.length })}
+                    disabled={deleteMutation.isPending || allRuns.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-400 bg-red-900/15 hover:bg-red-900/25 border border-red-900/30 rounded-lg transition-colors disabled:opacity-40"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    Delete all
+                  </button>
+                </div>
+              )}
             </div>
-            {(runsData?.runs ?? []).length > 0 ? (
+
+            {allRuns.length > 0 ? (
               <div className="space-y-2">
-                {(runsData?.runs ?? []).map((run: any) => (
-                  <div key={run.id} className="rounded-2xl border border-gray-800 bg-gray-950/60 px-3 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm text-gray-200">{run.asset} · {run.executionMode} · {run.positionMode ?? 'NET'}</p>
-                        <p className="mt-1 text-xs text-gray-500">{(run.strategyKeys ?? []).join(', ')}</p>
+                {/* Select all row */}
+                <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-gray-900/40 border border-gray-800/60">
+                  <button
+                    type="button"
+                    onClick={toggleSelectAll}
+                    className="text-gray-500 hover:text-brand-500 transition-colors flex-shrink-0"
+                  >
+                    {allSelected
+                      ? <CheckSquare className="w-4 h-4 text-brand-500" />
+                      : <Square className="w-4 h-4" />
+                    }
+                  </button>
+                  <span className="text-xs text-gray-500">
+                    {selectedRuns.size > 0 ? `${selectedRuns.size} of ${allRuns.length} selected` : 'Select all'}
+                  </span>
+                </div>
+
+                {allRuns.map((run: any) => {
+                  const isSelected = selectedRuns.has(run.id)
+                  return (
+                    <div
+                      key={run.id}
+                      className={`rounded-2xl border px-3 py-3 transition-colors ${
+                        isSelected
+                          ? 'border-brand-500/30 bg-brand-500/5'
+                          : 'border-gray-800 bg-gray-950/60'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        {/* Checkbox */}
+                        <button
+                          type="button"
+                          onClick={() => toggleSelectRun(run.id)}
+                          className="text-gray-600 hover:text-brand-500 transition-colors flex-shrink-0"
+                        >
+                          {isSelected
+                            ? <CheckSquare className="w-4 h-4 text-brand-500" />
+                            : <Square className="w-4 h-4" />
+                          }
+                        </button>
+
+                        {/* Run info */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm text-gray-200 font-medium">{run.asset}</p>
+                            <span className="text-xs text-gray-600">·</span>
+                            <p className="text-xs text-gray-400">{run.executionMode} · {run.positionMode ?? 'NET'}</p>
+                          </div>
+                          <p className="mt-0.5 text-xs text-gray-500">
+                            {(run.strategyKeys ?? []).join(', ')}
+                          </p>
+                          {run.performanceMetrics && (
+                            <div className="mt-1.5 flex items-center gap-3 flex-wrap">
+                              <span className={`text-xs font-semibold font-mono ${Number(run.performanceMetrics.totalReturnPct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {Number(run.performanceMetrics.totalReturnPct) >= 0 ? '+' : ''}{run.performanceMetrics.totalReturnPct}%
+                              </span>
+                              <span className="text-xs text-gray-600">{run.performanceMetrics.winRate}% WR</span>
+                              <span className="text-xs text-gray-600">DD {run.performanceMetrics.maxDrawdown}%</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Status + single delete */}
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <StatusBadge tone={run.status === 'completed' ? 'success' : run.status === 'failed' ? 'danger' : 'warning'}>
+                            {run.status}
+                          </StatusBadge>
+                          <button
+                            onClick={() => setShowDeleteConfirm({ ids: [run.id], count: 1 })}
+                            disabled={deleteMutation.isPending}
+                            className="p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-40"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
-                      <StatusBadge tone={run.status === 'completed' ? 'success' : run.status === 'failed' ? 'danger' : 'warning'}>
-                        {run.status}
-                      </StatusBadge>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             ) : (
               <EmptyState title="No backtests yet" description="Run your first strategy test to build a comparison history." />

@@ -4,7 +4,8 @@
 // to "stopped" the moment all positions close — without relying on the
 // Python→Next.js HTTP callback (which can fail on Render cold starts).
 //
-// Also exposes stopMode, openTradeCount, stoppingAt, and timeoutWarning.
+// Also exposes stopMode, openTradeCount, stoppingAt, timeoutWarning,
+// AND perMarketOpenTrades (new) so per-market stop modals show correct counts.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
@@ -59,38 +60,55 @@ export async function GET(req: NextRequest) {
 
   if (!status) {
     return NextResponse.json({
-      status:          'stopped',
-      stopMode:        null,
-      activeMarkets:   [],
-      startedAt:       null,
-      stoppingAt:      null,
-      lastHeartbeat:   null,
-      errorMessage:    null,
-      openTradeCount:  0,
-      timeoutWarning:  false,
+      status:                'stopped',
+      stopMode:              null,
+      activeMarkets:         [],
+      startedAt:             null,
+      stoppingAt:            null,
+      lastHeartbeat:         null,
+      errorMessage:          null,
+      openTradeCount:        0,
+      perMarketOpenTrades:   {},
+      timeoutWarning:        false,
       sessions,
-      killSwitchActive: false,
+      killSwitchActive:      false,
     })
   }
 
-  // Count open trades for running or stopping states
+  // Count open trades for running or stopping states — both total AND per market
   let openTradeCount = 0
+  const perMarketOpenTrades: Record<string, number> = {}
+
   if (status.status === 'stopping' || status.status === 'running') {
-    const rows = await db
+    // Total count
+    const totalRows = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(trades)
       .where(and(
         eq(trades.userId, session.id),
         eq(trades.status, 'open' as any),
       ))
-    openTradeCount = rows[0]?.count ?? 0
+    openTradeCount = totalRows[0]?.count ?? 0
+
+    // Per-market count — one query grouped by market_type
+    const marketRows = await db
+      .select({
+        marketType: trades.marketType,
+        count:      sql<number>`count(*)::int`,
+      })
+      .from(trades)
+      .where(and(
+        eq(trades.userId, session.id),
+        eq(trades.status, 'open' as any),
+      ))
+      .groupBy(trades.marketType)
+
+    for (const row of marketRows) {
+      perMarketOpenTrades[row.marketType] = row.count
+    }
   }
 
   // ── Auto-detect graceful drain completion ─────────────────────────────────
-  // Primary stop mechanism: does NOT rely on the Python→Next.js callback.
-  // This route is polled every 5 s, so transition is near-instant after the
-  // last position closes. Calling _doImmediateStop is idempotent — subsequent
-  // polls will see status='stopped' in DB and skip this block.
   if (
     status.status === 'stopping' &&
     status.stopMode === 'graceful' &&
@@ -103,17 +121,18 @@ export async function GET(req: NextRequest) {
       console.error('[bot/status] Auto-stop after drain failed:', e)
     }
     return NextResponse.json({
-      status:          'stopped',
-      stopMode:        null,
-      activeMarkets:   [],
-      startedAt:       status.startedAt,
-      stoppingAt:      null,
-      lastHeartbeat:   status.lastHeartbeat,
-      errorMessage:    null,
-      openTradeCount:  0,
-      timeoutWarning:  false,
-      sessions:        sessions.map((item) => ({ ...item, status: 'stopped' })),
-      killSwitchActive: Boolean(killSwitch?.isActive),
+      status:              'stopped',
+      stopMode:            null,
+      activeMarkets:       [],
+      startedAt:           status.startedAt,
+      stoppingAt:          null,
+      lastHeartbeat:       status.lastHeartbeat,
+      errorMessage:        null,
+      openTradeCount:      0,
+      perMarketOpenTrades: {},
+      timeoutWarning:      false,
+      sessions:            sessions.map((item) => ({ ...item, status: 'stopped' })),
+      killSwitchActive:    Boolean(killSwitch?.isActive),
     })
   }
 
@@ -126,16 +145,17 @@ export async function GET(req: NextRequest) {
   }
 
   return NextResponse.json({
-    status:          status.status,
-    stopMode:        status.stopMode ?? null,
-    activeMarkets:   status.activeMarkets ?? [],
-    startedAt:       status.startedAt,
-    stoppingAt:      (status as any).stoppingAt ?? null,
-    lastHeartbeat:   status.lastHeartbeat,
-    errorMessage:    status.errorMessage,
+    status:              status.status,
+    stopMode:            status.stopMode ?? null,
+    activeMarkets:       status.activeMarkets ?? [],
+    startedAt:           status.startedAt,
+    stoppingAt:          (status as any).stoppingAt ?? null,
+    lastHeartbeat:       status.lastHeartbeat,
+    errorMessage:        status.errorMessage,
     openTradeCount,
+    perMarketOpenTrades,
     timeoutWarning,
     sessions,
-    killSwitchActive: Boolean(killSwitch?.isActive),
+    killSwitchActive:    Boolean(killSwitch?.isActive),
   })
 }
