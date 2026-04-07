@@ -48,7 +48,7 @@ class RiskManager:
             max_position_pct   = float(cfg.get("max_position_pct",   2.0)),
             stop_loss_pct      = float(cfg.get("stop_loss_pct",      1.5)),
             take_profit_pct    = float(cfg.get("take_profit_pct",    3.0)),
-            max_daily_loss_pct = float(cfg.get("max_daily_loss_pct", 5.0)),
+            max_daily_loss_pct = float(cfg.get("daily_loss_limit_pct", cfg.get("max_daily_loss_pct", 5.0))),
             max_open_trades    = int(cfg.get("max_open_trades",      3)),
             max_total_exposure = float(cfg.get("max_total_exposure", 0.0) or 0.0),
             max_daily_loss     = float(cfg.get("max_daily_loss", 0.0) or 0.0),

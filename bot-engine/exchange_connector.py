@@ -358,6 +358,7 @@ class ExchangeConnector:
         quantity: float,
         order_type: str = "market",
         price: Optional[float] = None,
+        params: Optional[Dict] = None,
     ) -> Dict:
         """
         Place a market or limit order.
@@ -369,14 +370,40 @@ class ExchangeConnector:
                 side = side.lower()
                 logger.info("📤 Placing %s %s %s @ qty=%.8f", order_type, side, symbol, quantity)
                 if order_type == "market":
-                    order = await ex.create_order(symbol, "market", side, quantity)
+                    order = await ex.create_order(symbol, "market", side, quantity, None, params or {})
                 else:
-                    order = await ex.create_order(symbol, "limit", side, quantity, price)
+                    order = await ex.create_order(symbol, "limit", side, quantity, price, params or {})
                 logger.info("✅ Order placed: id=%s", order.get("id"))
                 return order
             except Exception as exc:
                 logger.error("❌ Order failed %s: %s", symbol, exc, exc_info=True)
                 raise
+
+    async def _attach_stop_loss_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        stop_loss: float,
+    ) -> Dict:
+        """Place a separate stop-loss order for a futures position."""
+        stop_side = "sell" if side.lower() == "buy" else "buy"
+        params = {"stopPrice": stop_loss, "reduceOnly": True}
+
+        async with self._exchange() as ex:
+            for order_type in ("stop_market", "stop"):
+                try:
+                    order = await ex.create_order(symbol, order_type, stop_side, quantity, None, params)
+                    logger.info("🛡️  Stop-loss attached: %s %s @ %.8f", symbol, order_type, stop_loss)
+                    return order
+                except Exception as exc:
+                    logger.debug(
+                        "⚠️  Stop loss order type %s failed for %s: %s",
+                        order_type, symbol, exc,
+                    )
+            raise RuntimeError(
+                f"Unable to attach stop-loss order for {symbol} at {stop_loss}"
+            )
 
     async def place_order_with_leverage(
         self,
@@ -386,18 +413,30 @@ class ExchangeConnector:
         leverage: int = 1,
         order_type: str = "market",
         price: Optional[float] = None,
+        stop_loss: Optional[float] = None,
+        params: Optional[Dict] = None,
     ) -> Dict:
         """
         Full crypto futures order flow:
           1. set_margin_mode(symbol, "isolated")
           2. set_leverage(symbol, leverage)
           3. place_order(symbol, side, quantity)
+          4. attach a stop-loss order if requested.
 
         For non-futures markets: falls through to plain place_order.
         """
-        if self.market_type in FUTURES_MARKETS and leverage > 1:
-            await self.setup_futures_position(symbol, leverage)
-        return await self.place_order(symbol, side, quantity, order_type, price)
+        if self.market_type in FUTURES_MARKETS:
+            if not await self.setup_futures_position(symbol, leverage):
+                raise RuntimeError(
+                    f"Futures setup failed for {symbol} at leverage {leverage}×"
+                )
+
+        order = await self.place_order(symbol, side, quantity, order_type, price, params=params)
+
+        if self.market_type in FUTURES_MARKETS and stop_loss is not None:
+            await self._attach_stop_loss_order(symbol, side, quantity, stop_loss)
+
+        return order
 
     # ── Fetch order (unchanged) ───────────────────────────────────────────────
 

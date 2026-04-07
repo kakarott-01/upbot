@@ -729,6 +729,7 @@ class Database:
         fee_rate: float = 0.001,
         strategy_key: Optional[str] = None,
         position_scope_key: Optional[str] = None,
+        metadata: Optional[dict] = None,
     ) -> Optional[str]:
         pool = await self.pool()
         scope_key = position_scope_key or strategy_key or algo_name or "default"
@@ -736,14 +737,15 @@ class Database:
             """INSERT INTO trades
                (user_id, exchange_name, market_type, symbol, side, quantity,
                 entry_price, fee_rate, filled_quantity, remaining_quantity,
-                status, algo_used, strategy_key, position_scope_key, is_paper, bot_session_ref, opened_at)
-               VALUES ($1,'paper',$2,$3,$4,$5,$6,$7,0,$5,'open',$8,$9,$10,true,$11,$12)
+                status, algo_used, strategy_key, position_scope_key, is_paper, bot_session_ref, metadata, opened_at)
+               VALUES ($1,'paper',$2,$3,$4,$5,$6,$7,0,$5,'open',$8,$9,$10,true,$11,$12,$13)
                ON CONFLICT (user_id, market_type, symbol, position_scope_key)
                WHERE status='open' DO NOTHING
                RETURNING id""",
             user_id, market_type, symbol,
             side.lower(), str(quantity), str(price),
             str(fee_rate), algo_name, strategy_key, scope_key, session_ref or None,
+            metadata,
             datetime.utcnow(),
         )
         if row:
@@ -772,6 +774,7 @@ class Database:
         fee_rate: float = 0.001,
         strategy_key: Optional[str] = None,
         position_scope_key: Optional[str] = None,
+        metadata: Optional[dict] = None,
     ) -> Optional[str]:
         # F9: Use actual filled quantity if provided, fall back to requested quantity
         recorded_quantity = actual_quantity if actual_quantity is not None else quantity
@@ -789,8 +792,8 @@ class Database:
                (user_id, exchange_name, market_type, symbol, side, quantity,
                 entry_price, stop_loss, take_profit, fee_rate,
                 filled_quantity, remaining_quantity, status, algo_used, strategy_key, position_scope_key,
-                is_paper, exchange_order_id, bot_session_ref, opened_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$6,'open',$11,$12,$13,false,$14,$15,$16)
+                is_paper, exchange_order_id, bot_session_ref, metadata, opened_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$6,'open',$11,$12,$13,false,$14,$15,$16,$17)
                ON CONFLICT (user_id, market_type, symbol, position_scope_key)
                WHERE status='open' DO NOTHING
                RETURNING id""",
@@ -799,6 +802,7 @@ class Database:
             str(stop_loss), str(take_profit), str(fee_rate),
             algo_name, strategy_key, scope_key, order_id,
             session_ref or None,
+            metadata,
             datetime.utcnow(),
         )
         if row:
@@ -822,7 +826,8 @@ class Database:
             row = await pool.fetchrow(
                 """SELECT id, side, quantity, entry_price, opened_at,
                           fee_rate, fee_amount, pnl, net_pnl,
-                          filled_quantity, remaining_quantity, strategy_key, position_scope_key
+                          filled_quantity, remaining_quantity, strategy_key, position_scope_key,
+                          metadata
                    FROM trades
                    WHERE user_id=$1 AND symbol=$2 AND market_type=$3
                      AND position_scope_key=$4 AND status='open'
@@ -833,7 +838,8 @@ class Database:
             row = await pool.fetchrow(
                 """SELECT id, side, quantity, entry_price, opened_at,
                           fee_rate, fee_amount, pnl, net_pnl,
-                          filled_quantity, remaining_quantity, strategy_key, position_scope_key
+                          filled_quantity, remaining_quantity, strategy_key, position_scope_key,
+                          metadata
                    FROM trades
                    WHERE user_id=$1 AND symbol=$2 AND market_type=$3 AND status='open'
                    ORDER BY opened_at DESC LIMIT 1""",

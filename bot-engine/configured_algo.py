@@ -186,7 +186,7 @@ class ConfiguredMultiStrategyAlgo(LeverageMixin, BaseAlgo):
                     leverage = lev
                 except Exception as exc:
                     logger.warning("⚠️  confidence scoring failed for %s: %s", symbol, exc)
-                    leverage = 1
+                    return None
 
             self._stage_open(symbol, decision, latest_close, leverage=leverage)
             return decision

@@ -404,12 +404,26 @@ class BaseAlgo(ABC):
                     return
 
             ticker = await self.connector.fetch_ticker(symbol)
-            price  = ticker.get("last")
-            if not price:
+            price  = float(ticker.get("last") or 0)
+            if price <= 0:
                 logger.warning(f"[{self.name}] ❌ No price for {symbol}")
                 return
 
-            quantity = self.risk.calculate_position_size(balance, price)
+            leverage = 1
+            staged = getattr(self, "_staged_open", {}).get(symbol, {})
+            if staged:
+                leverage = int(staged.get("leverage", 1) or 1)
+
+            if hasattr(self, "calc_leveraged_position"):
+                quantity, _ = self.calc_leveraged_position(balance, price, leverage)
+            elif hasattr(self, "_calculate_leveraged_qty"):
+                quantity, _ = self._calculate_leveraged_qty(balance, price, leverage)
+            else:
+                risk_pct = float(self.config.get("risk_pct_per_trade", 1.0)) / 100.0
+                risk_amount = balance * risk_pct
+                notional = risk_amount * leverage
+                quantity = round(notional / max(price, 1e-10), 8)
+
             if quantity <= 0:
                 logger.warning(f"[{self.name}] ❌ Invalid qty for {symbol}")
                 return
@@ -477,6 +491,7 @@ class BaseAlgo(ABC):
                     fee_rate=float(self.config.get("fee_rate", 0.001)),
                     strategy_key=self.strategy_key,
                     position_scope_key=self.position_scope_key,
+                    metadata=getattr(self, "_staged_open", {}).get(symbol),
                 )
                 if trade_id:
                     if hasattr(self, "_confirm_staged_open"):
@@ -666,11 +681,26 @@ class BaseAlgo(ABC):
                 }
 
     async def _execute_live_trade(self, symbol: str, signal: str, quantity: float, price: float):
-        sl    = self.risk.calculate_stop_loss(price, signal)
+        leverage = 1
+        staged = getattr(self, "_staged_open", {}).get(symbol, {})
+        if staged:
+            leverage = int(staged.get("leverage", 1) or 1)
+
+        if leverage > 1 and hasattr(self, "calc_sl_price"):
+            sl_dist_pct = 1.0 / leverage
+            sl = self.calc_sl_price(price, signal, sl_dist_pct)
+        else:
+            sl = self.risk.calculate_stop_loss(price, signal)
         tp    = self.risk.calculate_take_profit(price, signal)
         order = None
         try:
-            order    = await self.connector.place_order(symbol, signal, quantity)
+            order    = await self.connector.place_order_with_leverage(
+                symbol,
+                signal,
+                quantity,
+                leverage=leverage,
+                stop_loss=sl,
+            )
             order_id = order.get("id", "")
             actual_quantity, actual_entry_price, _ = await self._fetch_fill_details(
                 order_id, symbol, quantity, float(order.get("average") or order.get("price") or price)
@@ -903,6 +933,7 @@ class BaseAlgo(ABC):
         stop_loss: float,
         take_profit: float,
         order_id: str,
+        metadata: Optional[dict] = None,
     ) -> Optional[str]:
         import asyncio
 
@@ -921,6 +952,7 @@ class BaseAlgo(ABC):
                     fee_rate=fee_rate,
                     strategy_key=self.strategy_key,
                     position_scope_key=self.position_scope_key,
+                    metadata=getattr(self, "_staged_open", {}).get(symbol),
                 )
             except Exception as e:
                 last_error = e
@@ -946,6 +978,7 @@ class BaseAlgo(ABC):
             "strategy_key": self.strategy_key,
             "position_scope_key": self.position_scope_key,
             "market_type": self.market_type,
+            "metadata": metadata,
             "session_ref": self._session_ref,
             "exchange_name": self.connector.exchange_name,
             "fee_rate": fee_rate,

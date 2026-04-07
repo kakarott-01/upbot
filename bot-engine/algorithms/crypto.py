@@ -227,9 +227,9 @@ class CryptoAlgo(BaseAlgo):
         risk_pct    = float(self.config.get("risk_pct_per_trade", 1.0)) / 100.0
         risk_amount = balance * risk_pct
         notional    = risk_amount * leverage
-        qty         = round(notional / price, 8)
+        qty         = round(notional / max(price, 1e-10), 8)
         # SL distance as fraction of entry price
-        sl_dist_pct = risk_amount / notional   # = 1/leverage (by construction)
+        sl_dist_pct = risk_amount / max(notional, 1e-10)   # = 1/leverage (by construction)
         return qty, sl_dist_pct
 
     def _sl_price(self, entry: float, side: str, sl_dist_pct: float) -> float:
