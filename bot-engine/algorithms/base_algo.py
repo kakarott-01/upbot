@@ -83,6 +83,10 @@ SYMBOL_LOCK_ACQUIRE_TIMEOUT_SEC = 0.5
 TRADE_SLOT_RETRY_DELAYS_SEC = (0.25, 0.5, 1.0)
 EMERGENCY_CLOSE_RETRY_DELAYS_SEC = (0.0, 0.75, 1.5)
 LIQUIDATION_BUFFER_MULTIPLIER = 1.5
+EPSILON = 1e-4
+RISK_ROUNDING_PRECISION = 6
+RISK_BUDGET_SAFETY_BUFFER = 0.999
+MAX_RISK_RESCALE_ATTEMPTS = 3
 _ACTIVE_TRADE_LOCKS: Dict[Tuple[str, str, str], asyncio.Lock] = {}
 
 
@@ -249,6 +253,22 @@ class BaseAlgo(ABC):
         fees = (entry_price * quantity + stop_price * quantity) * fee_rate
         return gross_loss + fees
 
+    def _round_risk_value(self, value: float) -> float:
+        return round(float(value), RISK_ROUNDING_PRECISION)
+
+    def _effective_risk_budget(self, risk_budget: float) -> float:
+        return float(risk_budget) * RISK_BUDGET_SAFETY_BUFFER
+
+    def _risk_within_budget(self, total_risk: float, risk_budget: float) -> bool:
+        rounded_total_risk = self._round_risk_value(total_risk)
+        rounded_budget = self._round_risk_value(risk_budget)
+        return rounded_total_risk <= rounded_budget + EPSILON
+
+    def _risk_scale_factor(self, total_risk: float, risk_budget: float) -> float:
+        if total_risk <= 0 or risk_budget <= 0:
+            raise ValueError("Risk scaling requires positive risk values")
+        return min(1.0, float(risk_budget) / float(total_risk))
+
     def _solve_fee_inclusive_stop_distance(
         self,
         entry_price: float,
@@ -258,6 +278,7 @@ class BaseAlgo(ABC):
         fee_rate: float,
         max_distance: float,
     ) -> float:
+        effective_budget = self._effective_risk_budget(risk_amount)
         if max_distance <= 0 or max_distance >= 1:
             raise ValueError("Configured stop-loss percentage is outside safe bounds")
         low = 0.0
@@ -266,13 +287,48 @@ class BaseAlgo(ABC):
             mid = (low + high) / 2.0
             stop_price = self._calc_price_from_distance(entry_price, side, mid, is_stop=True)
             total_loss = self._estimate_total_loss(entry_price, stop_price, quantity, side, fee_rate)
-            if total_loss <= risk_amount:
+            if self._risk_within_budget(total_loss, effective_budget):
                 low = mid
             else:
                 high = mid
         if low <= 0:
             raise ValueError("Risk budget is fully consumed by fees; trade rejected")
         return low
+
+    async def _build_fee_checked_level_plan(
+        self,
+        symbol: str,
+        entry_price: float,
+        quantity: float,
+        leverage: int,
+        side: str,
+        risk_amount: float,
+        fee_rate: float,
+    ) -> Dict[str, float]:
+        level_plan = self._build_level_plan(
+            entry_price,
+            quantity,
+            leverage,
+            side,
+            risk_amount,
+            fee_rate=fee_rate,
+        )
+        rounded_stop_loss = await self.connector.round_price_to_market(symbol, float(level_plan["stop_loss"]))
+        rounded_take_profit = (
+            await self.connector.round_price_to_market(symbol, float(level_plan["take_profit"]))
+            if float(level_plan["take_profit"]) > 0
+            else 0.0
+        )
+        level_plan["stop_loss"] = rounded_stop_loss or float(level_plan["stop_loss"])
+        level_plan["take_profit"] = rounded_take_profit or float(level_plan["take_profit"])
+        level_plan["estimated_total_loss"] = self._estimate_total_loss(
+            entry_price,
+            level_plan["stop_loss"],
+            quantity,
+            side,
+            fee_rate,
+        )
+        return level_plan
 
     def _build_level_plan(
         self,
@@ -349,6 +405,7 @@ class BaseAlgo(ABC):
             raise ValueError("Leverage must be positive")
         risk_amount = balance * self._risk_pct_fraction()
         notional = risk_amount * leverage
+        fee_rate = float(self.config.get("fee_rate", 0.001))
         raw_quantity = notional / entry_price
         market_constraints = await self.connector.get_market_constraints(symbol, quantity=raw_quantity)
         quantity = float(market_constraints.get("quantity", 0.0))
@@ -358,32 +415,55 @@ class BaseAlgo(ABC):
             raise ValueError("Rounded quantity is zero")
         if min_qty > 0 and quantity + 1e-12 < min_qty:
             raise ValueError(f"Quantity {quantity:.8f} is below min lot size {min_qty:.8f}")
-        level_plan = self._build_level_plan(
-            entry_price,
-            quantity,
-            leverage,
-            side,
-            risk_amount,
-            fee_rate=float(self.config.get("fee_rate", 0.001)),
+        level_plan = await self._build_fee_checked_level_plan(
+            symbol=symbol,
+            entry_price=entry_price,
+            quantity=quantity,
+            leverage=leverage,
+            side=side,
+            risk_amount=risk_amount,
+            fee_rate=fee_rate,
         )
-        rounded_stop_loss = await self.connector.round_price_to_market(symbol, float(level_plan["stop_loss"]))
-        rounded_take_profit = (
-            await self.connector.round_price_to_market(symbol, float(level_plan["take_profit"]))
-            if float(level_plan["take_profit"]) > 0
-            else 0.0
-        )
-        level_plan["stop_loss"] = rounded_stop_loss or float(level_plan["stop_loss"])
-        level_plan["take_profit"] = rounded_take_profit or float(level_plan["take_profit"])
-        level_plan["estimated_total_loss"] = self._estimate_total_loss(
-            entry_price,
-            level_plan["stop_loss"],
-            quantity,
-            side,
-            float(self.config.get("fee_rate", 0.001)),
-        )
-        if level_plan["estimated_total_loss"] > risk_amount + 1e-8:
+        for _ in range(MAX_RISK_RESCALE_ATTEMPTS):
+            if self._risk_within_budget(level_plan["estimated_total_loss"], risk_amount):
+                break
+            scale_factor = self._risk_scale_factor(level_plan["estimated_total_loss"], risk_amount)
+            scaled_raw_quantity = quantity * scale_factor
+            scaled_constraints = await self.connector.get_market_constraints(symbol, quantity=scaled_raw_quantity)
+            scaled_quantity = float(scaled_constraints.get("quantity", 0.0))
+            scaled_min_qty = float(scaled_constraints.get("min_qty", min_qty))
+            if scaled_quantity >= quantity:
+                raise ValueError(
+                    f"Fee-inclusive risk exceeds budget for {symbol} and quantity cannot be reduced safely: "
+                    f"{level_plan['estimated_total_loss']:.8f} > {risk_amount:.8f}"
+                )
+            if scaled_quantity <= 0:
+                raise ValueError("Scaled quantity is zero")
+            if scaled_min_qty > 0 and scaled_quantity + 1e-12 < scaled_min_qty:
+                raise ValueError(
+                    f"Scaled quantity {scaled_quantity:.8f} is below min lot size {scaled_min_qty:.8f}"
+                )
+            logger.warning(
+                f"[{self.name}] ⚖️  Adjusted size for {symbol} to stay within fee-inclusive risk: "
+                f"qty {quantity:.8f} -> {scaled_quantity:.8f} "
+                f"(scale={scale_factor:.8f}, risk={level_plan['estimated_total_loss']:.8f}, budget={risk_amount:.8f})"
+            )
+            raw_quantity = scaled_raw_quantity
+            quantity = scaled_quantity
+            min_qty = scaled_min_qty
+            min_notional = float(scaled_constraints.get("min_notional", min_notional))
+            level_plan = await self._build_fee_checked_level_plan(
+                symbol=symbol,
+                entry_price=entry_price,
+                quantity=quantity,
+                leverage=leverage,
+                side=side,
+                risk_amount=risk_amount,
+                fee_rate=fee_rate,
+            )
+        if not self._risk_within_budget(level_plan["estimated_total_loss"], risk_amount):
             raise ValueError(
-                f"Fee-inclusive risk exceeds budget for {symbol}: "
+                f"Fee-inclusive risk exceeds budget for {symbol} after scaling: "
                 f"{level_plan['estimated_total_loss']:.8f} > {risk_amount:.8f}"
             )
         actual_notional = float(level_plan["actual_notional"])
@@ -402,7 +482,7 @@ class BaseAlgo(ABC):
         return {
             "risk_amount": risk_amount,
             "margin_used": risk_amount,
-            "requested_notional": notional,
+            "requested_notional": raw_quantity * entry_price,
             "raw_quantity": raw_quantity,
             "quantity": quantity,
             "min_qty": min_qty,

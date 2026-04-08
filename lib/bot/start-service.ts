@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { botSessions, botStatuses, exchangeApis, killSwitchState, marketConfigs, trades } from '@/lib/schema'
 import { getUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import type { MarketType } from '@/lib/strategies/types'
+import { toUtcIsoString } from '@/lib/time'
 
 export async function startBotForUser(
   userId: string,
@@ -104,6 +105,7 @@ export async function startBotForUser(
   }
 
   const now = new Date()
+  const botStartedAt = isRunning ? existing?.startedAt ?? now : now
   const sessionIds: Record<string, string> = {}
   const createdSessionIds: string[] = []
   const stoppedSessionIds: string[] = []
@@ -158,7 +160,8 @@ export async function startBotForUser(
       userId,
       status: nextStatus,
       activeMarkets: markets,
-      startedAt: isRunning ? existing?.startedAt ?? now : now,
+      startedAt: botStartedAt,
+      stoppedAt: null,
       stopMode: null,
       stoppingAt: null,
     })
@@ -167,7 +170,8 @@ export async function startBotForUser(
       set: {
         status: nextStatus,
         activeMarkets: markets,
-        startedAt: isRunning ? existing?.startedAt ?? now : now,
+        startedAt: botStartedAt,
+        stoppedAt: null,
         errorMessage: null,
         stopMode: null,
         stoppingAt: null,
@@ -193,7 +197,12 @@ export async function startBotForUser(
         'Content-Type': 'application/json',
         'X-Bot-Secret': process.env.BOT_ENGINE_SECRET!,
       },
-      body: JSON.stringify({ user_id: userId, markets, session_ids: sessionIds }),
+      body: JSON.stringify({
+        user_id: userId,
+        markets,
+        session_ids: sessionIds,
+        started_at: toUtcIsoString(botStartedAt),
+      }),
       signal: AbortSignal.timeout(15_000),
     })
   } catch {
@@ -224,6 +233,7 @@ export async function startBotForUser(
     success: true,
     status: 'running' as const,
     markets,
+    started_at: toUtcIsoString(botStartedAt),
     sessionIds,
     marketConfigs: marketConfigsForEngine,
   }

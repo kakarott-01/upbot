@@ -7,6 +7,7 @@ import {
 import { PnlChart } from '@/components/charts/pnl-chart'
 import { TradeTable } from '@/components/dashboard/trade-table'
 import { BotControls } from '@/components/dashboard/bot-controls'
+import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 import { formatCurrency } from '@/lib/utils'
 
 // ── Compact stat card for the top row ─────────────────────────────────────────
@@ -116,12 +117,7 @@ export default function DashboardPage() {
     queryFn:  () => fetch('/api/trades?limit=50').then(r => r.json()),
   })
 
-  const { data: botData, isLoading: botLoading } = useQuery({
-    queryKey:        ['bot-status'],
-    queryFn:         () => fetch('/api/bot/status').then(r => r.json()),
-    refetchInterval: 5000,
-    placeholderData: (prev) => prev,
-  })
+  const { data: botData, isLoading: botLoading } = useBotStatusQuery()
 
   const { data: strategyConfigData } = useQuery({
     queryKey: ['strategy-configs'],

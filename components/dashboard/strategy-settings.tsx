@@ -9,6 +9,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { InfoTip } from '@/components/ui/tooltip'
 import { useToastStore } from '@/lib/toast-store'
 import { isBotLocked } from '@/lib/bot-lock'
+import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 
 const MARKETS = [
   { id: 'crypto', label: 'Crypto', publicLabel: 'CRYPTO' },
@@ -228,11 +229,7 @@ export function StrategySettings() {
     queryFn: () => fetch('/api/risk-settings').then((response) => response.json()),
   })
 
-  const { data: botData } = useQuery({
-    queryKey: ['bot-status'],
-    queryFn: () => fetch('/api/bot/status').then((response) => response.json()),
-    refetchInterval: 5000,
-  })
+  const { data: botData } = useBotStatusQuery()
 
   useEffect(() => {
     if (configData?.markets) {

@@ -20,6 +20,7 @@ import { botStatuses, botSessions, trades } from '@/lib/schema'
 import { eq, and, sql } from 'drizzle-orm'
 import { acquireBotLock } from '@/lib/bot-lock'
 import { _doImmediateStop } from '@/lib/bot-stop'
+import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
 
 type StopMode = 'close_all' | 'graceful'
 
@@ -82,20 +83,16 @@ async function _handleStop(userId: string, mode: StopMode): Promise<NextResponse
 
   // Already fully stopped — idempotent success
   if (!current || current.status === 'stopped') {
-    return NextResponse.json({ success: true, status: 'stopped', mode: null })
+    const { snapshot } = await getBotStatusSnapshot(userId)
+    return NextResponse.json({ success: true, ...snapshot })
   }
 
   // Already stopping in graceful mode and user wants to escalate to close_all
   const escalating = current.status === 'stopping' && mode === 'close_all'
   // Already stopping in same mode — idempotent
   if (current.status === 'stopping' && !escalating) {
-    const openCount = await _countOpenTrades(userId)
-    return NextResponse.json({
-      success:    true,
-      status:     'stopping',
-      mode:       current.stopMode,
-      openTrades: openCount,
-    })
+    const { snapshot } = await getBotStatusSnapshot(userId)
+    return NextResponse.json({ success: true, ...snapshot })
   }
 
   const openCount = await _countOpenTrades(userId)
@@ -103,7 +100,8 @@ async function _handleStop(userId: string, mode: StopMode): Promise<NextResponse
   // No open positions → immediate stop regardless of mode
   if (openCount === 0) {
     await _doImmediateStop(userId, now)
-    return NextResponse.json({ success: true, status: 'stopped', mode, openTrades: 0 })
+    const { snapshot } = await getBotStatusSnapshot(userId)
+    return NextResponse.json({ success: true, ...snapshot })
   }
 
   // close_all mode
@@ -132,12 +130,8 @@ async function _handleStop(userId: string, mode: StopMode): Promise<NextResponse
         },
       })
 
-    return NextResponse.json({
-      success:    true,
-      status:     'stopping',
-      mode:       'close_all',
-      openTrades: openCount,
-    })
+    const { snapshot } = await getBotStatusSnapshot(userId)
+    return NextResponse.json({ success: true, ...snapshot })
   }
 
   // graceful mode
@@ -165,12 +159,8 @@ async function _handleStop(userId: string, mode: StopMode): Promise<NextResponse
       },
     })
 
-  return NextResponse.json({
-    success:    true,
-    status:     'stopping',
-    mode:       'graceful',
-    openTrades: openCount,
-  })
+  const { snapshot } = await getBotStatusSnapshot(userId)
+  return NextResponse.json({ success: true, ...snapshot })
 }
 
 async function _countOpenTrades(userId: string): Promise<number> {

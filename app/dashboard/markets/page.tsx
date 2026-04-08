@@ -6,6 +6,7 @@ import {
   Eye, EyeOff, Pencil, X, Loader2, Lock, KeyRound, MailCheck, Plus,
   AlertTriangle,
 } from "lucide-react";
+import { useBotStatusQuery } from "@/lib/use-bot-status-query";
 
 interface SavedApi {
   id: string;
@@ -605,12 +606,7 @@ export default function MarketsPage() {
   });
 
   // Fetch bot status to know which markets are actively running
-  const { data: botData } = useQuery({
-    queryKey:        ["bot-status"],
-    queryFn:         () => fetch("/api/bot/status").then(r => r.json()),
-    refetchInterval: 5000,
-    placeholderData: (prev: any) => prev,
-  });
+  const { data: botData } = useBotStatusQuery();
 
   const botRunning      = botData?.status === 'running';
   const activeMarkets: string[] = botData?.activeMarkets ?? [];

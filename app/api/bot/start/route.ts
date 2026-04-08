@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { acquireBotLock } from '@/lib/bot-lock'
 import { startBotForUser } from '@/lib/bot/start-service'
+import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
 
 type MarketName = 'indian' | 'crypto' | 'commodities' | 'global'
 
@@ -51,10 +52,14 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const result = await startBotForUser(session.id, rawMarkets as MarketName[], {
+    await startBotForUser(session.id, rawMarkets as MarketName[], {
       conflictOverrides: rawConflictOverrides as MarketName[],
     })
-    return NextResponse.json(result)
+    const { snapshot } = await getBotStatusSnapshot(session.id)
+    return NextResponse.json({
+      success: true,
+      ...snapshot,
+    })
   } catch (error) {
     const status = (error as Error & { status?: number }).status ?? 400
     const detail = (error as Error & { detail?: unknown }).detail

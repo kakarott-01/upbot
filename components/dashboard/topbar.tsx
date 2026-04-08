@@ -4,10 +4,14 @@
 // Shows: running / stopping-graceful / stopping-close_all / stopped
 
 import { signOut } from 'next-auth/react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutationState } from '@tanstack/react-query'
 import { LogOut, Bell, Menu, AlertTriangle } from 'lucide-react'
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 import { MobileSidebar } from '@/components/dashboard/sidebar'
+import { useGlobalClockStore } from '@/lib/global-clock-store'
+import { useBotStatusQuery } from '@/lib/use-bot-status-query'
+import { useElapsedTimerDiagnostics, useStartedAtInvariant } from '@/lib/timer-diagnostics'
+import { formatElapsedDuration, getSessionDurationMs } from '@/lib/time'
 
 interface TopBarProps {
   user?: {
@@ -17,44 +21,20 @@ interface TopBarProps {
   } | null
 }
 
-function useRunTimer(startedAt: string | null | undefined): string {
-  const [, setTick] = useState(0)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  useEffect(() => {
-    if (!startedAt) {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-      return
-    }
-    setTick(t => t + 1)
-    intervalRef.current = setInterval(() => setTick(t => t + 1), 1000)
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
-  }, [startedAt])
-
-  if (!startedAt) return ''
-  const diff = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000))
-  const h = Math.floor(diff / 3600)
-  const m = Math.floor((diff % 3600) / 60)
-  const s = diff % 60
-  if (h > 0) return `${h}h ${m}m ${String(s).padStart(2, '0')}s`
-  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`
-  return `${s}s`
-}
-
 export function TopBar({ user }: TopBarProps) {
   const [menuOpen,      setMenuOpen]      = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const now = useGlobalClockStore((state) => state.now)
 
-  const { data: botData, isLoading: botLoading } = useQuery({
-    queryKey:        ['bot-status'],
-    queryFn:         () => fetch('/api/bot/status').then(r => r.json()),
-    refetchInterval: 5000,
-    placeholderData: (prev) => prev,
+  const { data: botData, isLoading: botLoading } = useBotStatusQuery()
+
+  const pendingStarts = useMutationState({
+    filters: { mutationKey: ['bot-start'], status: 'pending' },
+    select: (mutation) => mutation.state.variables as { markets?: string[] } | undefined,
   })
 
   const status:         string  = botData?.status         ?? 'stopped'
+  const activeMarkets = botData?.activeMarkets ?? []
   const stopMode:       string  = botData?.stopMode       ?? ''
   const openTradeCount: number  = botData?.openTradeCount ?? 0
   const timeoutWarning: boolean = botData?.timeoutWarning ?? false
@@ -62,19 +42,37 @@ export function TopBar({ user }: TopBarProps) {
   const isStopping  = status === 'stopping'
   const isCloseAll  = isStopping && stopMode === 'close_all'
   const isGraceful  = isStopping && stopMode === 'graceful'
-  const runTime     = useRunTimer(isRunning ? botData?.startedAt : null)
+  const pendingMarkets = Array.from(new Set(
+    pendingStarts.flatMap((entry) => Array.isArray(entry?.markets) ? entry.markets : []),
+  ))
+  const isStarting = !isRunning && pendingMarkets.length > 0
+  const runTime = isRunning && botData?.started_at
+    ? formatElapsedDuration(getSessionDurationMs(botData.started_at, null, now))
+    : ''
+  const runElapsedMs = isRunning && botData?.started_at
+    ? getSessionDurationMs(botData.started_at, null, now)
+    : null
+
+  useElapsedTimerDiagnostics('topbar', botData?.started_at, runElapsedMs)
+  useStartedAtInvariant('topbar', status, botData?.started_at)
 
   const displayName = user?.name || user?.email?.split('@')[0] || 'User'
   const userInitial = displayName.charAt(0).toUpperCase()
 
   const pillConfig = (() => {
+    if (isStarting) return {
+      classes: 'bg-brand-500/10 border-brand-500/20 text-brand-500',
+      dot:     'bg-brand-500 animate-pulse',
+      label:   'Starting bot…',
+      sub:     pendingMarkets.length > 0 ? `· ${pendingMarkets.join(', ')}` : '',
+    }
     if (botLoading && !botData) return null
     if (isRunning) return {
       classes: 'bg-brand-500/10 border-brand-500/20 text-brand-500',
       dot:     'bg-brand-500 animate-pulse',
       label:   'Bot Running',
-      sub:     botData?.activeMarkets?.length > 0
-        ? `· ${botData.activeMarkets.join(', ')}${runTime ? ` · ${runTime}` : ''}`
+      sub:     activeMarkets.length > 0
+        ? `· ${activeMarkets.join(', ')}${runTime ? ` · ${runTime}` : ''}`
         : '',
     }
     if (isCloseAll) return {
@@ -113,7 +111,7 @@ export function TopBar({ user }: TopBarProps) {
         </button>
 
         {/* Status pill */}
-        {botLoading && !botData ? (
+        {botLoading && !botData && !isStarting ? (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border bg-gray-800 border-gray-700 text-gray-500">
             Loading…
           </div>

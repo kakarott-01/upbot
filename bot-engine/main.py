@@ -17,6 +17,7 @@ from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
+from datetime import datetime
 import os
 import logging
 import asyncio
@@ -70,7 +71,9 @@ async def lifespan(app: FastAPI):
             logger.info(
                 f"♻️  Found {len(running_bots)} bot(s) to auto-restart after startup"
             )
-            for user_id, markets in running_bots.items():
+            for user_id, state in running_bots.items():
+                markets = state.get("markets", [])
+                started_at = state.get("started_at")
                 logger.info(
                     f"♻️  Auto-restarting bot user={user_id[:8]}… markets={markets}"
                 )
@@ -79,7 +82,13 @@ async def lifespan(app: FastAPI):
                 # will be created by the start route next time the user starts
                 # manually, and the DB sync will restore any open positions.
                 asyncio.create_task(
-                    _safe_auto_restart(_scheduler, _db, user_id, markets),
+                    _safe_auto_restart(
+                        _scheduler,
+                        _db,
+                        user_id,
+                        markets,
+                        started_at=started_at,
+                    ),
                     name=f"auto_restart_{user_id}",
                 )
         else:
@@ -102,7 +111,13 @@ async def lifespan(app: FastAPI):
     logger.info("✅ Shutdown complete")
 
 
-async def _safe_auto_restart(scheduler, db, user_id: str, markets: List[str]):
+async def _safe_auto_restart(
+    scheduler,
+    db,
+    user_id: str,
+    markets: List[str],
+    started_at: Optional[datetime] = None,
+):
     """
     Wraps start_user_bot in error handling so one failed restart doesn't
     block others. On failure, marks the bot as stopped.
@@ -110,7 +125,7 @@ async def _safe_auto_restart(scheduler, db, user_id: str, markets: List[str]):
     try:
         await asyncio.sleep(2)
         # No session_ids for auto-restart — the scheduler falls back gracefully
-        await scheduler.start_user_bot(user_id, markets)
+        await scheduler.start_user_bot(user_id, markets, started_at=started_at)
         logger.info(
             f"✅ Auto-restart succeeded user={user_id[:8]}… markets={markets}"
         )
@@ -162,11 +177,13 @@ class StartRequest(BaseModel):
     # Used as session_ref for trade ownership tracking.
     # Optional for backwards compatibility with watchdog auto-restart.
     session_ids: Optional[Dict[str, str]] = None
+    started_at:  Optional[datetime] = None
 
 class SyncRequest(BaseModel):
     user_id: str
     markets: List[str]
     session_ids: Optional[Dict[str, str]] = None
+    started_at: Optional[datetime] = None
 
 class StopRequest(BaseModel):
     user_id: str
@@ -221,14 +238,17 @@ async def start_bot(req: StartRequest):
             req.user_id,
             req.markets,
             session_ids=req.session_ids,
+            started_at=req.started_at,
         )
     except Exception as e:
         logger.error(f"start_bot failed user={req.user_id}: {e}", exc_info=True)
         raise HTTPException(500, str(e))
+    status = _scheduler.get_status(req.user_id)
     return {
-        "status":      "started",
+        "status":      "running",
         "user_id":     req.user_id,
         "markets":     req.markets,
+        "started_at":  status.get("started_at"),
         "session_ids": req.session_ids,
     }
 
@@ -242,14 +262,17 @@ async def sync_bot(req: SyncRequest):
             req.user_id,
             req.markets,
             session_ids=req.session_ids,
+            started_at=req.started_at,
         )
     except Exception as e:
         logger.error(f"sync_bot failed user={req.user_id}: {e}", exc_info=True)
         raise HTTPException(500, str(e))
+    status = _scheduler.get_status(req.user_id)
     return {
-        "status": "synced",
+        "status": "running",
         "user_id": req.user_id,
         "markets": req.markets,
+        "started_at": status.get("started_at"),
         "session_ids": req.session_ids,
     }
 

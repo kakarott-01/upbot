@@ -159,7 +159,11 @@ class Watchdog:
                 markets = ctx.markets
                 await self._scheduler.stop_user_bot(user_id)
                 await asyncio.sleep(2)
-                await self._scheduler.start_user_bot(user_id, markets)
+                await self._scheduler.start_user_bot(
+                    user_id,
+                    markets,
+                    started_at=ctx.started_at,
+                )
                 logger.info(
                     f"🐕 Bot restarted for user={user_id[:8]}… markets={markets} "
                     f"(attempt {new_count}/{MAX_RESTARTS})"

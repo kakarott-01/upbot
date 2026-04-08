@@ -26,7 +26,7 @@ All other logic from v4 unchanged.
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -47,6 +47,24 @@ MARKET_INTERVAL = {
     "commodities": 90,
     "global":     120,
 }
+
+
+def _utc_iso(dt: Optional[datetime]) -> Optional[str]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _normalize_started_at(started_at: Optional[datetime]) -> datetime:
+    if started_at is None:
+        return datetime.utcnow()
+    if started_at.tzinfo is None:
+        return started_at
+    return started_at.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
@@ -91,8 +109,8 @@ class BotScheduler:
             "running":        True,
             "markets":        ctx.markets,
             "job_count":      len(ctx.job_ids),
-            "started_at":     ctx.started_at.isoformat(),
-            "last_heartbeat": ctx.last_heartbeat.isoformat() if ctx.last_heartbeat else None,
+            "started_at":     _utc_iso(ctx.started_at),
+            "last_heartbeat": _utc_iso(ctx.last_heartbeat),
         }
 
     def get_all_active_markets(self) -> List[str]:
@@ -111,6 +129,7 @@ class BotScheduler:
         user_id: str,
         markets: List[str],
         session_ids: Optional[Dict[str, str]] = None,
+        started_at: Optional[datetime] = None,
     ):
         logger.info(f"🚀 Starting bot user={user_id} markets={markets}")
 
@@ -133,7 +152,11 @@ class BotScheduler:
             except Exception as e:
                 logger.warning(f"⚠️  Could not replay spooled live trades: {e}")
 
-            ctx = BotContext(user_id=user_id, markets=[])
+            ctx = BotContext(
+                user_id=user_id,
+                markets=[],
+                started_at=_normalize_started_at(started_at),
+            )
             if session_ids:
                 ctx.session_ids = session_ids
 
@@ -174,6 +197,7 @@ class BotScheduler:
         user_id: str,
         markets: List[str],
         session_ids: Optional[Dict[str, str]] = None,
+        started_at: Optional[datetime] = None,
     ):
         desired_markets = list(dict.fromkeys(markets))
         ctx = self.active_bots.get(user_id)
@@ -182,7 +206,12 @@ class BotScheduler:
             if not desired_markets:
                 await self._db.update_bot_status(user_id, "stopped", [])
                 return
-            await self.start_user_bot(user_id, desired_markets, session_ids=session_ids)
+            await self.start_user_bot(
+                user_id,
+                desired_markets,
+                session_ids=session_ids,
+                started_at=started_at,
+            )
             return
 
         if not desired_markets:
@@ -217,6 +246,8 @@ class BotScheduler:
         ctx.markets = [market for market in desired_markets if market in ctx.market_job_ids]
         if session_ids:
             ctx.session_ids.update(session_ids)
+        if started_at is not None:
+            ctx.started_at = _normalize_started_at(started_at)
 
         if not ctx.markets:
             await self.stop_user_bot(user_id)

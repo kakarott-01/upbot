@@ -22,6 +22,7 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { botStatuses, botSessions, trades } from '@/lib/schema'
 import { eq, desc, and, gte, lte, sql } from 'drizzle-orm'
+import { toUtcIsoString } from '@/lib/time'
 
 // ── Inline cleanup: close stale 'running' sessions if bot is stopped ──────────
 async function closeStaleSessions(userId: string): Promise<void> {
@@ -166,7 +167,21 @@ export async function GET(req: NextRequest) {
   }))
 
   return NextResponse.json({
-    sessions: enriched,
+    sessions: enriched.map((session) => ({
+      id: session.id,
+      exchange: session.exchange,
+      market: session.market,
+      mode: session.mode,
+      status: session.status,
+      started_at: toUtcIsoString(session.startedAt),
+      stopped_at: toUtcIsoString(session.endedAt),
+      totalTrades: session.totalTrades,
+      openTrades: session.openTrades,
+      closedTrades: session.closedTrades,
+      totalPnl: session.totalPnl,
+      errorMessage: session.errorMessage,
+      metadata: session.metadata,
+    })),
     pagination: {
       page,
       limit,

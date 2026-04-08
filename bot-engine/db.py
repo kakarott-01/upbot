@@ -158,22 +158,25 @@ class Database:
 
     # ── Auto-restart support ──────────────────────────────────────────────────
 
-    async def get_running_user_bots(self) -> Dict[str, List[str]]:
+    async def get_running_user_bots(self) -> Dict[str, Dict[str, object]]:
         pool = await self.pool()
         rows = await pool.fetch(
             """
-            SELECT user_id::text, active_markets
+            SELECT user_id::text, active_markets, started_at
             FROM bot_statuses
             WHERE status = 'running'
             """
         )
-        result: Dict[str, List[str]] = {}
+        result: Dict[str, Dict[str, object]] = {}
         for row in rows:
             try:
                 raw = row["active_markets"]
                 markets = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
                 if markets:
-                    result[str(row["user_id"])] = markets
+                    result[str(row["user_id"])] = {
+                        "markets": markets,
+                        "started_at": row["started_at"],
+                    }
             except Exception as e:
                 logger.error(f"❌ get_running_user_bots parse error user={row['user_id']}: {e}")
         return result

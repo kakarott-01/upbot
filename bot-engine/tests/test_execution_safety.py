@@ -299,6 +299,76 @@ class ExecutionSafetyTests(unittest.IsolatedAsyncioTestCase):
                 leverage=10,
             )
 
+    def test_level_plan_applies_fee_risk_safety_buffer(self):
+        algo, connector, _ = self.make_algo()
+        connector.liquidation_price = 70.0
+
+        level_plan = algo._build_level_plan(
+            entry_price=100.0,
+            quantity=1.0,
+            leverage=5,
+            side="BUY",
+            risk_amount=10.0,
+            fee_rate=0.0,
+        )
+
+        self.assertAlmostEqual(level_plan["estimated_total_loss"], 9.9901, places=4)
+        self.assertGreater(level_plan["stop_loss"], 90.0)
+
+    async def test_fee_precision_overflow_within_epsilon_is_not_rejected(self):
+        algo, connector, _ = self.make_algo()
+        connector.market_constraints["quantity"] = 0.5
+        connector.market_constraints["min_notional"] = 1.0
+        connector.liquidation_price = 70.0
+        algo._build_level_plan = lambda *args, **kwargs: {
+            "actual_notional": 50.0,
+            "sl_distance": 0.1,
+            "tp_distance": 0.05,
+            "stop_loss": 90.0,
+            "take_profit": 105.0,
+            "liquidation_price": 70.0,
+            "estimated_total_loss": 10.00002037,
+        }
+        algo._estimate_total_loss = lambda *args, **kwargs: 10.00002037
+
+        plan = await algo._build_trade_plan("BTC/USDT", "BUY", 1000.0, 100.0, 5)
+
+        self.assertAlmostEqual(plan["quantity"], 0.5)
+        self.assertAlmostEqual(plan["estimated_total_loss"], 10.00002037)
+
+    async def test_fee_risk_overflow_scales_quantity_and_logs_adjustment(self):
+        algo, connector, _ = self.make_algo()
+        connector.market_constraints["quantity"] = 0.5
+        connector.market_constraints["min_notional"] = 1.0
+        connector.liquidation_price = 70.0
+
+        async def scaled_constraints(symbol: str, quantity=None, price=None):
+            result = dict(connector.market_constraints)
+            if quantity is not None:
+                result["quantity"] = round(quantity, 8)
+            if price is not None:
+                result["price"] = round(price, 8)
+            return result
+
+        connector.get_market_constraints = scaled_constraints
+        algo._build_level_plan = lambda entry_price, quantity, leverage, side, risk_amount, fee_rate=None: {
+            "actual_notional": entry_price * quantity,
+            "sl_distance": 0.1,
+            "tp_distance": 0.05,
+            "stop_loss": 90.0,
+            "take_profit": 105.0,
+            "liquidation_price": 70.0,
+            "estimated_total_loss": quantity * 20.2,
+        }
+        algo._estimate_total_loss = lambda entry_price, stop_price, quantity, side, fee_rate: quantity * 20.2
+
+        with self.assertLogs(base_algo_module.logger.name, level="WARNING") as logs:
+            plan = await algo._build_trade_plan("BTC/USDT", "BUY", 1000.0, 100.0, 5)
+
+        self.assertLess(plan["quantity"], 0.5)
+        self.assertAlmostEqual(plan["estimated_total_loss"], 10.0, places=6)
+        self.assertTrue(any("Adjusted size for BTC/USDT" in entry for entry in logs.output))
+
     def test_daily_loss_limit_blocks_new_trades(self):
         risk = RiskManager({"daily_loss_limit_pct": 3.0, "max_open_trades": 3})
         risk.daily_loss = -31.0

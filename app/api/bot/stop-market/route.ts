@@ -19,6 +19,7 @@ import { db } from '@/lib/db'
 import { botStatuses, botSessions, trades } from '@/lib/schema'
 import { eq, and, sql } from 'drizzle-orm'
 import { z } from 'zod'
+import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
 
 const schema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
@@ -75,6 +76,7 @@ export async function POST(req: NextRequest) {
         activeMarkets: [],
         stopMode: mode === 'close_all' ? 'close_all' : null,
         stoppingAt: mode === 'close_all' ? now : null,
+        stoppedAt: mode === 'close_all' ? null : now,
         updatedAt: now,
       })
       .where(eq(botStatuses.userId, session.id))
@@ -183,11 +185,13 @@ export async function POST(req: NextRequest) {
     console.warn(`[stop-market] Engine notify failed (non-fatal):`, err)
   }
 
+  const { snapshot } = await getBotStatusSnapshot(session.id)
   return NextResponse.json({
     success: true,
     stoppedMarket: marketType,
     mode,
     remainingMarkets,
     openPositionsClosed: mode === 'close_all' ? openCount : 0,
+    ...snapshot,
   })
 }

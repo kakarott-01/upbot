@@ -7,6 +7,9 @@ import {
   TrendingUp, TrendingDown, RefreshCw, Bot,
 } from 'lucide-react'
 import { format} from 'date-fns'
+import { useGlobalClockStore } from '@/lib/global-clock-store'
+import { useElapsedTimerDiagnostics } from '@/lib/timer-diagnostics'
+import { formatElapsedDuration, getSessionDurationMs } from '@/lib/time'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface BotSession {
@@ -15,8 +18,8 @@ interface BotSession {
   market:       string
   mode:         'paper' | 'live'
   status:       'running' | 'stopped' | 'error'
-  startedAt:    string
-  endedAt:      string | null
+  started_at:   string
+  stopped_at:   string | null
   totalTrades:  number
   openTrades:   number
   closedTrades: number
@@ -31,17 +34,8 @@ interface Pagination {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function getDuration(start: string, end: string | null): string {
-  const s         = new Date(start)
-  const e         = end ? new Date(end) : new Date()
-  const totalSecs = Math.max(0, Math.floor((e.getTime() - s.getTime()) / 1000))
-  const h         = Math.floor(totalSecs / 3600)
-  const m         = Math.floor((totalSecs % 3600) / 60)
-  const sec       = totalSecs % 60
-
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m ${sec}s`
-  return `${sec}s`
+function getDuration(startedAt: string, stoppedAt: string | null, now: number): string {
+  return formatElapsedDuration(getSessionDurationMs(startedAt, stoppedAt, now))
 }
 
 const MARKET_LABEL: Record<string, string> = {
@@ -77,7 +71,7 @@ function DeleteModal({ session, onConfirm, onClose }: {
         <div className="px-5 py-5 space-y-4">
           <p className="text-sm text-gray-300">
             Delete the <span className="font-medium text-white">{MARKET_LABEL[session.market]}</span> session
-            started on <span className="font-medium text-white">{format(new Date(session.startedAt), 'dd MMM yyyy, HH:mm')}</span>?
+            started on <span className="font-medium text-white">{format(new Date(session.started_at), 'dd MMM yyyy, HH:mm')}</span>?
           </p>
           <p className="text-xs text-gray-500">
             {session.totalTrades} trade{session.totalTrades !== 1 ? 's' : ''} recorded in this session.
@@ -157,13 +151,13 @@ function EmptyState() {
 }
 
 // ─── Export to CSV ────────────────────────────────────────────────────────────
-function exportCSV(sessions: BotSession[]) {
+function exportCSV(sessions: BotSession[], now: number) {
   const headers = ['Date', 'Start Time', 'End Time', 'Duration', 'Exchange', 'Market', 'Mode', 'Status', 'Total Trades', 'Open', 'Closed', 'P&L']
   const rows = sessions.map(s => [
-    format(new Date(s.startedAt), 'dd/MM/yyyy'),
-    format(new Date(s.startedAt), 'HH:mm:ss'),
-    s.endedAt ? format(new Date(s.endedAt), 'HH:mm:ss') : '—',
-    getDuration(s.startedAt, s.endedAt),
+    format(new Date(s.started_at), 'dd/MM/yyyy'),
+    format(new Date(s.started_at), 'HH:mm:ss'),
+    s.stopped_at ? format(new Date(s.stopped_at), 'HH:mm:ss') : '—',
+    getDuration(s.started_at, s.stopped_at, now),
     s.exchange,
     s.market,
     s.mode,
@@ -209,10 +203,78 @@ function StatCard({
   )
 }
 
+function BotSessionRow({
+  session,
+  now,
+  onDelete,
+}: {
+  session: BotSession
+  now: number
+  onDelete: (session: BotSession) => void
+}) {
+  const pnl = Number(session.totalPnl ?? 0)
+  const duration = getDuration(session.started_at, session.stopped_at, now)
+  const elapsedMs = getSessionDurationMs(session.started_at, session.stopped_at, now)
+
+  useElapsedTimerDiagnostics(`bot-history:${session.id}`, session.started_at, elapsedMs)
+
+  return (
+    <tr className="hover:bg-gray-800/30 transition-colors group">
+      <td className="px-3 py-3.5 pl-5 text-xs text-gray-300 whitespace-nowrap">
+        {format(new Date(session.started_at), 'dd MMM yyyy')}
+      </td>
+      <td className="px-3 py-3.5 text-xs font-mono text-gray-400 whitespace-nowrap">
+        {format(new Date(session.started_at), 'HH:mm:ss')}
+      </td>
+      <td className="px-3 py-3.5 text-xs font-mono text-gray-400 whitespace-nowrap">
+        {session.stopped_at ? format(new Date(session.stopped_at), 'HH:mm:ss') : (
+          <span className="text-brand-500 animate-pulse">Live…</span>
+        )}
+      </td>
+      <td className="px-3 py-3.5 whitespace-nowrap">
+        <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+          <Clock className="w-3 h-3 text-gray-600 flex-shrink-0" />
+          {duration}
+        </span>
+      </td>
+      <td className="px-3 py-3.5">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs font-medium text-gray-200 capitalize">{session.exchange}</span>
+          <span className="text-xs text-gray-500">{MARKET_LABEL[session.market] ?? session.market}</span>
+        </div>
+      </td>
+      <td className="px-3 py-3.5 whitespace-nowrap"><ModeBadge mode={session.mode} /></td>
+      <td className="px-3 py-3.5">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs text-gray-300 font-medium">{session.totalTrades} total</span>
+          <span className="text-xs text-gray-600 whitespace-nowrap">
+            {session.openTrades} open · {session.closedTrades} closed
+          </span>
+        </div>
+      </td>
+      <td className="px-3 py-3.5 whitespace-nowrap">
+        <span className={`text-xs font-semibold font-mono ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+          {pnl >= 0 ? '+' : ''}₹{Math.abs(pnl).toFixed(2)}
+        </span>
+      </td>
+      <td className="px-3 py-3.5 whitespace-nowrap"><StatusBadge status={session.status} /></td>
+      <td className="px-3 py-3.5 pr-5">
+        <button
+          onClick={() => onDelete(session)}
+          className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-900/20"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </td>
+    </tr>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function BotHistoryPage() {
   const qc = useQueryClient()
   const { toast, show: showToast } = useToast()
+  const now = useGlobalClockStore((state) => state.now)
 
   const [page,        setPage]        = useState(1)
   const [modeFilter,  setModeFilter]  = useState<'all' | 'paper' | 'live'>('all')
@@ -285,7 +347,7 @@ export default function BotHistoryPage() {
           </p>
         </div>
         <button
-          onClick={() => exportCSV(sessions)}
+          onClick={() => exportCSV(sessions, now)}
           disabled={sessions.length === 0}
           className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-gray-400 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
@@ -389,59 +451,14 @@ export default function BotHistoryPage() {
                 ? Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)
                 : sessions.length === 0
                 ? <EmptyState />
-                : sessions.map(s => {
-                    const pnl = Number(s.totalPnl ?? 0)
-                    return (
-                      <tr key={s.id} className="hover:bg-gray-800/30 transition-colors group">
-                        <td className="px-3 py-3.5 pl-5 text-xs text-gray-300 whitespace-nowrap">
-                          {format(new Date(s.startedAt), 'dd MMM yyyy')}
-                        </td>
-                        <td className="px-3 py-3.5 text-xs font-mono text-gray-400 whitespace-nowrap">
-                          {format(new Date(s.startedAt), 'HH:mm:ss')}
-                        </td>
-                        <td className="px-3 py-3.5 text-xs font-mono text-gray-400 whitespace-nowrap">
-                          {s.endedAt ? format(new Date(s.endedAt), 'HH:mm:ss') : (
-                            <span className="text-brand-500 animate-pulse">Live…</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-3.5 whitespace-nowrap">
-                          <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
-                            <Clock className="w-3 h-3 text-gray-600 flex-shrink-0" />
-                            {getDuration(s.startedAt, s.endedAt)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3.5">
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-xs font-medium text-gray-200 capitalize">{s.exchange}</span>
-                            <span className="text-xs text-gray-500">{MARKET_LABEL[s.market] ?? s.market}</span>
-                          </div>
-                        </td>
-                        <td className="px-3 py-3.5 whitespace-nowrap"><ModeBadge mode={s.mode} /></td>
-                        <td className="px-3 py-3.5">
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-xs text-gray-300 font-medium">{s.totalTrades} total</span>
-                            <span className="text-xs text-gray-600 whitespace-nowrap">
-                              {s.openTrades} open · {s.closedTrades} closed
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-3 py-3.5 whitespace-nowrap">
-                          <span className={`text-xs font-semibold font-mono ${pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                            {pnl >= 0 ? '+' : ''}₹{Math.abs(pnl).toFixed(2)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-3.5 whitespace-nowrap"><StatusBadge status={s.status} /></td>
-                        <td className="px-3 py-3.5 pr-5">
-                          <button
-                            onClick={() => setToDelete(s)}
-                            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-900/20"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })}
+                : sessions.map((session) => (
+                    <BotSessionRow
+                      key={session.id}
+                      session={session}
+                      now={now}
+                      onDelete={setToDelete}
+                    />
+                  ))}
             </tbody>
           </table>
         </div>

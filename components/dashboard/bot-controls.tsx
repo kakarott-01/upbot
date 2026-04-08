@@ -9,6 +9,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { InlineAlert } from '@/components/ui/inline-alert'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { applyBotStatusSnapshot, type BotStatusSnapshot, BOT_STATUS_QUERY_KEY } from '@/lib/bot-status-client'
 import { useToastStore } from '@/lib/toast-store'
 import { cn } from '@/lib/utils'
 
@@ -393,6 +394,7 @@ export function BotControls({ botData }: { botData: any }) {
   // ── Mutations ───────────────────────────────────────────────────────────────
 
   const syncMutation = useMutation({
+    mutationKey: ['bot-start'],
     mutationFn: async ({ markets, conflictOverrides = [] }: { markets: MarketId[]; conflictOverrides?: MarketId[] }) => {
       const res  = await fetch('/api/bot/start', {
         method: 'POST',
@@ -403,26 +405,15 @@ export function BotControls({ botData }: { botData: any }) {
       if (!res.ok) throw new Error(data.error ?? `Failed to sync bot (HTTP ${res.status})`)
       return data
     },
-    onMutate: async ({ markets }) => {
-      await qc.cancelQueries({ queryKey: ['bot-status'] })
-      const previous = qc.getQueryData(['bot-status'])
-      qc.setQueryData(['bot-status'], (old: any) => ({
-        ...old,
-        status:        'running',
-        activeMarkets: markets,
-        sessions: MARKETS.map((m) => ({
-          ...(sessionByMarket.get(m.id) ?? { market: m.id }),
-          market: m.id,
-          status: markets.includes(m.id) ? 'running' : 'stopped',
-        })),
-      }))
-      return { previous }
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY, refetchType: 'none' })
     },
-    onError: (err: Error, _v, ctx) => {
-      if (ctx?.previous) qc.setQueryData(['bot-status'], ctx.previous)
+    onError: (err: Error) => {
       pushToast({ tone: 'error', title: 'Session update failed', description: err.message })
     },
-    onSuccess: (_d, vars) => {
+    onSuccess: (data, vars) => {
+      applyBotStatusSnapshot(qc, data as BotStatusSnapshot, 'start-mutation')
       pushToast({
         tone: 'success',
         title: 'Market sessions updated',
@@ -452,7 +443,8 @@ export function BotControls({ botData }: { botData: any }) {
     onError: (err: Error) => {
       pushToast({ tone: 'error', title: 'Stop request failed', description: err.message })
     },
-    onSuccess: (_d, mode) => {
+    onSuccess: (data, mode) => {
+      applyBotStatusSnapshot(qc, data as BotStatusSnapshot, 'stop-all-mutation')
       pushToast({
         tone: mode === 'close_all' ? 'warning' : 'success',
         title: mode === 'close_all' ? 'Emergency stop requested' : 'Graceful drain started',
@@ -480,23 +472,11 @@ export function BotControls({ botData }: { botData: any }) {
       if (!res.ok) throw new Error(data.error ?? `Failed to stop ${marketType}`)
       return data
     },
-    onMutate: async ({ marketType }) => {
-      await qc.cancelQueries({ queryKey: ['bot-status'] })
-      const previous = qc.getQueryData(['bot-status'])
-      qc.setQueryData(['bot-status'], (old: any) => ({
-        ...old,
-        activeMarkets: (old?.activeMarkets ?? []).filter((m: string) => m !== marketType),
-        sessions: (old?.sessions ?? []).map((s: any) =>
-          s.market === marketType ? { ...s, status: 'stopped' } : s
-        ),
-      }))
-      return { previous }
-    },
-    onError: (err: Error, vars, ctx) => {
-      if (ctx?.previous) qc.setQueryData(['bot-status'], ctx.previous)
+    onError: (err: Error, vars) => {
       pushToast({ tone: 'error', title: `Failed to stop ${vars.marketType}`, description: err.message })
     },
     onSuccess: (data) => {
+      applyBotStatusSnapshot(qc, data as BotStatusSnapshot, 'stop-market-mutation')
       const label = MARKETS.find((m) => m.id === data.stoppedMarket)?.label ?? data.stoppedMarket
       pushToast({
         tone: data.mode === 'close_all' ? 'warning' : 'success',
@@ -515,6 +495,8 @@ export function BotControls({ botData }: { botData: any }) {
       qc.invalidateQueries({ queryKey: ['bot-history'] })
     },
   })
+
+  const isStarting = syncMutation.isPending && status !== 'running'
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -629,11 +611,12 @@ export function BotControls({ botData }: { botData: any }) {
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Bot Status</p>
             <div className="mt-2 flex items-center gap-2">
               <StatusBadge tone={
+                isStarting            ? 'info'    :
                 status === 'running'  ? 'success' :
                 status === 'stopping' ? 'warning' :
                 status === 'error'    ? 'danger'  : 'neutral'
               }>
-                {status.toUpperCase()}
+                {isStarting ? 'STARTING' : status.toUpperCase()}
               </StatusBadge>
               <span className="text-xs text-gray-500">
                 {activeMarkets.length} active market{activeMarkets.length === 1 ? '' : 's'}
