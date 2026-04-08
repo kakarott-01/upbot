@@ -1614,7 +1614,6 @@ class BaseAlgo(ABC):
         quantity: float,
         runtime_settings: Dict,
         trade_plan: Dict[str, float],
-        ,
         global_snapshot: Optional[Dict] = None,
     ) -> Tuple[float, bool, str, Dict]:
         health = runtime_settings.get("health", {})
