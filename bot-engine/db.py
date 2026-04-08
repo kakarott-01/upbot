@@ -542,6 +542,194 @@ class Database:
             return float(row["paper_balance"])
         return 10_000.0
 
+    async def get_open_trade_count_for_market(self, user_id: str, market_type: str) -> int:
+        pool = await self.pool()
+        row = await pool.fetchrow(
+            """SELECT count(*)::int AS n
+               FROM trades
+               WHERE user_id=$1 AND market_type=$2 AND status='open'""",
+            user_id, market_type,
+        )
+        return int(row["n"] or 0) if row else 0
+
+    async def has_open_trade_for_symbol(self, user_id: str, market_type: str, symbol: str) -> bool:
+        pool = await self.pool()
+        row = await pool.fetchrow(
+            """SELECT 1
+               FROM trades
+               WHERE user_id=$1 AND market_type=$2 AND symbol=$3 AND status='open'
+               LIMIT 1""",
+            user_id, market_type, symbol,
+        )
+        return row is not None
+
+    async def ensure_risk_state_day(
+        self,
+        user_id: str,
+        market_type: str,
+        open_trade_count: int,
+    ):
+        pool = await self.pool()
+        await pool.execute(
+            """INSERT INTO risk_state
+               (user_id, market_type, daily_loss, open_trade_count, last_loss_time, day_date, updated_at)
+               VALUES ($1, $2, 0, $3, NULL, CURRENT_DATE, NOW())
+               ON CONFLICT (user_id, market_type, day_date)
+               DO UPDATE SET open_trade_count=$3, updated_at=NOW()""",
+            user_id, market_type, open_trade_count,
+        )
+
+    async def sync_open_trade_count(self, user_id: str, market_type: str) -> int:
+        actual_count = await self.get_open_trade_count_for_market(user_id, market_type)
+        await self.ensure_risk_state_day(user_id, market_type, actual_count)
+        return actual_count
+
+    async def reserve_trade_slot(
+        self,
+        user_id: str,
+        market_type: str,
+        symbol: str,
+        max_open_trades: int,
+    ) -> Dict[str, Any]:
+        pool = await self.pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                lock_acquired = await conn.fetchval(
+                    "SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2))",
+                    user_id, market_type,
+                )
+                if not lock_acquired:
+                    row = await conn.fetchrow(
+                        """SELECT count(*)::int AS n
+                           FROM trades
+                           WHERE user_id=$1 AND market_type=$2 AND status='open'""",
+                        user_id, market_type,
+                    )
+                    return {
+                        "reserved": False,
+                        "duplicate_symbol": False,
+                        "lock_timeout": True,
+                        "open_trade_count": int(row["n"] or 0) if row else 0,
+                        "reason": f"Timed out waiting for trade slot lock for {market_type}",
+                    }
+                open_rows = await conn.fetch(
+                    """SELECT id, symbol
+                       FROM trades
+                       WHERE user_id=$1 AND market_type=$2 AND status='open'
+                       FOR UPDATE""",
+                    user_id, market_type,
+                )
+                actual_count = len(open_rows)
+                if any(str(row["symbol"]) == symbol for row in open_rows):
+                    await conn.execute(
+                        """INSERT INTO risk_state
+                           (user_id, market_type, daily_loss, open_trade_count, last_loss_time, day_date, updated_at)
+                           VALUES ($1, $2, 0, $3, NULL, CURRENT_DATE, NOW())
+                           ON CONFLICT (user_id, market_type, day_date)
+                           DO UPDATE SET open_trade_count=$3, updated_at=NOW()""",
+                        user_id, market_type, actual_count,
+                    )
+                    return {
+                        "reserved": False,
+                        "duplicate_symbol": True,
+                        "lock_timeout": False,
+                        "open_trade_count": actual_count,
+                        "reason": f"Open position already exists for {symbol}",
+                    }
+
+                row = await conn.fetchrow(
+                    """SELECT daily_loss, open_trade_count, last_loss_time
+                       FROM risk_state
+                       WHERE user_id=$1 AND market_type=$2 AND day_date=CURRENT_DATE
+                       FOR UPDATE""",
+                    user_id, market_type,
+                )
+                current_count = max(actual_count, int(row["open_trade_count"] or 0)) if row else actual_count
+                if current_count >= max_open_trades:
+                    if row:
+                        await conn.execute(
+                            """UPDATE risk_state
+                               SET open_trade_count=$3, updated_at=NOW()
+                               WHERE user_id=$1 AND market_type=$2 AND day_date=CURRENT_DATE""",
+                            user_id, market_type, current_count,
+                        )
+                    else:
+                        await conn.execute(
+                            """INSERT INTO risk_state
+                               (user_id, market_type, daily_loss, open_trade_count, last_loss_time, day_date, updated_at)
+                               VALUES ($1, $2, 0, $3, NULL, CURRENT_DATE, NOW())""",
+                            user_id, market_type, current_count,
+                        )
+                    return {
+                        "reserved": False,
+                        "duplicate_symbol": False,
+                        "lock_timeout": False,
+                        "open_trade_count": current_count,
+                        "reason": f"Max open trades ({max_open_trades}) reached",
+                    }
+
+                next_count = current_count + 1
+                if row:
+                    await conn.execute(
+                        """UPDATE risk_state
+                           SET open_trade_count=$3, updated_at=NOW()
+                           WHERE user_id=$1 AND market_type=$2 AND day_date=CURRENT_DATE""",
+                        user_id, market_type, next_count,
+                    )
+                else:
+                    await conn.execute(
+                        """INSERT INTO risk_state
+                           (user_id, market_type, daily_loss, open_trade_count, last_loss_time, day_date, updated_at)
+                           VALUES ($1, $2, 0, $3, NULL, CURRENT_DATE, NOW())""",
+                        user_id, market_type, next_count,
+                    )
+                return {
+                    "reserved": True,
+                    "duplicate_symbol": False,
+                    "lock_timeout": False,
+                    "open_trade_count": next_count,
+                    "reason": "ok",
+                }
+
+    async def release_trade_slot(self, user_id: str, market_type: str) -> int:
+        pool = await self.pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+                    user_id, market_type,
+                )
+                open_rows = await conn.fetch(
+                    """SELECT id
+                       FROM trades
+                       WHERE user_id=$1 AND market_type=$2 AND status='open'
+                       FOR UPDATE""",
+                    user_id, market_type,
+                )
+                actual_count = len(open_rows)
+                row = await conn.fetchrow(
+                    """SELECT 1
+                       FROM risk_state
+                       WHERE user_id=$1 AND market_type=$2 AND day_date=CURRENT_DATE
+                       FOR UPDATE""",
+                    user_id, market_type,
+                )
+                if row:
+                    await conn.execute(
+                        """UPDATE risk_state
+                           SET open_trade_count=$3, updated_at=NOW()
+                           WHERE user_id=$1 AND market_type=$2 AND day_date=CURRENT_DATE""",
+                        user_id, market_type, actual_count,
+                    )
+                else:
+                    await conn.execute(
+                        """INSERT INTO risk_state
+                           (user_id, market_type, daily_loss, open_trade_count, last_loss_time, day_date, updated_at)
+                           VALUES ($1, $2, 0, $3, NULL, CURRENT_DATE, NOW())""",
+                        user_id, market_type, actual_count,
+                    )
+                return actual_count
+
     # ── Watchdog restart counter ──────────────────────────────────────────────
 
     async def get_watchdog_restart_count(self, user_id: str) -> int:
@@ -723,6 +911,8 @@ class Database:
         side: str,
         quantity: float,
         price: float,
+        stop_loss: Optional[float],
+        take_profit: Optional[float],
         algo_name: str,
         market_type: str,
         session_ref: str = "",
@@ -736,14 +926,16 @@ class Database:
         row = await pool.fetchrow(
             """INSERT INTO trades
                (user_id, exchange_name, market_type, symbol, side, quantity,
-                entry_price, fee_rate, filled_quantity, remaining_quantity,
+                entry_price, stop_loss, take_profit, fee_rate, filled_quantity, remaining_quantity,
                 status, algo_used, strategy_key, position_scope_key, is_paper, bot_session_ref, metadata, opened_at)
-               VALUES ($1,'paper',$2,$3,$4,$5,$6,$7,0,$5,'open',$8,$9,$10,true,$11,$12,$13)
+               VALUES ($1,'paper',$2,$3,$4,$5,$6,$7,$8,$9,0,$5,'open',$10,$11,$12,true,$13,$14,$15)
                ON CONFLICT (user_id, market_type, symbol, position_scope_key)
                WHERE status='open' DO NOTHING
                RETURNING id""",
             user_id, market_type, symbol,
             side.lower(), str(quantity), str(price),
+            str(stop_loss) if stop_loss is not None else None,
+            str(take_profit) if take_profit is not None else None,
             str(fee_rate), algo_name, strategy_key, scope_key, session_ref or None,
             metadata,
             datetime.utcnow(),
@@ -825,7 +1017,7 @@ class Database:
         if position_scope_key:
             row = await pool.fetchrow(
                 """SELECT id, side, quantity, entry_price, opened_at,
-                          fee_rate, fee_amount, pnl, net_pnl,
+                          stop_loss, take_profit, fee_rate, fee_amount, pnl, net_pnl,
                           filled_quantity, remaining_quantity, strategy_key, position_scope_key,
                           metadata
                    FROM trades
@@ -837,7 +1029,7 @@ class Database:
         else:
             row = await pool.fetchrow(
                 """SELECT id, side, quantity, entry_price, opened_at,
-                          fee_rate, fee_amount, pnl, net_pnl,
+                          stop_loss, take_profit, fee_rate, fee_amount, pnl, net_pnl,
                           filled_quantity, remaining_quantity, strategy_key, position_scope_key,
                           metadata
                    FROM trades

@@ -37,6 +37,7 @@ from exchange_connector import ExchangeConnector, clear_ohlcv_cache
 from risk_manager import RiskManager
 from close_all_engine import CloseAllEngine
 from configured_algo import ConfiguredMultiStrategyAlgo
+from algorithms.crypto import CryptoAlgo
 
 logger = logging.getLogger(__name__)
 
@@ -379,7 +380,7 @@ class BotScheduler:
         position_mode = strategy_cfg.get("position_mode", "NET")
         allow_hedge_opposition = bool(strategy_cfg.get("allow_hedge_opposition", False))
 
-        if not strategy_keys:
+        if market != "crypto" and not strategy_keys:
             logger.warning(f"⚠️  No strategy config for market={market}, skipping")
             return False
 
@@ -400,31 +401,55 @@ class BotScheduler:
             )
 
         interval = MARKET_INTERVAL.get(market, 60)
-        scopes = (
-            [{"strategy_keys": strategy_keys, "execution_mode": "SAFE", "position_scope_key": "|".join(strategy_keys)}]
-            if execution_mode == "SAFE" or len(strategy_keys) == 1
-            else [
-                {"strategy_keys": [strategy_key], "execution_mode": "AGGRESSIVE", "position_scope_key": strategy_key}
-                for strategy_key in strategy_keys
-            ]
-        )
+        if market == "crypto":
+            scopes = [{"algo_class": CryptoAlgo, "position_scope_key": "crypto"}]
+        else:
+            scopes = (
+                [{
+                    "algo_class": ConfiguredMultiStrategyAlgo,
+                    "strategy_keys": strategy_keys,
+                    "execution_mode": "SAFE",
+                    "position_scope_key": "|".join(strategy_keys),
+                }]
+                if execution_mode == "SAFE" or len(strategy_keys) == 1
+                else [
+                    {
+                        "algo_class": ConfiguredMultiStrategyAlgo,
+                        "strategy_keys": [strategy_key],
+                        "execution_mode": "AGGRESSIVE",
+                        "position_scope_key": strategy_key,
+                    }
+                    for strategy_key in strategy_keys
+                ]
+            )
 
         job_ids: List[str] = []
         for scope in scopes:
-            algo = ConfiguredMultiStrategyAlgo(
+            algo_class = scope["algo_class"]
+            common_kwargs = dict(
                 connector=connector,
                 risk_mgr=risk_mgr,
                 db=self._db,
                 user_id=user_id,
                 paper_mode=paper_mode,
                 session_ref=session_ref,
-                market_type_name=market,
-                strategy_keys=scope["strategy_keys"],
-                execution_mode=scope["execution_mode"],
                 position_mode=position_mode,
                 allow_hedge_opposition=allow_hedge_opposition,
                 position_scope_key=scope["position_scope_key"],
             )
+            if market == "crypto":
+                algo = algo_class(**common_kwargs)
+                risk_mgr.cfg.max_open_trades = int(algo.config.get("max_open_trades", risk_mgr.cfg.max_open_trades))
+                risk_mgr.cfg.max_daily_loss_pct = float(
+                    algo.config.get("daily_loss_limit_pct", risk_mgr.cfg.max_daily_loss_pct)
+                )
+            else:
+                algo = algo_class(
+                    **common_kwargs,
+                    market_type_name=market,
+                    strategy_keys=scope["strategy_keys"],
+                    execution_mode=scope["execution_mode"],
+                )
             algo._risk_loaded = True
 
             safe_scope = scope["position_scope_key"].replace("/", "_").replace("|", "_")
@@ -483,7 +508,7 @@ class BotScheduler:
             job_ids.append(job_id)
             ctx.job_ids.append(job_id)
             logger.info(
-                f"✅ Scheduled {ConfiguredMultiStrategyAlgo.__name__} market={market} "
+                f"✅ Scheduled {algo.__class__.__name__} market={market} "
                 f"scope={scope['position_scope_key']} every {interval}s "
                 f"[{'PAPER' if paper_mode else '🔴 LIVE'}] session_ref={session_ref}"
             )

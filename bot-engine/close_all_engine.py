@@ -221,7 +221,12 @@ class CloseAllEngine:
 
             order_id = None
             try:
-                order    = await connector.place_order(symbol, close_side, remaining_qty)
+                order    = await connector.place_order(
+                    symbol,
+                    close_side,
+                    remaining_qty,
+                    params={"reduceOnly": True},
+                )
                 order_id = order.get("id")
 
                 filled_qty, fill_price, status_str, error = await self._confirm_fill(

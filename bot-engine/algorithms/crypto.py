@@ -138,10 +138,18 @@ class CryptoAlgo(BaseAlgo):
                     "signal":      open_row["side"].upper(),
                     "entry_price": float(open_row["entry_price"]),
                     "opened_at":   opened_at,
+                    "stop_loss":   float(open_row["stop_loss"]) if open_row.get("stop_loss") is not None else None,
+                    "take_profit": float(open_row["take_profit"]) if open_row.get("take_profit") is not None else None,
+                    "quantity":    float(open_row.get("remaining_quantity") or open_row.get("quantity") or 0),
                     "leverage":    int(open_row.get("metadata", {}).get("leverage", 1)
                                        if isinstance(open_row.get("metadata"), dict) else 1),
                     "confidence":  float(open_row.get("metadata", {}).get("confidence", 50)
                                          if isinstance(open_row.get("metadata"), dict) else 50),
+                    "liquidation_price": (
+                        float(open_row.get("metadata", {}).get("liquidation_price"))
+                        if isinstance(open_row.get("metadata"), dict) and open_row.get("metadata", {}).get("liquidation_price") not in (None, "")
+                        else None
+                    ),
                 }
                 logger.info(
                     "🔄 Restored Crypto position: %s %s @ %s (lev=%s)",
@@ -352,37 +360,33 @@ class CryptoAlgo(BaseAlgo):
         side      = pos["signal"]
         entry     = pos["entry_price"]
         opened_at = pos["opened_at"]
-        leverage  = pos.get("leverage", 1)
-        confidence= pos.get("confidence", 50.0)
-
-        sl_pct = float(self.risk.cfg.stop_loss_pct)
-        tp_pct = float(self.risk.cfg.take_profit_pct)
-
-        # Leverage-adjusted PnL thresholds (as % of ENTRY, not notional)
-        # sl_pct and tp_pct are % of notional; convert to price distance
-        # price_sl_dist = sl_pct / leverage   (to limit actual money loss)
-        price_sl_dist = sl_pct / leverage
-        price_tp_dist = tp_pct / leverage
+        confidence = pos.get("confidence", 50.0)
+        stop_loss  = pos.get("stop_loss")
+        take_profit = pos.get("take_profit")
 
         curr_close = float(df["close"].iloc[-1])
+        curr_high  = float(df["high"].iloc[-1])
+        curr_low   = float(df["low"].iloc[-1])
 
-        # Raw price PnL %
-        if side == "BUY":
-            price_pnl_pct = (curr_close - entry) / entry * 100
-        else:
-            price_pnl_pct = (entry - curr_close) / entry * 100
+        if stop_loss is not None:
+            if side == "BUY" and curr_low <= float(stop_loss):
+                self._set_exit_price_override(symbol, float(stop_loss))
+                self._close(symbol, f"SL @{float(stop_loss):.8f}")
+                return "SELL"
+            if side == "SELL" and curr_high >= float(stop_loss):
+                self._set_exit_price_override(symbol, float(stop_loss))
+                self._close(symbol, f"SL @{float(stop_loss):.8f}")
+                return "BUY"
 
-        # Effective leveraged PnL
-        leveraged_pnl_pct = price_pnl_pct * leverage
-
-        # TP / SL check on leveraged basis
-        if leveraged_pnl_pct >= tp_pct:
-            self._close(symbol, f"TP +{leveraged_pnl_pct:.2f}% (lev={leverage}×)")
-            return "SELL" if side == "BUY" else "BUY"
-
-        if leveraged_pnl_pct <= -sl_pct:
-            self._close(symbol, f"SL {leveraged_pnl_pct:.2f}% (lev={leverage}×)")
-            return "SELL" if side == "BUY" else "BUY"
+        if take_profit not in (None, 0, 0.0):
+            if side == "BUY" and curr_high >= float(take_profit):
+                self._set_exit_price_override(symbol, float(take_profit))
+                self._close(symbol, f"TP @{float(take_profit):.8f}")
+                return "SELL"
+            if side == "SELL" and curr_low <= float(take_profit):
+                self._set_exit_price_override(symbol, float(take_profit))
+                self._close(symbol, f"TP @{float(take_profit):.8f}")
+                return "BUY"
 
         # Hold time check (confidence-based)
         max_hold_hours = hold_hours_from_score(confidence)
@@ -546,6 +550,8 @@ def detect_pullback(df: pd.DataFrame, ind: _Indicators) -> Optional[str]:
     rsi      = ind.rsi
     ema20    = ind.ema20
     ema50    = ind.ema50
+    if price <= 0 or ema20 <= 0 or ema50 <= 0 or ind.ema200 <= 0:
+        return None
 
     curr_candle = df.iloc[-1]
     is_bullish_candle = float(curr_candle["close"]) > float(curr_candle["open"])

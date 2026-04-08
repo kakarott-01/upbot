@@ -71,7 +71,12 @@ class ConfiguredMultiStrategyAlgo(LeverageMixin, BaseAlgo):
         return self._market_type_name
 
     def config_filename(self) -> str:
-        return "__sealed_blackbox__.json"
+        return {
+            "indian": "indian_markets.json",
+            "commodities": "commodities.json",
+            "global": "global_general.json",
+            "crypto": "crypto.json",
+        }.get(self._market_type_name, "global_general.json")
 
     def default_config(self) -> Dict:
         return {
@@ -187,8 +192,7 @@ class ConfiguredMultiStrategyAlgo(LeverageMixin, BaseAlgo):
                 except Exception as exc:
                     logger.warning("⚠️  confidence scoring failed for %s: %s", symbol, exc)
                     return None
-
-            self._stage_open(symbol, decision, latest_close, leverage=leverage)
+            self._stage_open(symbol, decision, latest_close, leverage=leverage, confidence=conf if self._market_type_name == "crypto" else 50.0)
             return decision
         return None
 

@@ -21,6 +21,7 @@ import logging
 import time
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
+from datetime import date
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class RiskManager:
         # In-memory state — synced to DB after every trade event
         self.daily_loss       = 0.0
         self.open_trade_count = 0
+        self.day_date         = date.today()
         # F10: last_loss_time is now restored from DB on startup
         self.last_loss_time: Optional[float] = None
 
@@ -84,6 +86,7 @@ class RiskManager:
             state = await db.get_risk_state(user_id, market_type)
             self.daily_loss       = state.get("daily_loss", 0.0)
             self.open_trade_count = state.get("open_trade_count", 0)
+            self.day_date         = date.today()
             # F10: Restore last_loss_time. None means no loss recorded today.
             self.last_loss_time   = state.get("last_loss_time", None)
             self._loaded_from_db  = True
@@ -128,8 +131,30 @@ class RiskManager:
                 self.open_trade_count,
                 self.last_loss_time,  # F10: persist epoch float or None
             )
+            self.day_date = date.today()
         except Exception as e:
             logger.warning(f"⚠️  Failed to persist risk state: {e}")
+
+    async def ensure_current_day(self, db, user_id: str, market_type: str):
+        today = date.today()
+        if self.day_date == today:
+            return
+        current_open_trades = await db.sync_open_trade_count(user_id, market_type)
+        self.daily_loss = 0.0
+        self.last_loss_time = None
+        self.open_trade_count = current_open_trades
+        self.day_date = today
+        await db.update_risk_state(
+            user_id,
+            market_type,
+            self.daily_loss,
+            self.open_trade_count,
+            self.last_loss_time,
+        )
+        logger.info(
+            "📆 Risk day rolled forward for %s: daily loss reset, open trades resynced to %d",
+            market_type, current_open_trades,
+        )
 
     # ── Core risk calculations ─────────────────────────────────────────────────
 

@@ -93,6 +93,8 @@ def _evaluate_regime(df: pd.DataFrame) -> MarketRegime:
     curr_close  = float(close.iloc[-1])
     curr_atr    = float(atr.iloc[-1])
     avg_atr     = float(atr.rolling(20).mean().iloc[-1])
+    if curr_ema50 <= 0 or curr_ema200 <= 0 or curr_close <= 0 or curr_atr < 0:
+        raise ValueError("Invalid denominator input for market regime detection")
 
     # ── Criterion 1: EMA separation ─────────────────────────────────────────
     ema_separation_pct = abs(curr_ema50 - curr_ema200) / curr_ema200 * 100

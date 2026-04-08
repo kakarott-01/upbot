@@ -150,6 +150,8 @@ def _score_trend(df: pd.DataFrame, signal: Signal) -> float:
     curr_price  = float(close.iloc[-1])
     curr_ema200 = float(ema200.iloc[-1])
     curr_ema50  = float(ema50.iloc[-1])
+    if curr_price <= 0 or curr_ema200 <= 0 or curr_ema50 <= 0:
+        return 0.0
 
     # Is the overall trend aligned with the signal?
     if signal == "BUY":
@@ -172,7 +174,10 @@ def _score_trend(df: pd.DataFrame, signal: Signal) -> float:
         dist_score = 0.3  # too extended
 
     # EMA50 slope (last 5 bars)
-    ema50_slope = (float(ema50.iloc[-1]) - float(ema50.iloc[-5])) / float(ema50.iloc[-5]) * 100
+    ema50_prev = float(ema50.iloc[-5])
+    if ema50_prev <= 0:
+        return 0.0
+    ema50_slope = (float(ema50.iloc[-1]) - ema50_prev) / ema50_prev * 100
     slope_aligned = (signal == "BUY" and ema50_slope > 0) or (signal == "SELL" and ema50_slope < 0)
     slope_bonus = 0.1 if slope_aligned else 0.0
 
