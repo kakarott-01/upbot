@@ -33,12 +33,18 @@ export async function PUT(req: NextRequest) {
   if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   try {
-    await assertBotStoppedForSensitiveMutation(session.id, 'Stop the bot before changing strategies.')
-
     const parsed = strategyConfigSchema.safeParse(await req.json().catch(() => ({})))
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
     }
+
+    // ── Per-market lock: only block if THIS specific market is running ──────
+    // Users can still edit strategies for idle markets while others run.
+    await assertBotStoppedForSensitiveMutation(
+      session.id,
+      `Stop the bot for ${parsed.data.marketType} before changing its strategies.`,
+      parsed.data.marketType,
+    )
 
     const config = await upsertUserMarketStrategyConfig({
       userId: session.id,

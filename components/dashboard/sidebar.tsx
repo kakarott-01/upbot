@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Settings, History,
   BarChart2, Layers, ChevronRight, Zap, BookOpen, FlaskConical, Layers3,
+  CalendarDays,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -12,6 +13,7 @@ export const dashboardNav = [
   { href: '/dashboard/markets',      icon: Layers,          label: 'Markets & APIs' },
   { href: '/dashboard/trades',       icon: History,         label: 'Trade History' },
   { href: '/dashboard/bot-history',  icon: BookOpen,        label: 'Bot History' },
+  { href: '/dashboard/daily-pnl',    icon: CalendarDays,    label: 'Daily P&L' },
   { href: '/dashboard/performance',  icon: BarChart2,       label: 'Performance' },
   { href: '/dashboard/backtests',    icon: FlaskConical,    label: 'Backtests' },
   { href: '/dashboard/strategy-engine', icon: Layers3,      label: 'Strategy Engine' },
@@ -69,7 +71,7 @@ export function Sidebar() {
         </div>
         <span className="font-semibold text-gray-100">UpBot</span>
       </div>
-      <nav className="flex-1 p-3 space-y-1">
+      <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
         {dashboardNav.map(({ href, icon: Icon, label }) => {
           const active = pathname === href
           return (

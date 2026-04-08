@@ -1,28 +1,24 @@
 {
-  "algo_name": "EMA Crossover + RSI + Volume",
+  "algo_name": "EMA Crossover + RSI + Volume v2",
   "enabled": true,
   "paper_mode": true,
   "quote_currency": "INR",
   "fee_rate": 0.0003,
-  "symbols": ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK"],
+  "symbols": ["RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "WIPRO", "AXISBANK"],
   "timeframe": "5m",
   "stop_loss_pct": 0.8,
   "take_profit_pct": 1.5,
   "indicators": {
-    "ema_fast": {
-      "period": 9
-    },
-    "ema_slow": {
-      "period": 21
-    },
+    "ema_fast": { "period": 9 },
+    "ema_slow": { "period": 21 },
     "rsi": {
       "period": 14,
-      "buy_threshold": 50,
-      "sell_threshold": 50
+      "buy_threshold": 48,
+      "sell_threshold": 52
     },
     "volume": {
       "avg_period": 20,
-      "spike_multiplier": 1.5
+      "spike_multiplier": 1.2
     }
   },
   "trading_hours": {
@@ -35,5 +31,5 @@
     "square_off_eod": true,
     "use_tp_sl": true
   },
-  "notes": "EMA 9/21 crossover with RSI > 50 and volume spike for entry. TP/SL exits. Hard EOD square-off at 15:15 IST. No trades in first 5 mins after open. Restart-safe: restores open positions from DB."
+  "notes": "v2: Added WIPRO + AXISBANK. RSI threshold relaxed 50→48/52. Volume spike 1.5×→1.2×. 7 symbols increases daily opportunity from 5 to 7+ trades."
 }

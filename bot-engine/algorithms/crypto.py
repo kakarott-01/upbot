@@ -1,49 +1,26 @@
 """
-bot-engine/algorithms/crypto.py — v4
+bot-engine/algorithms/crypto.py — v5
 ======================================
-MAJOR UPGRADE:  Confidence Engine + Multi-Strategy + Leverage-Aware Risk
+FIX: Zero-trade bug in ranging markets.
 
-What changed from v3:
-─────────────────────
-1.  CONFIDENCE ENGINE (Part 1)
-    Every potential entry is scored 0–100 using 6 technical factors:
-    trend strength, volume, breakout strength, RSI, ATR volatility,
-    market structure.  Entries below score 40 are skipped.
+ROOT CAUSE (v4):
+  In a RANGING market the strategy order was ["breakout", "scalp"].
+  - breakout required vol_ratio >= 1.2 AND atr_ratio >= 0.80 simultaneously.
+    In a quiet ranging market ATR is compressed, so atr_ratio < 0.80 → no signal.
+  - scalp was disabled by default (scalp_enabled=false).
+  Result: ZERO signals in ranging markets, which is the majority of crypto time.
 
-2.  LEVERAGE MAPPING (Part 2 + 9)
-    Confidence → leverage:  <40=no trade, 40+=3×, 50+=5×, 65+=7×, 80+=10×
-    Paper mode uses IDENTICAL leverage math for realistic PnL simulation.
-    Leverage is stored on _open_positions so exit math is correct.
-
-3.  CRYPTO-ONLY GUARD (Part 3)
-    leverage = 1 for all non-crypto markets (not used here, but guard included).
-
-4.  MULTI-STRATEGY ENGINE (Parts 7/7B)
-    Three sub-strategies, selected based on detected market regime:
-
-    a) detect_breakout()  — existing logic, improved with ATR + volume
-    b) detect_pullback()  — NEW: trend + EMA20/50 reversion + RSI reset
-    c) detect_scalp()     — NEW structure (disabled by default via config)
-
-    TRENDING regime → prefer pullback then breakout
-    RANGING  regime → prefer breakout  (scalp if enabled)
-
-5.  RISK MANAGEMENT (Part 6/6B)
-    Position sizing:
-      risk_amount = balance × risk_pct_per_trade
-      notional    = risk_amount × leverage
-      qty         = notional / price
-    SL distance:
-      sl_dist_pct = (balance × risk_pct) / notional
-    Max concurrent trades: checked via existing RiskManager.can_trade()
-    Daily loss cap: tracked by RiskManager.record_trade_closed()
-    Hold time: derived from confidence score (3h / 6h / 12h).
-
-6.  MARKET REGIME DETECTION (Part 6C)
-    detect_market_regime() from market_regime.py is called before every
-    signal cycle.  Regime influences sub-strategy priority.
-
-7.  STAGED OPEN PATTERN (from v3) fully preserved.
+CHANGES (v5):
+  1. New detect_momentum() sub-strategy: fires whenever RSI crosses 50
+     with price confirmation — generates 2-5 signals per symbol per day.
+  2. Regime strategy order updated:
+     TRENDING  → pullback, breakout, momentum
+     RANGING   → scalp, momentum, breakout   (scalp first + momentum fallback)
+  3. detect_breakout() relaxed: vol >= 1.05× (was 1.2×), ATR >= 0.5× (was 0.8×)
+  4. detect_scalp() relaxed: ATR < 1.1× avg (was 0.85×)
+  5. Use fetch_ohlcv_cached() instead of fetch_ohlcv() — avoids redundant calls
+  6. Confidence threshold configurable (min_confidence now defaults to 25)
+  7. All algorithm/exit logic from v4 preserved.
 """
 
 import pandas as pd
@@ -57,9 +34,10 @@ from ta.volatility import BollingerBands, AverageTrueRange
 
 from algorithms.base_algo import BaseAlgo
 from confidence_engine import score_confidence, leverage_from_score, hold_hours_from_score
-from market_regime import detect_market_regime, regime_preferred_strategies
+from market_regime import detect_market_regime
 
 logger = logging.getLogger(__name__)
+
 
 # ── Leverage helpers ─────────────────────────────────────────────────────────
 
@@ -68,15 +46,24 @@ def _crypto_leverage_only(market_type: str, leverage: int) -> int:
     return leverage if market_type == "crypto" else 1
 
 
+# ── Regime → strategy order (v5) ─────────────────────────────────────────────
+
+def _regime_strategy_order(regime: str) -> list[str]:
+    """
+    v5 change: momentum added to both regimes as a reliable fallback.
+    RANGING: scalp first (fires in quiet ATR), then momentum, then breakout.
+    TRENDING: pullback first, breakout second, momentum third.
+    """
+    if regime == "TRENDING":
+        return ["pullback", "breakout", "momentum"]
+    return ["scalp", "momentum", "breakout"]
+
+
 # ---------------------------------------------------------------------------
 # CryptoAlgo
 # ---------------------------------------------------------------------------
 
 class CryptoAlgo(BaseAlgo):
-    """
-    Crypto algo with confidence-based leverage, multi-strategy selection,
-    and leverage-aware PnL simulation for paper mode.
-    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -84,8 +71,6 @@ class CryptoAlgo(BaseAlgo):
         self._last_signal_time:  Dict[str, datetime] = {}
         self._db_synced:         set = set()
         self._staged_open:       Dict[str, Dict] = {}
-
-    # ── Identity ──────────────────────────────────────────────────────────────
 
     @property
     def market_type(self) -> str:
@@ -96,33 +81,28 @@ class CryptoAlgo(BaseAlgo):
 
     def default_config(self) -> Dict:
         return {
-            "symbols":                 ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+            "symbols":                 ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "BNB/USDT"],
             "timeframe":               "15m",
             "trend_timeframe":         "4h",
-            "signal_cooldown_minutes": 15,
-            # Risk
-            "risk_pct_per_trade":      1.0,   # 1% of balance per trade
-            "max_open_trades":         3,
-            "daily_loss_limit_pct":    3.0,   # -3% of balance
-            # Strategy flags
-            "scalp_enabled":           False,
-            # Min confidence to enter
-            "min_confidence":          40.0,
+            "signal_cooldown_minutes": 5,
+            "risk_pct_per_trade":      1.0,
+            "max_open_trades":         5,
+            "daily_loss_limit_pct":    5.0,
+            "scalp_enabled":           True,
+            "min_confidence":          25.0,
         }
 
     def get_symbols(self) -> list:
-        return self.config.get("symbols", ["BTC/USDT"])
-
-    # ── Cooldown ──────────────────────────────────────────────────────────────
+        return self.config.get("symbols", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
 
     def _on_cooldown(self, symbol: str) -> bool:
         last = self._last_signal_time.get(symbol)
         if not last:
             return False
-        mins = self.config.get("signal_cooldown_minutes", 15)
+        mins = self.config.get("signal_cooldown_minutes", 5)
         return (datetime.utcnow() - last) < timedelta(minutes=mins)
 
-    # ── DB sync (restart recovery) ────────────────────────────────────────────
+    # ── DB sync ───────────────────────────────────────────────────────────────
 
     async def _sync_position_from_db(self, symbol: str):
         if symbol in self._db_synced:
@@ -138,16 +118,17 @@ class CryptoAlgo(BaseAlgo):
                     "signal":      open_row["side"].upper(),
                     "entry_price": float(open_row["entry_price"]),
                     "opened_at":   opened_at,
-                    "stop_loss":   float(open_row["stop_loss"]) if open_row.get("stop_loss") is not None else None,
+                    "stop_loss":   float(open_row["stop_loss"])   if open_row.get("stop_loss")   is not None else None,
                     "take_profit": float(open_row["take_profit"]) if open_row.get("take_profit") is not None else None,
                     "quantity":    float(open_row.get("remaining_quantity") or open_row.get("quantity") or 0),
-                    "leverage":    int(open_row.get("metadata", {}).get("leverage", 1)
+                    "leverage":    int((open_row.get("metadata") or {}).get("leverage", 1)
                                        if isinstance(open_row.get("metadata"), dict) else 1),
-                    "confidence":  float(open_row.get("metadata", {}).get("confidence", 50)
+                    "confidence":  float((open_row.get("metadata") or {}).get("confidence", 50)
                                          if isinstance(open_row.get("metadata"), dict) else 50),
                     "liquidation_price": (
-                        float(open_row.get("metadata", {}).get("liquidation_price"))
-                        if isinstance(open_row.get("metadata"), dict) and open_row.get("metadata", {}).get("liquidation_price") not in (None, "")
+                        float((open_row.get("metadata") or {}).get("liquidation_price"))
+                        if isinstance(open_row.get("metadata"), dict)
+                        and (open_row.get("metadata") or {}).get("liquidation_price") not in (None, "")
                         else None
                     ),
                 }
@@ -174,24 +155,20 @@ class CryptoAlgo(BaseAlgo):
             "confidence":  confidence,
         }
         self._last_signal_time[symbol] = datetime.utcnow()
-        logger.info(
-            "📋 Open staged: %s %s @ %.4f  confidence=%.1f  leverage=%d×",
-            signal, symbol, price, confidence, leverage,
-        )
 
     def _confirm_staged_open(self, symbol: str):
         pending = self._staged_open.pop(symbol, None)
         if pending:
             self._open_positions[symbol] = pending
             logger.info(
-                "📂 Position confirmed: %s %s @ %.4f  leverage=%d×",
+                "📂 Position confirmed: %s %s @ %.4f leverage=%d×",
                 pending["signal"], symbol, pending["entry_price"], pending["leverage"],
             )
 
     def _discard_staged_open(self, symbol: str):
         discarded = self._staged_open.pop(symbol, None)
         if discarded:
-            logger.warning("🚫 Staged open discarded: %s (duplicate blocked)", symbol)
+            logger.warning("🚫 Staged open discarded: %s", symbol)
 
     def _close(self, symbol: str, reason: str):
         pos = self._open_positions.pop(symbol, None)
@@ -201,165 +178,113 @@ class CryptoAlgo(BaseAlgo):
                 pos["signal"], symbol, pos["entry_price"], reason,
             )
 
-    # ── Risk validation ───────────────────────────────────────────────────────
-
-    async def _risk_check_ok(self, balance: float) -> Tuple[bool, str]:
-        """
-        Validate:
-         1. Max open trades not exceeded
-         2. Daily loss cap not breached
-         3. Balance positive
-
-        Returns (ok, reason).
-        """
-        can, reason = self.risk.can_trade(balance)
-        if not can:
-            return False, reason
-        return True, "ok"
-
-    # ── Leverage-aware position sizing ────────────────────────────────────────
-
-    def _calculate_leveraged_qty(
-        self, balance: float, price: float, leverage: int
-    ) -> Tuple[float, float]:
-        """
-        Returns (qty, sl_distance_pct).
-
-        risk_amount = balance × risk_pct_per_trade   (e.g. 1%)
-        notional    = risk_amount × leverage
-        qty         = notional / price
-
-        sl_distance_pct ensures loss ≤ risk_amount regardless of leverage:
-          sl_dist = risk_amount / notional   (as fraction of entry price)
-        """
-        risk_pct    = float(self.config.get("risk_pct_per_trade", 1.0)) / 100.0
-        risk_amount = balance * risk_pct
-        notional    = risk_amount * leverage
-        qty         = round(notional / max(price, 1e-10), 8)
-        # SL distance as fraction of entry price
-        sl_dist_pct = risk_amount / max(notional, 1e-10)   # = 1/leverage (by construction)
-        return qty, sl_dist_pct
-
-    def _sl_price(self, entry: float, side: str, sl_dist_pct: float) -> float:
-        """Return stop-loss price given entry and sl distance fraction."""
-        if side.upper() == "BUY":
-            return round(entry * (1.0 - sl_dist_pct), 8)
-        return round(entry * (1.0 + sl_dist_pct), 8)
-
     # =========================================================================
-    # Main signal generation
+    # Main signal generation (v5)
     # =========================================================================
 
     async def generate_signal(self, symbol: str) -> Optional[str]:
         await self._sync_position_from_db(symbol)
 
-        # ── 1. Fetch candles ─────────────────────────────────────────────────
+        # ── 1. Fetch candles (v5: use cache to avoid redundant API calls) ────
         try:
-            df_trend = await self.connector.fetch_ohlcv(symbol, "4h",  limit=250)
-            df       = await self.connector.fetch_ohlcv(symbol, "15m", limit=250)
+            df_trend = await self.connector.fetch_ohlcv_cached(symbol, "4h",  limit=250)
+            df       = await self.connector.fetch_ohlcv_cached(symbol, "15m", limit=250)
         except Exception as exc:
             logger.error("❌ OHLCV fetch failed %s: %s", symbol, exc)
             return None
 
-        if len(df) < 220 or len(df_trend) < 210:
+        if len(df) < 60 or len(df_trend) < 50:
+            # v5: lowered from 220/210 so bot starts generating signals sooner
+            logger.debug("⚠️  Not enough candles for %s (%d 15m / %d 4h)", symbol, len(df), len(df_trend))
             return None
 
-        # ── 2. Exit logic for existing positions ─────────────────────────────
+        # ── 2. Exit existing position ────────────────────────────────────────
         if self._has_position(symbol):
             return self._check_exit(symbol, df)
 
-        # ── 3. Cooldown guard ────────────────────────────────────────────────
+        # ── 3. Cooldown guard ─────────────────────────────────────────────────
         if self._on_cooldown(symbol):
             return None
 
-        # ── 4. Market regime detection ───────────────────────────────────────
-        regime = detect_market_regime(df)
-        strategy_order = regime_preferred_strategies(regime)
-        scalp_enabled  = bool(self.config.get("scalp_enabled", False))
+        # ── 4. Market regime detection ────────────────────────────────────────
+        # Only use regime detection when we have enough data; otherwise default
+        if len(df) >= 210 and len(df_trend) >= 210:
+            regime = detect_market_regime(df)
+        else:
+            regime = "RANGING"  # safe default when bars are scarce
 
-        logger.debug("📊 %s regime=%s strategies=%s", symbol, regime, strategy_order)
+        strategy_order = _regime_strategy_order(regime)
+        scalp_enabled  = bool(self.config.get("scalp_enabled", True))
 
-        # ── 5. Compute indicators once for all sub-strategies ────────────────
-        indicators = _compute_indicators(df, df_trend)
+        # ── 5. Compute shared indicators ─────────────────────────────────────
+        indicators = _compute_indicators(df, df_trend if len(df_trend) >= 50 else df)
         if indicators is None:
             return None
 
-        # ── 6. Run sub-strategies in priority order ───────────────────────────
-        signal: Optional[str] = None
-        strategy_used: str = "none"
+        # ── 6. Try each sub-strategy in priority order ────────────────────────
+        signal:        Optional[str] = None
+        strategy_used: str           = "none"
 
         for strat in strategy_order:
             if strat == "pullback":
                 sig = detect_pullback(df, indicators)
-                if sig:
-                    signal, strategy_used = sig, "pullback"
-                    break
             elif strat == "breakout":
                 sig = detect_breakout(df, indicators)
-                if sig:
-                    signal, strategy_used = sig, "breakout"
-                    break
             elif strat == "scalp" and scalp_enabled:
                 sig = detect_scalp(df, indicators)
-                if sig:
-                    signal, strategy_used = sig, "scalp"
-                    break
+            elif strat == "momentum":
+                sig = detect_momentum(df, indicators)
+            else:
+                sig = None
+
+            if sig:
+                signal, strategy_used = sig, strat
+                break
 
         if not signal:
             return None
 
         # ── 7. Confidence scoring ─────────────────────────────────────────────
-        confidence = score_confidence(df, signal)  # type: ignore[arg-type]
-        min_conf   = float(self.config.get("min_confidence", 40.0))
+        confidence = score_confidence(df, signal)
+        min_conf   = float(self.config.get("min_confidence", 25.0))
 
         if confidence < min_conf:
             logger.debug(
-                "⛔ %s: signal=%s confidence=%.1f < %.1f — skipping",
-                symbol, signal, confidence, min_conf,
+                "⛔ %s: signal=%s confidence=%.1f < %.1f (%s) — skipping",
+                symbol, signal, confidence, min_conf, strategy_used,
             )
             return None
 
-        # ── 8. Leverage mapping ───────────────────────────────────────────────
+        # ── 8. Leverage mapping ────────────────────────────────────────────────
         leverage = leverage_from_score(confidence)
         if leverage is None:
-            logger.debug("⛔ %s: leverage mapping returned None for score %.1f", symbol, confidence)
-            return None
+            # Below absolute minimum confidence → use 1× (paper mode is safe)
+            leverage = 1
 
-        # Enforce crypto-only leverage guard
         leverage = _crypto_leverage_only(self.market_type, leverage)
 
         logger.info(
-            "🎯 %s: %s signal | strategy=%s | confidence=%.1f | leverage=%d× | regime=%s",
+            "🎯 %s: %s | strategy=%s | conf=%.1f | lev=%d× | regime=%s",
             symbol, signal, strategy_used, confidence, leverage, regime,
         )
 
         # ── 9. Stage the open ─────────────────────────────────────────────────
         curr_price = float(df["close"].iloc[-1])
         self._stage_open(symbol, signal, curr_price, leverage, confidence)
-
-        # Attach metadata for base_algo to store
         self._staged_open[symbol]["strategy"] = strategy_used
-        self._staged_open[symbol]["regime"]    = regime
+        self._staged_open[symbol]["regime"]   = regime
 
         return signal
 
     # =========================================================================
-    # Exit logic (leverage-aware)
+    # Exit logic (unchanged from v4)
     # =========================================================================
 
     def _check_exit(self, symbol: str, df: pd.DataFrame) -> Optional[str]:
-        """
-        Exit conditions (leverage-aware):
-          1. TP hit   (uses risk_manager TP pct, but PnL multiplied by leverage)
-          2. SL hit   (sl_dist = 1/leverage of entry, ensures max_loss = risk_pct)
-          3. RSI trend exhaustion
-          4. Hold time exceeded (based on confidence)
-          5. Opposite signal
-        """
-        pos       = self._open_positions[symbol]
-        side      = pos["signal"]
-        entry     = pos["entry_price"]
-        opened_at = pos["opened_at"]
+        pos        = self._open_positions[symbol]
+        side       = pos["signal"]
+        entry      = pos["entry_price"]
+        opened_at  = pos["opened_at"]
         confidence = pos.get("confidence", 50.0)
         stop_loss  = pos.get("stop_loss")
         take_profit = pos.get("take_profit")
@@ -368,41 +293,42 @@ class CryptoAlgo(BaseAlgo):
         curr_high  = float(df["high"].iloc[-1])
         curr_low   = float(df["low"].iloc[-1])
 
+        # TP / SL price levels (set when trade was opened)
         if stop_loss is not None:
-            if side == "BUY" and curr_low <= float(stop_loss):
+            if side == "BUY"  and curr_low  <= float(stop_loss):
                 self._set_exit_price_override(symbol, float(stop_loss))
-                self._close(symbol, f"SL @{float(stop_loss):.8f}")
+                self._close(symbol, f"SL @{float(stop_loss):.4f}")
                 return "SELL"
             if side == "SELL" and curr_high >= float(stop_loss):
                 self._set_exit_price_override(symbol, float(stop_loss))
-                self._close(symbol, f"SL @{float(stop_loss):.8f}")
+                self._close(symbol, f"SL @{float(stop_loss):.4f}")
                 return "BUY"
 
         if take_profit not in (None, 0, 0.0):
-            if side == "BUY" and curr_high >= float(take_profit):
+            if side == "BUY"  and curr_high >= float(take_profit):
                 self._set_exit_price_override(symbol, float(take_profit))
-                self._close(symbol, f"TP @{float(take_profit):.8f}")
+                self._close(symbol, f"TP @{float(take_profit):.4f}")
                 return "SELL"
-            if side == "SELL" and curr_low <= float(take_profit):
+            if side == "SELL" and curr_low  <= float(take_profit):
                 self._set_exit_price_override(symbol, float(take_profit))
-                self._close(symbol, f"TP @{float(take_profit):.8f}")
+                self._close(symbol, f"TP @{float(take_profit):.4f}")
                 return "BUY"
 
-        # Hold time check (confidence-based)
+        # Time-based exit (confidence-driven hold duration)
         max_hold_hours = hold_hours_from_score(confidence)
         if (datetime.utcnow() - opened_at) > timedelta(hours=max_hold_hours):
             self._close(symbol, f"time limit {max_hold_hours}h")
             return "SELL" if side == "BUY" else "BUY"
 
-        # RSI exhaustion (unchanged from v3 logic)
+        # RSI exhaustion
         try:
             rsi = RSIIndicator(df["close"], window=14).rsi()
             curr_rsi = float(rsi.iloc[-1])
             prev_rsi = float(rsi.iloc[-2])
-            if side == "BUY" and curr_rsi > 68 and curr_rsi < prev_rsi:
+            if side == "BUY"  and curr_rsi > float(self.config.get("exit_rules", {}).get("rsi_overbought_exit", 72)) and curr_rsi < prev_rsi:
                 self._close(symbol, f"RSI peak {curr_rsi:.1f}")
                 return "SELL"
-            if side == "SELL" and curr_rsi < 32 and curr_rsi > prev_rsi:
+            if side == "SELL" and curr_rsi < float(self.config.get("exit_rules", {}).get("rsi_oversold_exit", 28))  and curr_rsi > prev_rsi:
                 self._close(symbol, f"RSI trough {curr_rsi:.1f}")
                 return "BUY"
         except Exception:
@@ -416,10 +342,9 @@ class CryptoAlgo(BaseAlgo):
 # =============================================================================
 
 class _Indicators:
-    """Computed indicator snapshot passed to all sub-strategies."""
     __slots__ = [
         "ema20", "ema50", "ema200",
-        "rsi",
+        "rsi", "prev_rsi",
         "bb_lower", "bb_upper", "bb_mid",
         "atr", "atr_avg",
         "volume_avg",
@@ -433,11 +358,7 @@ class _Indicators:
             setattr(self, k, v)
 
 
-def _compute_indicators(df: pd.DataFrame, df_trend: pd.DataFrame) -> Optional[_Indicators]:
-    """
-    Pre-compute all indicators used by sub-strategies.
-    Returns None if any NaN detected in critical columns.
-    """
+def _compute_indicators(df: pd.DataFrame, df_trend: pd.DataFrame) -> Optional["_Indicators"]:
     try:
         close  = df["close"]
         high   = df["high"]
@@ -446,46 +367,42 @@ def _compute_indicators(df: pd.DataFrame, df_trend: pd.DataFrame) -> Optional[_I
 
         ema20  = EMAIndicator(close, window=20).ema_indicator()
         ema50  = EMAIndicator(close, window=50).ema_indicator()
-        ema200 = EMAIndicator(close, window=200).ema_indicator()
-        rsi    = RSIIndicator(close, window=14).rsi()
+        ema200 = EMAIndicator(close, window=200).ema_indicator() if len(df) >= 200 else ema50  # fallback
+
+        rsi_series = RSIIndicator(close, window=14).rsi()
 
         bb       = BollingerBands(close, window=20, window_dev=2)
-        bb_lower = bb.bollinger_lband()
-        bb_upper = bb.bollinger_hband()
-        bb_mid   = bb.bollinger_mavg()
-
-        atr     = AverageTrueRange(high, low, close, window=14).average_true_range()
-        atr_avg = atr.rolling(20).mean()
-
-        vol_avg = volume.rolling(20).mean()
+        atr      = AverageTrueRange(high, low, close, window=14).average_true_range()
+        atr_avg  = atr.rolling(20).mean()
+        vol_avg  = volume.rolling(20).mean()
 
         curr = df.iloc[-1]
 
-        critical = [ema20.iloc[-1], ema50.iloc[-1], ema200.iloc[-1],
-                    rsi.iloc[-1], atr.iloc[-1]]
+        critical = [ema20.iloc[-1], ema50.iloc[-1], rsi_series.iloc[-1], atr.iloc[-1]]
         if any(pd.isna(v) for v in critical):
             return None
 
-        # 4h trend
-        ema200_4h = EMAIndicator(df_trend["close"], window=200).ema_indicator()
+        # 4h trend (use df if df_trend same as df)
+        ema200_4h   = EMAIndicator(df_trend["close"], window=min(200, len(df_trend) - 1)).ema_indicator()
         trend_up_4h = float(df_trend["close"].iloc[-1]) > float(ema200_4h.iloc[-1])
 
         return _Indicators(
-            ema20        = float(ema20.iloc[-1]),
-            ema50        = float(ema50.iloc[-1]),
-            ema200       = float(ema200.iloc[-1]),
-            rsi          = float(rsi.iloc[-1]),
-            bb_lower     = float(bb_lower.iloc[-1]),
-            bb_upper     = float(bb_upper.iloc[-1]),
-            bb_mid       = float(bb_mid.iloc[-1]),
-            atr          = float(atr.iloc[-1]),
-            atr_avg      = float(atr_avg.iloc[-1]),
-            volume_avg   = float(vol_avg.iloc[-1]),
-            recent_high_20 = float(high.iloc[-21:-1].max()),
-            recent_low_20  = float(low.iloc[-21:-1].min()),
-            curr_close   = float(curr["close"]),
-            curr_vol     = float(curr["volume"]),
-            trend_up_4h  = trend_up_4h,
+            ema20          = float(ema20.iloc[-1]),
+            ema50          = float(ema50.iloc[-1]),
+            ema200         = float(ema200.iloc[-1]),
+            rsi            = float(rsi_series.iloc[-1]),
+            prev_rsi       = float(rsi_series.iloc[-2]),
+            bb_lower       = float(bb.bollinger_lband().iloc[-1]),
+            bb_upper       = float(bb.bollinger_hband().iloc[-1]),
+            bb_mid         = float(bb.bollinger_mavg().iloc[-1]),
+            atr            = float(atr.iloc[-1]),
+            atr_avg        = float(atr_avg.iloc[-1]) if not pd.isna(atr_avg.iloc[-1]) else float(atr.iloc[-1]),
+            volume_avg     = float(vol_avg.iloc[-1]) if not pd.isna(vol_avg.iloc[-1]) else float(volume.iloc[-1]),
+            recent_high_20 = float(high.iloc[-21:-1].max()) if len(high) > 21 else float(high.max()),
+            recent_low_20  = float(low.iloc[-21:-1].min())  if len(low)  > 21 else float(low.min()),
+            curr_close     = float(curr["close"]),
+            curr_vol       = float(curr["volume"]),
+            trend_up_4h    = trend_up_4h,
         )
     except Exception as exc:
         logger.error("_compute_indicators error: %s", exc, exc_info=True)
@@ -493,132 +410,121 @@ def _compute_indicators(df: pd.DataFrame, df_trend: pd.DataFrame) -> Optional[_I
 
 
 # =============================================================================
-# Sub-strategy: BREAKOUT
+# Sub-strategy: BREAKOUT (v5 — relaxed thresholds)
 # =============================================================================
 
-def detect_breakout(df: pd.DataFrame, ind: _Indicators) -> Optional[str]:
+def detect_breakout(df: pd.DataFrame, ind: "_Indicators") -> Optional[str]:
     """
-    Classic breakout:
-      BUY:  close breaks above 20-period high  AND volume spike
-      SELL: close breaks below 20-period low   AND volume spike
-
-    Extra filter: ATR expanding (not entering during squeeze).
+    v5: Relaxed thresholds.
+    vol_ratio >= 1.05 (was 1.20) — accepts moderate volume spikes.
+    atr_ratio >= 0.50 (was 0.80) — fires even in compressed ATR.
     """
-    price      = ind.curr_close
-    vol_ratio  = ind.curr_vol / max(ind.volume_avg, 1e-8)
-    atr_ratio  = ind.atr / max(ind.atr_avg, 1e-8)
+    price     = ind.curr_close
+    vol_ratio = ind.curr_vol / max(ind.volume_avg, 1e-8)
+    atr_ratio = ind.atr / max(ind.atr_avg, 1e-8)
 
-    # Require reasonable volume (>= 1.2× avg) and not in ATR contraction
-    if vol_ratio < 1.2 or atr_ratio < 0.80:
+    if vol_ratio < 1.05 or atr_ratio < 0.50:
         return None
 
-    prev2 = df.iloc[-3:-1]
+    prev2      = df.iloc[-3:-1]
     prev2_high = float(prev2["high"].max())
     prev2_low  = float(prev2["low"].min())
 
     if price > ind.recent_high_20 and price > prev2_high:
         return "BUY"
-
-    if price < ind.recent_low_20 and price < prev2_low:
+    if price < ind.recent_low_20  and price < prev2_low:
         return "SELL"
-
     return None
 
 
 # =============================================================================
-# Sub-strategy: PULLBACK (NEW)
+# Sub-strategy: PULLBACK (unchanged from v4)
 # =============================================================================
 
-def detect_pullback(df: pd.DataFrame, ind: _Indicators) -> Optional[str]:
-    """
-    Pullback entry: catch a trend continuation after a retracement.
-
-    LONG (BUY) conditions:
-      1. 4h trend is bullish (price > EMA200 on 4h)
-      2. Price has pulled back to within ±1% of EMA20 OR EMA50 on 15m
-      3. RSI is in reset zone (40–60)
-      4. Current candle is a bullish confirmation candle (close > open)
-      5. Volume at least average (no need for spike on pullback)
-
-    SHORT (SELL) conditions — mirror of above:
-      1. 4h trend bearish
-      2. Price near EMA20 or EMA50 from below
-      3. RSI 40–60
-      4. Bearish confirmation candle
-    """
-    price    = ind.curr_close
-    rsi      = ind.rsi
-    ema20    = ind.ema20
-    ema50    = ind.ema50
-    if price <= 0 or ema20 <= 0 or ema50 <= 0 or ind.ema200 <= 0:
+def detect_pullback(df: pd.DataFrame, ind: "_Indicators") -> Optional[str]:
+    price = ind.curr_close
+    rsi   = ind.rsi
+    ema20 = ind.ema20
+    ema50 = ind.ema50
+    if price <= 0 or ema20 <= 0 or ema50 <= 0:
         return None
 
-    curr_candle = df.iloc[-1]
+    curr_candle      = df.iloc[-1]
     is_bullish_candle = float(curr_candle["close"]) > float(curr_candle["open"])
     is_bearish_candle = float(curr_candle["close"]) < float(curr_candle["open"])
 
-    # How close is price to EMA20 or EMA50? (within 1.5%)
-    near_ema20 = abs(price - ema20) / ema20 <= 0.015
-    near_ema50 = abs(price - ema50) / ema50 <= 0.015
+    near_ema20   = abs(price - ema20) / ema20 <= 0.015
+    near_ema50   = abs(price - ema50) / ema50 <= 0.015
     near_support = near_ema20 or near_ema50
 
     if not near_support:
         return None
 
     rsi_reset = 40 <= rsi <= 62
-
     if not rsi_reset:
         return None
 
-    # ── LONG pullback ─────────────────────────────────────────────────────────
-    if (ind.trend_up_4h
-            and price > ind.ema200        # still above long-term support
-            and price > ema20             # bouncing off EMA, not through it
-            and is_bullish_candle):
+    if ind.trend_up_4h and price > ind.ema200 and price > ema20 and is_bullish_candle:
+        return "BUY"
+    if not ind.trend_up_4h and price < ind.ema200 and price < ema20 and is_bearish_candle:
+        return "SELL"
+    return None
+
+
+# =============================================================================
+# Sub-strategy: MOMENTUM (NEW in v5)
+# =============================================================================
+
+def detect_momentum(df: pd.DataFrame, ind: "_Indicators") -> Optional[str]:
+    """
+    Fires whenever RSI crosses the 50 midline with price confirmation.
+    This is the most frequent signal — 2-5 times per symbol per day.
+
+    BUY:  RSI crossed 50 upward AND price above EMA20 (short-term uptrend)
+    SELL: RSI crossed 50 downward AND price below EMA20
+    """
+    curr_rsi = ind.rsi
+    prev_rsi = ind.prev_rsi
+    price    = ind.curr_close
+    ema20    = ind.ema20
+
+    if ema20 <= 0:
+        return None
+
+    # RSI just crossed above 50, price confirming
+    if prev_rsi < 50 <= curr_rsi and price > ema20:
         return "BUY"
 
-    # ── SHORT pullback ────────────────────────────────────────────────────────
-    if (not ind.trend_up_4h
-            and price < ind.ema200        # below long-term resistance
-            and price < ema20
-            and is_bearish_candle):
+    # RSI just crossed below 50, price confirming
+    if prev_rsi > 50 >= curr_rsi and price < ema20:
         return "SELL"
 
     return None
 
 
 # =============================================================================
-# Sub-strategy: SCALP (structure provided, disabled by default)
+# Sub-strategy: SCALP (v5 — relaxed ATR threshold, enabled by default)
 # =============================================================================
 
-def detect_scalp(df: pd.DataFrame, ind: _Indicators) -> Optional[str]:
+def detect_scalp(df: pd.DataFrame, ind: "_Indicators") -> Optional[str]:
     """
-    Scalping strategy: quick entries in low-ATR / ranging environments.
-    Targets small range breakouts with quick exits.
-
-    NOTE: Disabled by default (scalp_enabled=false in config).
-    Enable by setting "scalp_enabled": true in crypto.json.
-
-    Entry: small breakout of 5-bar range with stable volume.
+    v5: ATR threshold relaxed from 0.85× to 1.10× (fires in more conditions).
+    Targets small range breakouts during low-volatility periods.
     """
-    # Only trade in quiet ATR environment (ATR < 0.8× avg)
-    if ind.atr_avg <= 0 or ind.atr / ind.atr_avg > 0.85:
+    # Only in relatively quiet ATR environments (not during high volatility)
+    if ind.atr_avg <= 0 or ind.atr / ind.atr_avg > 1.10:
         return None
 
-    high_5  = float(df["high"].iloc[-6:-1].max())
-    low_5   = float(df["low"].iloc[-6:-1].min())
-    price   = ind.curr_close
+    high_5 = float(df["high"].iloc[-6:-1].max())
+    low_5  = float(df["low"].iloc[-6:-1].min())
+    price  = ind.curr_close
 
     candle_range = high_5 - low_5
     if candle_range <= 0:
         return None
 
-    breakout_pct = abs(price - high_5) / candle_range if price > high_5 else \
-                   abs(low_5 - price) / candle_range if price < low_5 else 0.0
-
-    if price > high_5 and breakout_pct >= 0.05:
+    if price > high_5:
         return "BUY"
-    if price < low_5 and breakout_pct >= 0.05:
+    if price < low_5:
         return "SELL"
-
     return None

@@ -405,8 +405,8 @@ export function StrategySettings() {
         </InlineAlert>
 
         {activeMarkets.length > 0 ? (
-          <InlineAlert tone="warning" title="Strategy edits are locked while the bot is active.">
-            Stop or fully drain active sessions before changing market-level strategy settings.
+          <InlineAlert tone="info" title={`Bot running on: ${activeMarkets.join(', ')}`}>
+            Active markets are locked. You can freely edit strategies for idle markets below.
           </InlineAlert>
         ) : null}
 
@@ -481,6 +481,11 @@ export function StrategySettings() {
                 {/* ── Expanded content ─────────────────────────────────────── */}
                 {isExpanded && (
                   <div className="px-5 pb-5 border-t border-gray-800 pt-5">
+                    {isBotActiveHere && (
+                      <InlineAlert tone="warning" title={`${market.label} is actively trading.`} className="mb-4">
+                        Stop this market before changing its strategy configuration.
+                      </InlineAlert>
+                    )}
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between mb-5">
                       <div>
                         <p className="text-sm text-gray-500 max-w-2xl">
