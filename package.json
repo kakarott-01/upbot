@@ -13,7 +13,7 @@
     "db:studio": "drizzle-kit studio",
     "mode-audit:dry-run": "node scripts/clean_mode_audit.js",
     "mode-audit:run": "node scripts/clean_mode_audit.js --run",
-    "mode-audit:check-localstorage-guard": "node -e 'const fs=require(\"fs\"); const ok=fs.existsSync(\"lib/local-storage.ts\"); console.log(ok ? \"local-storage:found\" : \"local-storage:missing\"); if(!ok) process.exit(2)'",
+    "mode-audit:check-localstorage-guard": "node -e \"const fs=require('fs'); const pathA='lib/local-storage.ts'; const pathB='lib/bot-sync.ts'; try{ const s=fs.readFileSync(pathA,'utf8'); if(!/export\\s+function\\s+safeLocalSet/.test(s)){console.error('safeLocalSet not exported in '+pathA); process.exit(2);} const b=fs.readFileSync(pathB,'utf8'); if(!/safeLocalSet/.test(b)){console.error(pathB+' does not reference safeLocalSet'); process.exit(2);} console.log('local-storage:ok'); }catch(e){ console.error('local-storage check failed', e); process.exit(2);}\"",
     "ci:mode-audit-retention": "npm run mode-audit:check-localstorage-guard && npm run mode-audit:run"
   },
   "dependencies": {

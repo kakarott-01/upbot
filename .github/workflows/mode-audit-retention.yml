@@ -30,3 +30,12 @@ jobs:
 
       - name: Run mode-audit retention
         run: npm run mode-audit:run
+      - name: Create GitHub issue on failure
+        if: failure()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const title = `Mode audit retention failed — run #${process.env.GITHUB_RUN_ID}`
+            const body = `The scheduled mode-audit retention workflow failed. See run: https://github.com/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+            await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body })

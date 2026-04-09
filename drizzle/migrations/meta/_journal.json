@@ -44,5 +44,27 @@
       "tag": "0005_production_position_architecture",
       "breakpoints": true
     }
+    ,
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1775800000000,
+      "tag": "0006_system_risk_controls",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1775900000000,
+      "tag": "0007_add_stop_loss_order_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1776000000000,
+      "tag": "0008_add_global_exposure_reservations",
+      "breakpoints": true
+    }
   ]
 }

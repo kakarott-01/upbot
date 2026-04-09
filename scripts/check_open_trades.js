@@ -4,7 +4,12 @@ const postgres = require('postgres')
 ;(async () => {
   try {
     const sql = postgres(process.env.DATABASE_URL, { ssl: 'require' })
-    const userId = 'fd0f9174-1c26-46a9-a25d-ac14bf5c5f1f'
+    const userId = process.argv[2] || process.env.TEST_USER_ID
+
+    if (!userId) {
+      console.error('Usage: node scripts/check_open_trades.js <userId>\nOr set TEST_USER_ID in your environment')
+      process.exit(2)
+    }
 
     const totalRows = await sql`SELECT count(*)::int AS count FROM trades WHERE user_id = ${userId} AND status = 'open'`
     console.log('TOTAL', totalRows[0]?.count ?? 0)
