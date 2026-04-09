@@ -37,7 +37,7 @@ Create `.env.local` in the repo root for the Next.js app.
 DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/DB_NAME
 
 NEXTAUTH_SECRET=replace-with-a-long-random-secret
-ENCRYPTION_KEY=replace-with-a-long-random-secret
+ENCRYPTION_KEY=replace-with-a-long-random-secret  
 SIGNUP_JWT_SECRET=replace-with-a-long-random-secret
 
 BOT_ENGINE_URL=http://127.0.0.1:8000
@@ -51,7 +51,7 @@ EMAIL_SERVER_HOST=smtp.example.com
 EMAIL_SERVER_PORT=587
 EMAIL_SERVER_USER=your-user
 EMAIL_SERVER_PASSWORD=your-password
-EMAIL_FROM=AlgoBot <noreply@example.com>
+EMAIL_FROM=UpBot <noreply@example.com>
 
 GOOGLE_CLIENT_ID=optional-google-client-id
 GOOGLE_CLIENT_SECRET=optional-google-client-secret
@@ -67,7 +67,7 @@ Minimal `bot-engine/.env`:
 ```env
 DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/DB_NAME
 ENCRYPTION_KEY=replace-with-a-long-random-secret
-BOT_ENGINE_SECRET=replace-with-a-shared-engine-secret
+BOT_ENGINE_SECRET=replace-with-a-shared-engine-secret  
 BOT_ENGINE_URL=http://127.0.0.1:8000
 NEXT_PUBLIC_APP_URL=http://127.0.0.1:3000
 ```
@@ -171,3 +171,4 @@ npm run db:migrate
 npm run db:push
 npm run db:studio
 ```
+

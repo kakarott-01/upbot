@@ -1,6 +1,6 @@
-# AlgoBot Features
+# UpBot Features
 
-AlgoBot is designed as a real-world trading operations layer, not just a charting toy. It gives traders and operators one place to configure strategies, manage exchange connections, control risk, and monitor live performance.
+UpBot is designed as a real-world trading operations layer, not just a charting toy. It gives traders and operators one place to configure strategies, manage exchange connections, control risk, and monitor live performance.
 
 ## Multi-Market Trading Control
 
@@ -11,7 +11,7 @@ AlgoBot is designed as a real-world trading operations layer, not just a chartin
 ## Strategy Engine With Guardrails
 
 - Supports sealed strategy selection per market
-- Offers `SAFE` and `AGGRESSIVE` execution modes
+- Offers `SAFE` and `AGGRESSIVE` execution modes  
 - Supports position behavior such as net and hedge-aware configurations
 - Includes conflict warnings and market-specific startup checks before the bot runs
 
@@ -58,7 +58,7 @@ AlgoBot is designed as a real-world trading operations layer, not just a chartin
 
 ## Positioning
 
-AlgoBot fits best as a control tower for automated trading:
+UpBot fits best as a control tower for automated trading:
 
 - Configure strategies
 - Connect exchanges
@@ -67,3 +67,4 @@ AlgoBot fits best as a control tower for automated trading:
 - Run and monitor bots from one place
 
 It is especially strong for teams or solo operators who want an app-layer product around execution, not just standalone trading scripts.
+

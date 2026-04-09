@@ -19,8 +19,14 @@ export async function POST(req: NextRequest) {
   const now = Date.now()
 
   try {
-    const raw = await redis.get<string>(rateLimitKey)
-    limit = raw ? JSON.parse(raw) : null
+    const raw = await redis.get<string | Record<string, any>>(rateLimitKey)
+    if (raw) {
+      if (typeof raw === 'string') {
+        try { limit = JSON.parse(raw) } catch { limit = null }
+      } else {
+        limit = raw as { count: number; resetAt: number }
+      }
+    }
   } catch (redisError) {
     console.error('Redis unavailable during mode OTP rate-limit read:', redisError)
     return NextResponse.json(
@@ -84,7 +90,7 @@ export async function POST(req: NextRequest) {
             ${otp}
           </div>
           <p style="color:#6b7280;font-size:12px;margin-top:16px;">
-            Expires in <strong style="color:#9ca3af;">5 minutes</strong>. Single use only.
+            Expires in <strong style="color:#9ca3af;">10 minutes</strong>. Single use only.
           </p>
         </div>
       `,

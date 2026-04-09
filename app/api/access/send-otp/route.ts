@@ -13,13 +13,25 @@ import { generateSecureOtp }          from '@/lib/otp'   // FIX: CSPRNG
 
 const OTP_RATE_LIMIT = 3
 const OTP_WINDOW_MS  = 5 * 60 * 1000
-const OTP_EXPIRY_SEC = 5 * 60
+const OTP_EXPIRY_SEC = Number(process.env.OTP_EXPIRY_SEC) || 15 * 60
 
 async function canSendOtp(key: string): Promise<{ ok: boolean; remaining: number }> {
   const rKey  = `otp_rate:${key}`
   const now   = Date.now()
-  const raw   = await redis.get<string>(rKey)
-  const entry = raw ? JSON.parse(raw) : null
+  const raw   = await redis.get<string | Record<string, any>>(rKey)
+  let entry: { count: number; firstTs: number } | null = null
+  if (raw) {
+    if (typeof raw === 'string') {
+      try {
+        entry = JSON.parse(raw)
+      } catch (e) {
+        // If parsing fails, treat as no entry (reset rate limit)
+        entry = null
+      }
+    } else {
+      entry = raw as { count: number; firstTs: number }
+    }
+  }
 
   if (!entry || now - entry.firstTs > OTP_WINDOW_MS) {
     await redis.set(rKey, JSON.stringify({ count: 1, firstTs: now }), { ex: 300 })
@@ -63,9 +75,19 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const otp = generateSecureOtp()  // FIX: was Math.random()
+    // Reuse an existing OTP if still present (helps resends/recovery).
+    const loginKey = `login_otp:${normalizedEmail}`
+    let otp = null as string | null
     try {
-      await redis.set(`login_otp:${normalizedEmail}`, otp, { ex: OTP_EXPIRY_SEC })
+      const existing = await redis.get<string>(loginKey)
+      if (existing) {
+        otp = String(existing)
+        // refresh TTL
+        try { await redis.set(loginKey, otp, { ex: OTP_EXPIRY_SEC }) } catch {}
+      } else {
+        otp = generateSecureOtp()
+        await redis.set(loginKey, otp, { ex: OTP_EXPIRY_SEC })
+      }
     } catch (redisError) {
       console.error('Redis unavailable during login OTP store:', redisError)
       return NextResponse.json(
@@ -97,7 +119,7 @@ export async function POST(req: NextRequest) {
           <div style="background:#111827;border:1px solid #1f2937;border-radius:12px;padding:20px;text-align:center;letter-spacing:10px;font-size:36px;font-weight:700;color:#1D9E75;">
             ${otp}
           </div>
-          <p style="color:#6b7280;font-size:13px;margin-top:16px;">Expires in 5 minutes. Single use only.</p>
+          <p style="color:#6b7280;font-size:13px;margin-top:16px;">Expires in 15 minutes. Single use only.</p>
         </div>
       `,
     })

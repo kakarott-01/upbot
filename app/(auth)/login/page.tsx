@@ -100,6 +100,25 @@ export default function LoginPage() {
     }
   }
 
+  async function handleResendOtp() {
+    if (!email) return
+    setLoading(true); setError('')
+    try {
+      const res = await fetch('/api/access/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      if (!res.ok) {
+        setError('Could not resend code. Try again later.')
+      }
+    } catch (e) {
+      setError('Network error while resending code')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   function handleOtpChange(val: string, idx: number) {
     if (!/^\d*$/.test(val)) return
     const next = [...otp]; next[idx] = val.slice(-1); setOtp(next)
@@ -212,7 +231,7 @@ export default function LoginPage() {
                 </button>
               </form>
               <p style={{ fontSize:'12px', color:'#4b5563', textAlign:'center', marginTop:'14px' }}>
-                A 6-digit code will be sent to your email. Expires in 5 minutes.
+                A 6-digit code will be sent to your email. Expires in 15 minutes.
               </p>
             </>
           )}
@@ -241,6 +260,11 @@ export default function LoginPage() {
               <button onClick={() => { setStep('choose'); setOtp(['','','','','','']); setError('') }}
                 style={{ width:'100%', background:'none', border:'none', color:'#6b7280', fontSize:'13px', marginTop:'12px', cursor:'pointer', padding:'4px' }}>
                 ← Use a different method
+              </button>
+              <button onClick={handleResendOtp}
+                disabled={loading}
+                style={{ width:'100%', background:'none', border:'none', color:'#9ca3af', fontSize:'13px', marginTop:'8px', cursor: loading ? 'not-allowed' : 'pointer', padding:'4px' }}>
+                ↻ Resend code
               </button>
             </>
           )}

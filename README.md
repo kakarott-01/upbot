@@ -1,6 +1,6 @@
-# AlgoBot
+# UpBot
 
-AlgoBot is a full-stack trading operations platform with a Next.js control panel and a Python execution engine. It is built for running, monitoring, and analyzing automated strategies across multiple market groups from one dashboard.
+UpBot is a full-stack trading operations platform with a Next.js control panel and a Python execution engine. It is built for running, monitoring, and analyzing automated strategies across multiple market groups from one dashboard.
 
 The app combines:
 

@@ -47,7 +47,7 @@ async def lifespan(app: FastAPI):
     from scheduler import BotScheduler
     from workers.watchdog import Watchdog
 
-    logger.info("🚀 AlgoBot Engine v4 starting up…")
+    logger.info("🚀 UpBot Engine v4 starting up…")
 
     _db        = Database()
     _scheduler = BotScheduler(_db)
@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
     if engine_url:
         asyncio.create_task(_self_ping_loop(engine_url), name="self_ping")
 
-    logger.info("✅ AlgoBot Engine v4 ready")
+    logger.info("✅ UpBot Engine v4 ready")
     yield
 
     logger.info("🛑 Shutting down…")
@@ -153,7 +153,7 @@ async def _self_ping_loop(base_url: str):
         await asyncio.sleep(60)
 
 
-app = FastAPI(title="AlgoBot Engine", version="4.0.0", lifespan=lifespan)
+app = FastAPI(title="UpBot Engine", version="4.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -213,7 +213,7 @@ class BacktestRequest(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"status": "AlgoBot Engine running 🚀", "version": "4.0.0"}
+    return {"status": "UpBot Engine running 🚀", "version": "4.0.0"}
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health():

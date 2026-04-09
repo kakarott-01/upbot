@@ -19,8 +19,14 @@ export async function POST(req: NextRequest) {
   const now = Date.now()
 
   try {
-    const raw = await redis.get<string>(rateLimitKey)
-    limit = raw ? JSON.parse(raw) : null
+    const raw = await redis.get<string | Record<string, any>>(rateLimitKey)
+    if (raw) {
+      if (typeof raw === 'string') {
+        try { limit = JSON.parse(raw) } catch { limit = null }
+      } else {
+        limit = raw as { count: number; resetAt: number }
+      }
+    }
   } catch (redisError) {
     console.error('Redis unavailable during reveal OTP rate-limit read:', redisError)
     return NextResponse.json(
@@ -46,9 +52,20 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const otp = generateSecureOtp()  // FIX: was Math.random()
+  const REVEAL_OTP_EXPIRY = Number(process.env.REVEAL_OTP_EXPIRY_SEC) || Number(process.env.OTP_EXPIRY_SEC) || 15 * 60
+
+  // Reuse existing reveal OTP if present so resend keeps same code and TTL
+  const revealKey = `reveal_otp:${session.id}`
+  let otp = null as string | null
   try {
-    await redis.set(`reveal_otp:${session.id}`, otp, { ex: 300 })
+    const existing = await redis.get<string>(revealKey)
+    if (existing) {
+      otp = String(existing)
+      try { await redis.set(revealKey, otp, { ex: REVEAL_OTP_EXPIRY }) } catch {}
+    } else {
+      otp = generateSecureOtp()
+      await redis.set(revealKey, otp, { ex: REVEAL_OTP_EXPIRY })
+    }
   } catch (redisError) {
     console.error('Redis unavailable during reveal OTP store:', redisError)
     return NextResponse.json(
@@ -83,7 +100,7 @@ export async function POST(req: NextRequest) {
             ${otp}
           </div>
           <p style="color:#6b7280;font-size:12px;margin-top:16px;">
-            Expires in <strong style="color:#9ca3af;">5 minutes</strong>. Single use only.
+            Expires in <strong style="color:#9ca3af;">15 minutes</strong>. Single use only.
           </p>
         </div>
       `,
