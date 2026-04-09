@@ -1,8 +1,23 @@
-CREATE TYPE "position_mode" AS ENUM ('NET', 'HEDGE');
+DO $$
+BEGIN
+  CREATE TYPE "position_mode" AS ENUM ('NET', 'HEDGE');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE TYPE "position_direction" AS ENUM ('LONG', 'SHORT');
+DO $$
+BEGIN
+  CREATE TYPE "position_direction" AS ENUM ('LONG', 'SHORT');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE TYPE "position_lifecycle" AS ENUM ('open', 'closed');
+DO $$
+BEGIN
+  CREATE TYPE "position_lifecycle" AS ENUM ('open', 'closed');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
 ALTER TABLE "market_strategy_configs"
   ADD COLUMN IF NOT EXISTS "position_mode" "position_mode" DEFAULT 'NET' NOT NULL,
@@ -95,19 +110,47 @@ CREATE TABLE IF NOT EXISTS "backtest_results" (
   "created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE "strategy_configs" ADD CONSTRAINT "strategy_configs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+DO $$
+BEGIN
+  ALTER TABLE "strategy_configs" ADD CONSTRAINT "strategy_configs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "strategy_positions" ADD CONSTRAINT "strategy_positions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+DO $$
+BEGIN
+  ALTER TABLE "strategy_positions" ADD CONSTRAINT "strategy_positions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "strategy_positions" ADD CONSTRAINT "strategy_positions_strategy_id_strategies_id_fk" FOREIGN KEY ("strategy_id") REFERENCES "public"."strategies"("id") ON DELETE set null ON UPDATE no action;
+DO $$
+BEGIN
+  ALTER TABLE "strategy_positions" ADD CONSTRAINT "strategy_positions_strategy_id_strategies_id_fk" FOREIGN KEY ("strategy_id") REFERENCES "public"."strategies"("id") ON DELETE set null ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "strategy_performance" ADD CONSTRAINT "strategy_performance_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+DO $$
+BEGIN
+  ALTER TABLE "strategy_performance" ADD CONSTRAINT "strategy_performance_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "strategy_performance" ADD CONSTRAINT "strategy_performance_strategy_id_strategies_id_fk" FOREIGN KEY ("strategy_id") REFERENCES "public"."strategies"("id") ON DELETE set null ON UPDATE no action;
+DO $$
+BEGIN
+  ALTER TABLE "strategy_performance" ADD CONSTRAINT "strategy_performance_strategy_id_strategies_id_fk" FOREIGN KEY ("strategy_id") REFERENCES "public"."strategies"("id") ON DELETE set null ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "backtest_results" ADD CONSTRAINT "backtest_results_run_id_backtest_runs_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."backtest_runs"("id") ON DELETE cascade ON UPDATE no action;
+DO $$
+BEGIN
+  ALTER TABLE "backtest_results" ADD CONSTRAINT "backtest_results_run_id_backtest_runs_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."backtest_runs"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "backtest_results" ADD CONSTRAINT "backtest_results_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+DO $$
+BEGIN
+  ALTER TABLE "backtest_results" ADD CONSTRAINT "backtest_results_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS "strategy_configs_user_market_idx" ON "strategy_configs" ("user_id","market_type","created_at");
 --> statement-breakpoint

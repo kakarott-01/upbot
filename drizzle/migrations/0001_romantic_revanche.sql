@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS "risk_state" (
 	CONSTRAINT "risk_state_user_id_market_type_day_date_pk" PRIMARY KEY("user_id","market_type","day_date")
 );
 --> statement-breakpoint
-ALTER TABLE "access_codes" ADD COLUMN "code_sha256" varchar(64);--> statement-breakpoint
+ALTER TABLE "access_codes" ADD COLUMN IF NOT EXISTS "code_sha256" varchar(64);--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "reconciliation_log" ADD CONSTRAINT "reconciliation_log_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION

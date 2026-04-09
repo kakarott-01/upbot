@@ -1,14 +1,40 @@
-CREATE TYPE "strategy_risk_level" AS ENUM ('LOW', 'MEDIUM', 'HIGH');
+DO $$
+BEGIN
+  CREATE TYPE "strategy_risk_level" AS ENUM ('LOW', 'MEDIUM', 'HIGH');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE TYPE "strategy_market_enum" AS ENUM ('CRYPTO', 'STOCKS', 'FOREX');
+DO $$
+BEGIN
+  CREATE TYPE "strategy_market_enum" AS ENUM ('CRYPTO', 'STOCKS', 'FOREX');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE TYPE "strategy_execution_mode" AS ENUM ('SAFE', 'AGGRESSIVE');
+DO $$
+BEGIN
+  CREATE TYPE "strategy_execution_mode" AS ENUM ('SAFE', 'AGGRESSIVE');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE TYPE "strategy_config_slot" AS ENUM ('PRIMARY', 'SECONDARY');
+DO $$
+BEGIN
+  CREATE TYPE "strategy_config_slot" AS ENUM ('PRIMARY', 'SECONDARY');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE TYPE "backtest_status" AS ENUM ('queued', 'completed', 'failed');
+DO $$
+BEGIN
+  CREATE TYPE "backtest_status" AS ENUM ('queued', 'completed', 'failed');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE TABLE "strategies" (
+
+CREATE TABLE IF NOT EXISTS "strategies" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "strategy_key" varchar(100) NOT NULL,
   "name" varchar(120) NOT NULL,
@@ -27,7 +53,8 @@ CREATE TABLE "strategies" (
   CONSTRAINT "strategies_name_unique" UNIQUE("name")
 );
 --> statement-breakpoint
-CREATE TABLE "market_strategy_configs" (
+
+CREATE TABLE IF NOT EXISTS "market_strategy_configs" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "user_id" uuid NOT NULL,
   "market_type" "market_type" NOT NULL,
@@ -36,7 +63,8 @@ CREATE TABLE "market_strategy_configs" (
   "updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "market_strategy_selections" (
+
+CREATE TABLE IF NOT EXISTS "market_strategy_selections" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "config_id" uuid NOT NULL,
   "strategy_id" uuid NOT NULL,
@@ -44,7 +72,8 @@ CREATE TABLE "market_strategy_selections" (
   "created_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "backtest_runs" (
+
+CREATE TABLE IF NOT EXISTS "backtest_runs" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "user_id" uuid NOT NULL,
   "market_type" "market_type" NOT NULL,
@@ -65,30 +94,51 @@ CREATE TABLE "backtest_runs" (
   "completed_at" timestamp
 );
 --> statement-breakpoint
-ALTER TABLE "market_strategy_configs" ADD CONSTRAINT "market_strategy_configs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+
+DO $$
+BEGIN
+  ALTER TABLE "market_strategy_configs" ADD CONSTRAINT "market_strategy_configs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "market_strategy_selections" ADD CONSTRAINT "market_strategy_selections_config_id_market_strategy_configs_id_fk" FOREIGN KEY ("config_id") REFERENCES "public"."market_strategy_configs"("id") ON DELETE cascade ON UPDATE no action;
+
+DO $$
+BEGIN
+  ALTER TABLE "market_strategy_selections" ADD CONSTRAINT "market_strategy_selections_config_id_market_strategy_configs_id_fk" FOREIGN KEY ("config_id") REFERENCES "public"."market_strategy_configs"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "market_strategy_selections" ADD CONSTRAINT "market_strategy_selections_strategy_id_strategies_id_fk" FOREIGN KEY ("strategy_id") REFERENCES "public"."strategies"("id") ON DELETE cascade ON UPDATE no action;
+
+DO $$
+BEGIN
+  ALTER TABLE "market_strategy_selections" ADD CONSTRAINT "market_strategy_selections_strategy_id_strategies_id_fk" FOREIGN KEY ("strategy_id") REFERENCES "public"."strategies"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-ALTER TABLE "backtest_runs" ADD CONSTRAINT "backtest_runs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+
+DO $$
+BEGIN
+  ALTER TABLE "backtest_runs" ADD CONSTRAINT "backtest_runs_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 --> statement-breakpoint
-CREATE UNIQUE INDEX "market_strategy_configs_user_market_unique" ON "market_strategy_configs" USING btree ("user_id","market_type");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "market_strategy_configs_user_market_unique" ON "market_strategy_configs" USING btree ("user_id","market_type");
 --> statement-breakpoint
-CREATE UNIQUE INDEX "market_strategy_selections_config_slot_unique" ON "market_strategy_selections" USING btree ("config_id","slot");
+CREATE UNIQUE INDEX IF NOT EXISTS "market_strategy_selections_config_slot_unique" ON "market_strategy_selections" USING btree ("config_id","slot");
 --> statement-breakpoint
-CREATE UNIQUE INDEX "market_strategy_selections_config_strategy_unique" ON "market_strategy_selections" USING btree ("config_id","strategy_id");
+CREATE UNIQUE INDEX IF NOT EXISTS "market_strategy_selections_config_strategy_unique" ON "market_strategy_selections" USING btree ("config_id","strategy_id");
 --> statement-breakpoint
-CREATE INDEX "strategies_key_idx" ON "strategies" USING btree ("strategy_key");
+CREATE INDEX IF NOT EXISTS "strategies_key_idx" ON "strategies" USING btree ("strategy_key");
 --> statement-breakpoint
-CREATE INDEX "strategies_active_idx" ON "strategies" USING btree ("is_active");
+CREATE INDEX IF NOT EXISTS "strategies_active_idx" ON "strategies" USING btree ("is_active");
 --> statement-breakpoint
-CREATE INDEX "market_strategy_configs_user_market_idx" ON "market_strategy_configs" USING btree ("user_id","market_type");
+CREATE INDEX IF NOT EXISTS "market_strategy_configs_user_market_idx" ON "market_strategy_configs" USING btree ("user_id","market_type");
 --> statement-breakpoint
-CREATE INDEX "market_strategy_selections_config_slot_idx" ON "market_strategy_selections" USING btree ("config_id","slot");
+CREATE INDEX IF NOT EXISTS "market_strategy_selections_config_slot_idx" ON "market_strategy_selections" USING btree ("config_id","slot");
 --> statement-breakpoint
-CREATE INDEX "market_strategy_selections_strategy_idx" ON "market_strategy_selections" USING btree ("strategy_id");
+CREATE INDEX IF NOT EXISTS "market_strategy_selections_strategy_idx" ON "market_strategy_selections" USING btree ("strategy_id");
 --> statement-breakpoint
-CREATE INDEX "backtest_runs_user_created_idx" ON "backtest_runs" USING btree ("user_id","created_at");
+CREATE INDEX IF NOT EXISTS "backtest_runs_user_created_idx" ON "backtest_runs" USING btree ("user_id","created_at");
 --> statement-breakpoint
-CREATE INDEX "backtest_runs_status_idx" ON "backtest_runs" USING btree ("status");
+CREATE INDEX IF NOT EXISTS "backtest_runs_status_idx" ON "backtest_runs" USING btree ("status");

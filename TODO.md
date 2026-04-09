@@ -1,31 +1,24 @@
 # Project TODO
 
-Update: reflect current tracked todo list and mark completed items.
+Update: reflect current tracked todo list and mark progress from the production audit.
 
 ## Todo List
 
-- [x] Create prioritized action list
-- [x] Fix OTP comparison bug
-- [x] Remove insecure generateOtp
-- [x] Verify stop-market lock
-- [x] Fix conf default scope
-- [x] Persist stop_loss_order_id atomically
-- [x] Add legacy decrypt alerting & reencrypt
-- [x] Persist risk state on market stop
-- [x] Fix futures reconciliation edge cases
-- [x] Add global exposure reservation
-- [x] Align Drizzle schema with migrations
-- [x] Extend OTP/cookie TTL and recovery
-- [x] Show open trades when stopped
-- [x] Add mode_audit retention job
-- [x] Add localStorage size guard
 - [ ] Validate DEFAULT_SYMBOLS at startup
-- [x] Smoke OTP flows (send/resend/verify/redis TTL)
-- [x] Commit scripts to repo
+- [ ] Database & Migrations audit (in-progress)
+- [ ] Trading engine audit
+- [ ] Risk engine audit
+- [ ] Strategy system audit
+- [ ] Audit & logging audit
+- [ ] Infrastructure & deployment audit
+- [ ] Produce remediation SQL/code patches
+- [ ] Add CI migration validation checks
+- [ ] Final report & handoff
 
 ## Notes
 
-- Items marked `[x]` are implemented and verified.
+- Items marked `[x]` are completed.
 - Items marked `[ ]` are pending.
+- The `Database & Migrations audit` task is currently in-progress and tracked in CI/automation.
 
-Generated/updated by automation during the audit followups.
+Generated/updated by the audit assistant on 2026-04-10.
