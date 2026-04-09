@@ -1,6 +1,7 @@
 'use client'
 
 import { BOT_STATUS_QUERY_KEY, type BotStatusSnapshot } from '@/lib/bot-status-client'
+import { safeLocalSet } from '@/lib/local-storage'
 
 const BOT_SYNC_CHANNEL_NAME = 'bot-sync'
 export const BOT_SYNC_STORAGE_KEY = 'bot-sync:event'
@@ -35,7 +36,8 @@ export function writeBotSyncStorageEvent(event: BotSyncEvent) {
   if (typeof window === 'undefined') return
 
   try {
-    window.localStorage.setItem(BOT_SYNC_STORAGE_KEY, JSON.stringify(event))
+    // Guard against huge snapshots filling localStorage and causing exceptions.
+    safeLocalSet(BOT_SYNC_STORAGE_KEY, event)
   } catch {
     // localStorage is only a fallback transport; ignore failures.
   }

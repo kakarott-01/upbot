@@ -10,7 +10,11 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "mode-audit:dry-run": "node scripts/clean_mode_audit.js",
+    "mode-audit:run": "node scripts/clean_mode_audit.js --run",
+    "mode-audit:check-localstorage-guard": "node -e 'const fs=require(\"fs\"); const ok=fs.existsSync(\"lib/local-storage.ts\"); console.log(ok ? \"local-storage:found\" : \"local-storage:missing\"); if(!ok) process.exit(2)'",
+    "ci:mode-audit-retention": "npm run mode-audit:check-localstorage-guard && npm run mode-audit:run"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.1",

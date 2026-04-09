@@ -18,7 +18,7 @@ Update: reflect current tracked todo list and mark completed items.
 - [x] Extend OTP/cookie TTL and recovery
 - [x] Show open trades when stopped
 - [x] Add mode_audit retention job
-- [ ] Add localStorage size guard
+- [x] Add localStorage size guard
 - [ ] Validate DEFAULT_SYMBOLS at startup
 - [x] Smoke OTP flows (send/resend/verify/redis TTL)
 - [x] Commit scripts to repo
