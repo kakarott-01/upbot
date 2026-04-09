@@ -80,7 +80,9 @@ export async function getBotStatusSnapshot(userId: string) {
   let openTradeCount = 0
   const perMarketOpenTrades: Record<string, number> = {}
 
-  if (statusRow.status === 'stopping' || statusRow.status === 'running') {
+  // Compute open trade counts for running, stopping, or stopped states
+  // so UI can display open positions even after sessions are stopped.
+  if (statusRow.status === 'stopping' || statusRow.status === 'running' || statusRow.status === 'stopped') {
     const [totalRows, marketRows] = await Promise.all([
       db
         .select({ count: sql<number>`count(*)::int` })
