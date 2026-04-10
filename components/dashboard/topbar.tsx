@@ -60,7 +60,7 @@ export function TopBar({ user }: TopBarProps) {
     } catch {
       // Best effort cookie clearing; redirect either way.
     } finally {
-      window.location.href = '/access'
+      window.location.href = '/login'
     }
   }
 
