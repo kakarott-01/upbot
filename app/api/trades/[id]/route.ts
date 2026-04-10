@@ -4,13 +4,18 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { trades } from '@/lib/schema'
 import { and, eq } from 'drizzle-orm'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const existing = await db.query.trades.findFirst({
     where: and(eq(trades.id, params.id), eq(trades.userId, session.id)),

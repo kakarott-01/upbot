@@ -6,6 +6,7 @@ import { encrypt, encryptJSON } from '@/lib/encryption'
 import { eq, and } from 'drizzle-orm'
 import { z } from 'zod'
 import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 const saveSchema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
@@ -17,9 +18,11 @@ const saveSchema = z.object({
 })
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const body = await req.json()
@@ -91,9 +94,11 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const apis = await db.query.exchangeApis.findMany({

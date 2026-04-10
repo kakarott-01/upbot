@@ -4,7 +4,7 @@ Update: reflect current tracked todo list and mark progress from the production 
 
 ## Todo List
 
-- [ ] Validate DEFAULT_SYMBOLS at startup
+- [x] Validate DEFAULT_SYMBOLS at startup
 - [ ] Database & Migrations audit (in-progress)
 - [ ] Trading engine audit
 - [ ] Risk engine audit

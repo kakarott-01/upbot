@@ -7,11 +7,8 @@
 // graceful: removes market from active scheduler, lets open positions
 //           remain until they exit naturally (unmonitored).
 //
-// close_all: removes market from scheduler AND triggers close-all for
-//            open positions in that market. Uses the engine's close-all
-//            which closes ALL open positions for the user — the caller
-//            must ensure other markets have no positions they want to keep,
-//            or accept that close-all is market-scoped at engine level.
+// close_all: temporarily rejected for per-market stops until the engine
+//            supports true market-scoped emergency closes.
 
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
@@ -21,6 +18,7 @@ import { eq, and, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
 import { acquireBotLock } from '@/lib/bot-lock'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 const schema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
@@ -28,8 +26,12 @@ const schema = z.object({
 })
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const parsed = schema.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) return NextResponse.json({ error: 'Invalid request' }, { status: 400 })
@@ -59,6 +61,7 @@ export async function POST(req: NextRequest) {
   } finally {
     await lock.release()
   }
+}
 
 
 async function _handleStopMarket(req: NextRequest, userId: string, marketType: string, mode: 'graceful' | 'close_all') {
@@ -92,6 +95,13 @@ async function _handleStopMarket(req: NextRequest, userId: string, marketType: s
       eq(trades.status, 'open' as any),
     ))
   const openCount = openRows?.count ?? 0
+
+  if (mode === 'close_all' && openCount > 0) {
+    return NextResponse.json(
+      { error: 'Per-market close is not yet supported. Use Stop All from the main dashboard.' },
+      { status: 400 },
+    )
+  }
 
   if (remainingMarkets.length === 0) {
     // Last market — do a full bot stop instead
@@ -160,28 +170,6 @@ async function _handleStopMarket(req: NextRequest, userId: string, marketType: s
 
   // ── Notify bot engine ───────────────────────────────────────────────────
   try {
-    if (mode === 'close_all' && openCount > 0) {
-      await fetch(`${process.env.BOT_ENGINE_URL}/bot/close-market`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Bot-Secret': process.env.BOT_ENGINE_SECRET!,
-        },
-        body: JSON.stringify({ user_id: userId, market_type: marketType }),
-        signal: AbortSignal.timeout(8_000),
-      }).catch(() => {
-        return fetch(`${process.env.BOT_ENGINE_URL}/bot/close-all`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Bot-Secret': process.env.BOT_ENGINE_SECRET!,
-          },
-          body: JSON.stringify({ user_id: userId }),
-          signal: AbortSignal.timeout(8_000),
-        })
-      })
-    }
-
     if (remainingMarkets.length > 0) {
       await fetch(`${process.env.BOT_ENGINE_URL}/bot/sync`, {
         method: 'POST',
@@ -216,5 +204,4 @@ async function _handleStopMarket(req: NextRequest, userId: string, marketType: s
     openPositionsClosed: mode === 'close_all' ? openCount : 0,
     ...snapshot,
   })
-}
 }

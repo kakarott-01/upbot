@@ -20,6 +20,7 @@ export interface SessionPayload {
   id:    string
   email: string
   name:  string
+  hasAccess?: boolean
 }
 
 // ── Sign ──────────────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 'use client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 import { BotSyncBridge } from '@/components/bot-sync-bridge'
 import { GlobalClockBootstrap } from '@/components/global-clock'
@@ -7,6 +7,19 @@ import { ToastViewport } from '@/components/ui/toast-viewport'
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(() => new QueryClient({
+    queryCache: new QueryCache({
+      onError: (error: Error & { status?: number }) => {
+        if (typeof window === 'undefined') return
+
+        if (error.status === 401 && window.location.pathname !== '/login') {
+          window.location.href = '/login'
+        }
+
+        if (error.status === 403 && window.location.pathname !== '/access') {
+          window.location.href = '/access'
+        }
+      },
+    }),
     defaultOptions: {
       queries: {
         // PERFORMANCE: Raised from 5s → 15s.

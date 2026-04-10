@@ -3,10 +3,15 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { killSwitchState } from '@/lib/schema'
 import { eq } from 'drizzle-orm'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function GET() {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const state = await db.query.killSwitchState.findFirst({
     where: eq(killSwitchState.userId, session.id),
@@ -22,8 +27,12 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const body = await req.json().catch(() => ({}))
   const isActive = Boolean(body?.isActive)

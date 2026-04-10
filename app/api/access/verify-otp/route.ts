@@ -61,7 +61,12 @@ export async function POST(req: NextRequest) {
     ])
 
     // Find existing user
-    const existing = await sql`SELECT id FROM users WHERE email = ${normalizedEmail} LIMIT 1`
+    const existing = await sql`
+      SELECT id, is_whitelisted
+      FROM users
+      WHERE email = ${normalizedEmail}
+      LIMIT 1
+    `
     let userId: string
 
     const signupToken = req.cookies.get('signup_token')?.value
@@ -103,7 +108,12 @@ export async function POST(req: NextRequest) {
       console.info(`✅ New user created: ${normalizedEmail}`)
 
       // FIX: sign the session cookie with HMAC
-      const sessionPayload = { id: userId, email: normalizedEmail, name: normalizedEmail.split('@')[0] }
+      const sessionPayload = {
+        id: userId,
+        email: normalizedEmail,
+        name: normalizedEmail.split('@')[0],
+        hasAccess: true,
+      }
       const postResponse   = NextResponse.json({ success: true })
       postResponse.cookies.delete('signup_token')
       postResponse.cookies.set('user_session', signSession(sessionPayload), {
@@ -118,7 +128,12 @@ export async function POST(req: NextRequest) {
     }
 
     // FIX: sign the session cookie with HMAC
-    const sessionPayload = { id: userId, email: normalizedEmail, name: normalizedEmail.split('@')[0] }
+    const sessionPayload = {
+      id: userId,
+      email: normalizedEmail,
+      name: normalizedEmail.split('@')[0],
+      hasAccess: Boolean(existing[0]?.is_whitelisted),
+    }
     const response       = NextResponse.json({ success: true })
     response.cookies.set('user_session', signSession(sessionPayload), {
       httpOnly: true,

@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth'
 import { acquireBotLock } from '@/lib/bot-lock'
 import { startBotForUser } from '@/lib/bot/start-service'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 type MarketName = 'indian' | 'crypto' | 'commodities' | 'global'
 
@@ -13,8 +14,12 @@ function isMarketName(value: unknown): value is MarketName {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const lock = await acquireBotLock(session.id, 'start')
   if (!lock.acquired) {

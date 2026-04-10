@@ -7,10 +7,15 @@ import { backtestRequestSchema, validateStrategiesForMarket } from '@/lib/strate
 import { ensureStrategyCatalogSeeded } from '@/lib/strategies/catalog'
 import { eq } from 'drizzle-orm'
 import { analyzeStrategyConflicts } from '@/lib/strategies/conflicts'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const parsed = backtestRequestSchema.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) {
@@ -108,8 +113,12 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const runs = await db.query.backtestRuns.findMany({
     where: eq(backtestRuns.userId, session.id),

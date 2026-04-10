@@ -14,11 +14,14 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { trades } from '@/lib/schema'
 import { eq, desc, and, gte, sql } from 'drizzle-orm'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function GET(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const { searchParams } = new URL(req.url)

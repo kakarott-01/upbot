@@ -3,10 +3,15 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { and, eq, sql } from 'drizzle-orm'
 import { trades } from '@/lib/schema'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function GET() {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const openTrades = await db.select({
     symbol: trades.symbol,

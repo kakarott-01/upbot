@@ -12,11 +12,14 @@ import { auth } from '@/lib/auth'
 import { _doImmediateStop } from '@/lib/bot-stop'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
 import { toUtcIsoString } from '@/lib/time'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function GET(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const { statusRow, snapshot } = await getBotStatusSnapshot(session.id)

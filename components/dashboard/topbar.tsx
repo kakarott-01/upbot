@@ -3,7 +3,6 @@
 // components/dashboard/topbar.tsx — v2
 // Shows: running / stopping-graceful / stopping-close_all / stopped
 
-import { signOut } from 'next-auth/react'
 import { useMutationState } from '@tanstack/react-query'
 import { LogOut, Bell, Menu, AlertTriangle } from 'lucide-react'
 import { useState } from 'react'
@@ -24,6 +23,7 @@ interface TopBarProps {
 export function TopBar({ user }: TopBarProps) {
   const [menuOpen,      setMenuOpen]      = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [isSigningOut,  setIsSigningOut]  = useState(false)
   const now = useGlobalClockStore((state) => state.now)
 
   const { data: botData, isLoading: botLoading } = useBotStatusQuery()
@@ -58,6 +58,19 @@ export function TopBar({ user }: TopBarProps) {
 
   const displayName = user?.name || user?.email?.split('@')[0] || 'User'
   const userInitial = displayName.charAt(0).toUpperCase()
+
+  async function handleLogout() {
+    if (isSigningOut) return
+
+    setIsSigningOut(true)
+    try {
+      await fetch('/api/logout', { method: 'POST' })
+    } catch {
+      // Best effort cookie clearing; redirect either way.
+    } finally {
+      window.location.href = '/access'
+    }
+  }
 
   const pillConfig = (() => {
     if (isStarting) return {
@@ -157,11 +170,11 @@ export function TopBar({ user }: TopBarProps) {
                   )}
                 </div>
                 <button
-                  onClick={() => signOut({ callbackUrl: '/access' })}
+                  onClick={handleLogout}
                   className="w-full flex items-center gap-2 px-3 py-2.5 text-sm text-red-400 hover:bg-red-900/20 transition-colors"
                 >
                   <LogOut className="w-4 h-4" />
-                  Sign out
+                  {isSigningOut ? 'Signing out…' : 'Sign out'}
                 </button>
               </div>
             )}

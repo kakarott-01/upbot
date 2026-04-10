@@ -12,11 +12,14 @@ import { exchangeApis }                  from '@/lib/schema'
 import { eq, and }                       from 'drizzle-orm'
 import { decrypt, decryptJSON }          from '@/lib/encryption'
 import { verifySecureToken }             from '@/lib/secure-token'  // FIX
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   // FIX: Verify HMAC-signed token (was raw base64 — forgeable by anyone with userId)

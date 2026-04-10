@@ -3,10 +3,15 @@ import { auth } from '@/lib/auth'
 import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
 import { getUserMarketStrategyConfig, upsertUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import { strategyConfigSchema } from '@/lib/strategies/validation'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function GET(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const marketType = req.nextUrl.searchParams.get('marketType')
   if (!marketType) {
@@ -29,8 +34,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   try {
     const parsed = strategyConfigSchema.safeParse(await req.json().catch(() => ({})))

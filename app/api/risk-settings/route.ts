@@ -4,6 +4,7 @@ import { db } from '@/lib/db'
 import { riskSettings } from '@/lib/schema'
 import { eq } from 'drizzle-orm'
 import { z } from 'zod'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 const schema = z.object({
   maxPositionPct: z.number().min(0.1).max(100),
@@ -20,9 +21,11 @@ const schema = z.object({
 })
 
 export async function GET(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const settings = await db.query.riskSettings.findFirst({
@@ -36,9 +39,11 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const body = await req.json()

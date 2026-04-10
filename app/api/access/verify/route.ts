@@ -34,6 +34,7 @@ import { createHash }                  from 'crypto'
 import { getClientIp }                 from '@/lib/utils'
 import { auth }                        from '@/lib/auth'
 import { redis }                       from '@/lib/redis'
+import { signSession }                 from '@/lib/signed-cookie'
 
 const MAX_ATTEMPTS     = 3
 const LOCKOUT_DURATION = 30 * 60
@@ -144,7 +145,23 @@ export async function POST(req: NextRequest) {
     await clearRateLimit(ip)
     console.info(`✅ Access granted → ${session.email}`)
 
-    return NextResponse.json({ success: true })
+    const response = NextResponse.json({ success: true })
+    if (session.id) {
+      response.cookies.set('user_session', signSession({
+        id: session.id,
+        email: session.email,
+        name: session.name ?? session.email.split('@')[0],
+        hasAccess: true,
+      }), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        maxAge: 30 * 24 * 60 * 60,
+        path: '/',
+        sameSite: 'lax',
+      })
+    }
+
+    return response
   } catch (error) {
     console.error('verify-access error:', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })

@@ -1,6 +1,6 @@
 import {
   pgTable, text, timestamp, boolean, integer,
-  decimal, jsonb, uuid, varchar, index, pgEnum,
+  decimal, jsonb, uuid, varchar, index, uniqueIndex, pgEnum,
   date, primaryKey, doublePrecision
 } from 'drizzle-orm/pg-core'
 import { relations } from 'drizzle-orm'
@@ -83,6 +83,7 @@ export const marketConfigs = pgTable('market_configs', {
   createdAt:  timestamp('created_at').defaultNow().notNull(),
   updatedAt:  timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
+  userMarketUnique: uniqueIndex('market_configs_user_market_uq').on(t.userId, t.marketType),
   userMarketIdx: index('market_configs_user_market_idx').on(t.userId, t.marketType),
 }))
 

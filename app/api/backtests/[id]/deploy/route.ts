@@ -6,10 +6,15 @@ import { backtestRuns, strategyConfigs } from '@/lib/schema'
 import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
 import { upsertUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import { startBotForUser } from '@/lib/bot/start-service'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function POST(_: Request, { params }: { params: { id: string } }) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   try {
     await assertBotStoppedForSensitiveMutation(session.id, 'Stop the bot before deploying a backtest configuration.')

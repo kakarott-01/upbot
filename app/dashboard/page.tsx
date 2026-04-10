@@ -9,6 +9,29 @@ import { TradeTable } from '@/components/dashboard/trade-table'
 import { BotControls } from '@/components/dashboard/bot-controls'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 import { formatCurrency } from '@/lib/utils'
+import { apiFetch } from '@/lib/api-client'
+
+type TradesSummaryResponse = {
+  total: number
+  closed: number
+  totalPnl: number
+  totalFees: number
+  winRate: number
+  avgWin?: number
+  avgLoss?: number
+}
+
+type PerformanceResponse = {
+  cumPnl?: Array<{ date: string; pnl: number }>
+}
+
+type TradesResponse = {
+  trades?: unknown[]
+}
+
+type StrategyConfigListResponse = {
+  markets?: Array<{ marketType: string; executionMode?: string }>
+}
 
 // ── Compact stat card for the top row ─────────────────────────────────────────
 function StatCard({
@@ -101,27 +124,27 @@ function BotStatusCard({
 export default function DashboardPage() {
   const { data: summaryData } = useQuery({
     queryKey: ['trades-summary'],
-    queryFn:  () => fetch('/api/trades/summary').then(r => r.json()),
+    queryFn:  () => apiFetch<TradesSummaryResponse>('/api/trades/summary'),
     refetchInterval: 15_000,
   })
 
   const { data: perfData } = useQuery({
     queryKey: ['performance-chart'],
-    queryFn:  () => fetch('/api/performance').then(r => r.json()),
+    queryFn:  () => apiFetch<PerformanceResponse>('/api/performance'),
     staleTime: 60_000,
     refetchInterval: 60_000,
   })
 
   const { data: tradesData } = useQuery({
     queryKey: ['trades'],
-    queryFn:  () => fetch('/api/trades?limit=50').then(r => r.json()),
+    queryFn:  () => apiFetch<TradesResponse>('/api/trades?limit=50'),
   })
 
   const { data: botData, isLoading: botLoading } = useBotStatusQuery()
 
   const { data: strategyConfigData } = useQuery({
     queryKey: ['strategy-configs'],
-    queryFn:  () => fetch('/api/strategy-config').then(r => r.json()),
+    queryFn:  () => apiFetch<StrategyConfigListResponse>('/api/strategy-config'),
     staleTime: 30_000,
   })
 

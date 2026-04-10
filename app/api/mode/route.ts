@@ -14,6 +14,7 @@ import { z }                                    from 'zod'
 import { getClientIp }                          from '@/lib/utils'
 import { verifySecureToken }                    from '@/lib/secure-token'  // FIX
 import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 const switchSchema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
@@ -22,9 +23,11 @@ const switchSchema = z.object({
 
 // ── GET ───────────────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const configs = await db.query.marketConfigs.findMany({
@@ -52,9 +55,11 @@ export async function GET(req: NextRequest) {
 
 // ── POST ──────────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const body   = await req.json().catch(() => ({}))

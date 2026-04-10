@@ -5,6 +5,7 @@ import { db } from '@/lib/db'
 import { trades } from '@/lib/schema'
 import { and, eq, inArray } from 'drizzle-orm'
 import { z } from 'zod'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 const schema = z.object({
   type: z.enum(['all', 'paper', 'live', 'selected']).optional(),
@@ -12,8 +13,12 @@ const schema = z.object({
 })
 
 export async function DELETE(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const body   = await req.json()
   const parsed = schema.safeParse(body)

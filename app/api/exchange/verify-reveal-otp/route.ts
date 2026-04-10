@@ -14,11 +14,14 @@ import {
   otpVerifyLimitMessage,
   resetOtpVerifyLimit,
 } from '@/lib/otp-rate-limit'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const { otp } = await req.json().catch(() => ({}))

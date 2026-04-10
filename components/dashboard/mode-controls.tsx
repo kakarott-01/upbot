@@ -7,6 +7,7 @@ import {
   Loader2, Lock, MailCheck, X, ChevronDown, ChevronUp,
 } from 'lucide-react'
 import { ToggleSwitch } from '@/components/ui/toggle-switch'
+import { apiFetch } from '@/lib/api-client'
 
 type TradingMode = 'paper' | 'live'
 
@@ -30,6 +31,14 @@ interface AuditLog {
   toMode:    TradingMode
   ipAddress: string
   createdAt: string
+}
+
+interface AuditLogResponse {
+  logs?: AuditLog[]
+}
+
+interface MeResponse {
+  email?: string
 }
 
 const MARKET_LABELS: Record<string, string> = {
@@ -300,7 +309,7 @@ function AuditLog() {
   const [open, setOpen] = useState(false)
   const { data, isLoading } = useQuery({
     queryKey: ['mode-audit'],
-    queryFn:  () => fetch('/api/mode/audit?limit=10').then(r => r.json()),
+    queryFn:  () => apiFetch<AuditLogResponse>('/api/mode/audit?limit=10'),
     enabled:  open,
   })
 
@@ -374,13 +383,13 @@ export function ModeControls() {
 
   const { data: meData } = useQuery({
     queryKey: ['me'],
-    queryFn:  () => fetch('/api/me').then(r => r.json()),
+    queryFn:  () => apiFetch<MeResponse>('/api/me'),
     staleTime: Infinity,
   })
 
   const { data, isLoading } = useQuery<ModesResponse>({
     queryKey:        ['market-modes'],
-    queryFn:         () => fetch('/api/mode').then(r => r.json()),
+    queryFn:         () => apiFetch('/api/mode'),
     refetchInterval: 10_000,
   })
 

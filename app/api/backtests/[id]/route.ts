@@ -3,10 +3,15 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { backtestRuns, backtestResults, strategyConfigs } from '@/lib/schema'
 import { and, eq } from 'drizzle-orm'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function GET(_: Request, { params }: { params: { id: string } }) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const run = await db.query.backtestRuns.findFirst({
     where: and(
@@ -20,8 +25,12 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
 }
 
 export async function DELETE(_: Request, { params }: { params: { id: string } }) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   // Verify ownership
   const run = await db.query.backtestRuns.findFirst({

@@ -1,10 +1,14 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { PUBLIC_STRATEGY_CATALOG, ensureStrategyCatalogSeeded } from '@/lib/strategies/catalog'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function GET() {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  try {
+    await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   await ensureStrategyCatalogSeeded()
   return NextResponse.json({

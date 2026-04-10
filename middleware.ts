@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getToken } from 'next-auth/jwt'
+import { verifySessionCookieEdge } from '@/lib/signed-cookie-edge'
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
@@ -18,13 +19,24 @@ export async function middleware(req: NextRequest) {
     secret: process.env.NEXTAUTH_SECRET,
   })
 
+  const cookieSession = await verifySessionCookieEdge(req.cookies.get('user_session')?.value)
+
+  const tokenSession = token
+    ? {
+        id: (token.id as string | undefined) ?? token.sub ?? '',
+        hasAccess: token.hasAccess as boolean | undefined,
+      }
+    : null
+
+  const session = cookieSession ?? tokenSession
+
   // ❌ Not logged in → LOGIN
-  if (!token) {
+  if (!session?.id) {
     return NextResponse.redirect(new URL('/login', req.url))
   }
 
   // ❌ Logged in but NO access → ACCESS page
-  if (!token?.hasAccess && pathname.startsWith('/dashboard')) {
+  if (session.hasAccess === false && pathname.startsWith('/dashboard')) {
     return NextResponse.redirect(new URL('/access', req.url))
   }
 

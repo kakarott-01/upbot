@@ -23,6 +23,7 @@ import { db } from '@/lib/db'
 import { botStatuses, botSessions, trades } from '@/lib/schema'
 import { eq, desc, and, gte, lte, sql } from 'drizzle-orm'
 import { toUtcIsoString } from '@/lib/time'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 // ── Inline cleanup: close stale 'running' sessions if bot is stopped ──────────
 async function closeStaleSessions(userId: string): Promise<void> {
@@ -97,8 +98,12 @@ async function closeStaleSessions(userId: string): Promise<void> {
 }
 
 export async function GET(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   // ── Inline cleanup before querying ────────────────────────────────────────
   await closeStaleSessions(session.id)

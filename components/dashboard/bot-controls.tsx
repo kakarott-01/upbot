@@ -13,6 +13,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { applyBotStatusSnapshot, type BotStatusSnapshot, BOT_STATUS_QUERY_KEY } from '@/lib/bot-status-client'
 import { useToastStore } from '@/lib/toast-store'
 import { cn } from '@/lib/utils'
+import { apiFetch } from '@/lib/api-client'
 
 const MARKETS = [
   { id: 'crypto',      label: 'Crypto',       shortLabel: 'Crypto' },
@@ -28,6 +29,18 @@ type SessionItem = {
   status:     'running' | 'stopped' | 'error'
   mode?:      'paper' | 'live' | null
   openTrades?: number
+}
+
+type ModeDataResponse = {
+  markets?: Array<{ marketType: MarketId; mode: 'paper' | 'live' }>
+}
+
+type StrategyConfigDataResponse = {
+  markets?: Array<{
+    marketType: MarketId
+    strategyKeys?: string[]
+    conflictWarnings?: Array<{ message: string }>
+  }>
 }
 
 async function safeJson(res: Response): Promise<any> {
@@ -201,14 +214,12 @@ function MarketStopModal({
   isLive,
   openTradeCount,
   onDrain,
-  onCloseAll,
   onClose,
 }: {
   market:         string
   isLive:         boolean
   openTradeCount: number
   onDrain:        () => void
-  onCloseAll:     () => void
   onClose:        () => void
 }) {
   return (
@@ -243,42 +254,20 @@ function MarketStopModal({
             </InlineAlert>
           )}
 
-          {/* Close all positions — always shown, greyed when no trades */}
-          <button
-            type="button"
-            onClick={openTradeCount > 0 ? onCloseAll : undefined}
-            disabled={openTradeCount === 0}
-            className={cn(
-              'w-full rounded-2xl border px-4 py-4 text-left transition',
-              openTradeCount > 0
-                ? 'border-red-500/25 bg-red-500/10 hover:bg-red-500/15 cursor-pointer'
-                : 'border-gray-800 bg-gray-900/40 cursor-not-allowed opacity-50'
-            )}>
+          <div className="rounded-2xl border border-gray-800 bg-gray-900/40 px-4 py-4">
             <div className="flex items-start gap-3">
-              <div className={cn(
-                'rounded-2xl p-2',
-                openTradeCount > 0 ? 'bg-red-500/15' : 'bg-gray-800'
-              )}>
-                <Swords className={cn('h-4 w-4', openTradeCount > 0 ? 'text-red-300' : 'text-gray-500')} />
+              <div className="rounded-2xl bg-gray-800 p-2">
+                <Swords className="h-4 w-4 text-gray-500" />
               </div>
               <div>
-                <p className={cn(
-                  'text-sm font-semibold',
-                  openTradeCount > 0 ? 'text-red-200' : 'text-gray-500'
-                )}>
-                  Close all positions &amp; stop
-                </p>
-                <p className={cn(
-                  'mt-1 text-xs',
-                  openTradeCount > 0 ? 'text-red-100/80' : 'text-gray-600'
-                )}>
-                  {openTradeCount > 0
-                    ? `Immediately close ${openTradeCount} open position${openTradeCount !== 1 ? 's' : ''} and stop ${market}.`
-                    : 'No open positions to close.'}
+                <p className="text-sm font-semibold text-gray-400">Close positions &amp; stop</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Per-market emergency close is temporarily disabled until the engine supports true market-scoped closes.
+                  Use <span className="font-medium text-gray-300">Stop All</span> from the main panel if you need an immediate hard stop.
                 </p>
               </div>
             </div>
-          </button>
+          </div>
 
           {/* Drain gracefully — always available */}
           <button type="button" onClick={onDrain}
@@ -361,13 +350,13 @@ export function BotControls({ botData }: { botData: any }) {
 
   const { data: modeData } = useQuery({
     queryKey: ['market-modes'],
-    queryFn:  () => fetch('/api/mode').then((r) => r.json()),
+    queryFn:  () => apiFetch<ModeDataResponse>('/api/mode'),
     staleTime: 30_000,
   })
 
   const { data: strategyConfigData } = useQuery({
     queryKey: ['strategy-configs'],
-    queryFn:  () => fetch('/api/strategy-config').then((r) => r.json()),
+    queryFn:  () => apiFetch<StrategyConfigDataResponse>('/api/strategy-config'),
     staleTime: 30_000,
   })
 
@@ -582,7 +571,6 @@ export function BotControls({ botData }: { botData: any }) {
           isLive={isMarketLive(stopModal.market)}
           openTradeCount={stopModal.openTrades}
           onDrain={() => confirmMarketStop(stopModal.market, 'graceful')}
-          onCloseAll={() => confirmMarketStop(stopModal.market, 'close_all')}
           onClose={() => setStopModal(null)}
         />
       )}

@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth'
 import { z } from 'zod'
 import { runEngineBacktest } from '@/lib/strategies/engine-client'
 import { validateStrategiesForMarket } from '@/lib/strategies/validation'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 const comparisonSchema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
@@ -28,8 +29,12 @@ const comparisonSchema = z.object({
 })
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   const parsed = comparisonSchema.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) {

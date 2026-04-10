@@ -21,12 +21,17 @@ import { eq, and, sql } from 'drizzle-orm'
 import { acquireBotLock } from '@/lib/bot-lock'
 import { _doImmediateStop } from '@/lib/bot-stop'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 type StopMode = 'close_all' | 'graceful'
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
 
   // ── Parse mode ─────────────────────────────────────────────────────────────
   let mode: StopMode = 'graceful'

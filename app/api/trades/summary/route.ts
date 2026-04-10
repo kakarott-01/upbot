@@ -3,11 +3,14 @@ import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { trades } from '@/lib/schema'
 import { eq, and, sql } from 'drizzle-orm'
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function GET(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   // Single aggregation query — no row limit, always reflects true totals

@@ -7,10 +7,17 @@ import { auth }                       from '@/lib/auth'
 import { redis }                      from '@/lib/redis'
 import nodemailer                     from 'nodemailer'
 import { generateSecureOtp }          from '@/lib/otp'   // FIX: CSPRNG
+import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 export async function POST(req: NextRequest) {
-  const session = await auth()
-  if (!session?.id || !session.email) {
+  let session
+  try {
+    session = await requireAccess()
+  } catch (error) {
+    return guardErrorResponse(error)
+  }
+
+  if (!session.email) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
