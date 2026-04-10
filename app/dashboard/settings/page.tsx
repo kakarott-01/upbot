@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { BOT_STATUS_QUERY_KEY, isValidBotSnapshot } from '@/lib/bot-status-client'
+import { useTradingGuard } from '@/lib/use-trading-guard'
 import { AlertTriangle, Shield, Sparkles } from 'lucide-react'
 import { ModeControls } from '@/components/dashboard/mode-controls'
 import { Button } from '@/components/ui/button'
@@ -100,6 +102,7 @@ export default function SettingsPage() {
   const qc = useQueryClient()
   const pushToast = useToastStore((state) => state.push)
   const [form, setForm] = useState(defaults)
+  const { isRunning } = useTradingGuard()
 
   const { data } = useQuery({
     queryKey: ['risk-settings'],
@@ -135,6 +138,13 @@ export default function SettingsPage() {
       if (!response.ok) throw new Error(payload.error ?? 'Failed to save risk settings')
       return payload
     },
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      await qc.cancelQueries({ queryKey: ['risk-settings'] })
+      const previousBot = qc.getQueryData(BOT_STATUS_QUERY_KEY)
+      const previous = qc.getQueryData(['risk-settings'])
+      return { previous, previousBot }
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['risk-settings'] })
       pushToast({
@@ -143,12 +153,17 @@ export default function SettingsPage() {
         description: 'Hard limits are active for every market and strategy.',
       })
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _vars, context: any) => {
+      if (context?.previous) qc.setQueryData(['risk-settings'], context.previous)
+      if (context?.previousBot && isValidBotSnapshot(context.previousBot)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previousBot)
       pushToast({
         tone: 'error',
         title: 'Unable to save risk controls',
         description: error.message,
       })
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
     },
   })
 
@@ -349,7 +364,7 @@ export default function SettingsPage() {
           <div className="text-xs text-gray-500">
             Save keeps every market under the same global capital and loss guardrails.
           </div>
-          <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+          <Button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || isRunning} title={isRunning ? 'Stop the bot before making changes' : undefined}>
             {saveMutation.isPending ? 'Saving…' : 'Save Global Controls'}
           </Button>
         </div>

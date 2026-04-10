@@ -1,6 +1,7 @@
 'use client'
 import { useState, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { BOT_STATUS_QUERY_KEY, isValidBotSnapshot } from '@/lib/bot-status-client'
 import {
   Clock, Trash2, ChevronLeft, ChevronRight,
   AlertTriangle, X, Activity, Filter, Download,
@@ -291,12 +292,27 @@ export default function BotHistoryPage() {
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => fetch(`/api/bot-history/${id}`, { method: 'DELETE' }).then(r => r.json()),
-    onSuccess: () => {
+    onMutate: async (id: string) => {
+      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      await qc.cancelQueries({ queryKey: ['bot-history'] })
+      const previousBot = qc.getQueryData(BOT_STATUS_QUERY_KEY)
+      const previous = qc.getQueryData(['bot-history', page, modeFilter, exchFilter, fromDate, toDate])
+      qc.setQueryData(['bot-history', page, modeFilter, exchFilter, fromDate, toDate], (old: any) => {
+        if (!old || !old.sessions) return old
+        return { ...old, sessions: old.sessions.filter((s: any) => s.id !== id) }
+      })
+      return { previous, previousBot }
+    },
+    onError: (_err, _vars, context: any) => {
+      if (context?.previous) qc.setQueryData(['bot-history', page, modeFilter, exchFilter, fromDate, toDate], context.previous)
+      if (context?.previousBot && isValidBotSnapshot(context.previousBot)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previousBot)
+      showToast('Failed to delete session', 'error')
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ['bot-history'] })
-      showToast('Session deleted')
+      qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
       setToDelete(null)
     },
-    onError: () => showToast('Failed to delete session', 'error'),
   })
 
   const sessions    = data?.sessions ?? []

@@ -6,6 +6,7 @@
 import { useMutationState } from '@tanstack/react-query'
 import { LogOut, Bell, Menu, AlertTriangle } from 'lucide-react'
 import { useState } from 'react'
+import { useEffect } from 'react'
 import { MobileSidebar } from '@/components/dashboard/sidebar'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 import { formatElapsedDuration, getSessionDurationMs } from '@/lib/time'
@@ -22,7 +23,15 @@ export function TopBar({ user }: TopBarProps) {
   const [menuOpen,      setMenuOpen]      = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [isSigningOut,  setIsSigningOut]  = useState(false)
+  const [sessionExpired, setSessionExpired] = useState(false)
   const now = Date.now()
+
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem('sessionExpired')
+      if (v === '1') setSessionExpired(true)
+    } catch (_) {}
+  }, [])
 
   const { data: botData, isLoading: botLoading } = useBotStatusQuery()
 
@@ -105,6 +114,14 @@ export function TopBar({ user }: TopBarProps) {
   return (
     <>
       <MobileSidebar open={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
+      {sessionExpired && (
+        <div className="w-full bg-red-900/90 text-white px-4 py-2 text-xs flex items-center justify-between">
+          <span>Session expired. Please re-login.</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => { window.location.href = '/login' }} className="underline">Re-login</button>
+          </div>
+        </div>
+      )}
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-800 bg-gray-900 flex-shrink-0 md:px-6">
 
         <button

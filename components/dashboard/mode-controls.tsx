@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { BOT_STATUS_QUERY_KEY, isValidBotSnapshot } from '@/lib/bot-status-client'
 import {
   AlertTriangle, Shield, Clock, CheckCircle,
   Loader2, Lock, MailCheck, X, ChevronDown, ChevronUp,
@@ -404,12 +405,26 @@ export function ModeControls() {
       if (!res.ok) throw new Error(body.error ?? 'Failed to switch mode')
       return body
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['market-modes'] })
-      setPending(null)
+    onMutate: async ({ marketType, toMode }) => {
+      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      await qc.cancelQueries({ queryKey: ['market-modes'] })
+      const previousBot = qc.getQueryData(BOT_STATUS_QUERY_KEY)
+      const previous = qc.getQueryData(['market-modes'])
+      qc.setQueryData(['market-modes'], (old: any) => {
+        if (!old || !old.markets) return old
+        return { ...old, markets: old.markets.map((m: any) => m.marketType === marketType ? { ...m, mode: toMode } : m) }
+      })
+      return { previous, previousBot }
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _vars, context: any) => {
       console.error('Mode switch failed:', err.message)
+      if (context?.previous) qc.setQueryData(['market-modes'], context.previous)
+      if (context?.previousBot && isValidBotSnapshot(context.previousBot)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previousBot)
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['market-modes'] })
+      qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      setPending(null)
     },
   })
 

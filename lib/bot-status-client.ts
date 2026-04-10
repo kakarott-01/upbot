@@ -41,6 +41,14 @@ export async function fetchBotStatus(): Promise<BotStatusSnapshot> {
   return response.json()
 }
 
+export function isValidBotSnapshot(data: unknown): data is BotStatusSnapshot {
+  if (!data || typeof data !== 'object') return false
+  const d = data as any
+  if (typeof d.status !== 'string') return false
+  if (!('activeMarkets' in d) || !Array.isArray(d.activeMarkets)) return false
+  return true
+}
+
 export function getBotStatusSignature(snapshot: BotStatusSnapshot | null | undefined): string {
   if (!snapshot) return 'null'
 
@@ -72,6 +80,12 @@ export function applyBotStatusSnapshot(
   snapshot: BotStatusSnapshot,
   source: string,
 ) {
+  // Validate incoming snapshot before mutating cache to avoid corrupting UI state
+  if (!isValidBotSnapshot(snapshot)) {
+    console.warn('[bot-sync] rejected invalid snapshot from', source, snapshot)
+    return
+  }
+
   const previous = queryClient.getQueryData<BotStatusSnapshot>(BOT_STATUS_QUERY_KEY)
 
   if (

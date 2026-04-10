@@ -1,6 +1,7 @@
 'use client'
 import { useState, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { BOT_STATUS_QUERY_KEY, isValidBotSnapshot } from '@/lib/bot-status-client'
 import {
   Filter, Trash2, CheckSquare, Square, AlertTriangle,
   X, ArrowUpRight, ArrowDownRight, RefreshCw, Download,
@@ -259,8 +260,26 @@ export default function TradesPage() {
   // ── Delete mutations ───────────────────────────────────────────────────────
   const deleteSingle = useMutation({
     mutationFn: (id: string) => fetch(`/api/trades/${id}`, { method: 'DELETE' }).then(r => r.json()),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['trades'] }); showToast('Trade deleted') },
-    onError:   () => showToast('Failed to delete', 'error'),
+    onMutate: async (id: string) => {
+      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      await qc.cancelQueries({ queryKey: ['trades', market, status, mode, page] })
+      const previousBot = qc.getQueryData(BOT_STATUS_QUERY_KEY)
+      const previous = qc.getQueryData(['trades', market, status, mode, page])
+      qc.setQueryData(['trades', market, status, mode, page], (old: any) => {
+        if (!old || !old.trades) return old
+        return { ...old, trades: old.trades.filter((t: any) => t.id !== id) }
+      })
+      return { previous, previousBot }
+    },
+    onError: (_err, _vars, context: any) => {
+      if (context?.previous) qc.setQueryData(['trades', market, status, mode, page], context.previous)
+      if (context?.previousBot && isValidBotSnapshot(context.previousBot)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previousBot)
+      showToast('Failed to delete', 'error')
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['trades'] })
+      qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+    },
   })
 
   const bulkDelete = useMutation({
@@ -269,12 +288,29 @@ export default function TradesPage() {
         method: 'DELETE', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       }).then(r => r.json()),
-    onSuccess: (d) => {
+    onMutate: async (payload: { type?: string; ids?: string[] }) => {
+      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      await qc.cancelQueries({ queryKey: ['trades', market, status, mode, page] })
+      const previousBot = qc.getQueryData(BOT_STATUS_QUERY_KEY)
+      const previous = qc.getQueryData(['trades', market, status, mode, page])
+      if (payload.ids && payload.ids.length > 0) {
+        qc.setQueryData(['trades', market, status, mode, page], (old: any) => {
+          if (!old || !old.trades) return old
+          return { ...old, trades: old.trades.filter((t: any) => !payload.ids!.includes(t.id)) }
+        })
+      }
+      return { previous, previousBot }
+    },
+    onError: (_err, _vars, context: any) => {
+      if (context?.previous) qc.setQueryData(['trades', market, status, mode, page], context.previous)
+      if (context?.previousBot && isValidBotSnapshot(context.previousBot)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previousBot)
+      showToast('Bulk delete failed', 'error'); setConfirm(null)
+    },
+    onSettled: (_data, _err, _vars, _context) => {
       qc.invalidateQueries({ queryKey: ['trades'] })
-      showToast(`${d.deleted} trade${d.deleted !== 1 ? 's' : ''} deleted`)
+      qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
       setSelected(new Set()); setConfirm(null)
     },
-    onError: () => { showToast('Bulk delete failed', 'error'); setConfirm(null) },
   })
 
   // ── Selection ──────────────────────────────────────────────────────────────

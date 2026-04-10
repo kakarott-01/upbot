@@ -10,7 +10,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { InlineAlert } from '@/components/ui/inline-alert'
 import { StatusBadge } from '@/components/ui/status-badge'
-import { applyBotStatusSnapshot, type BotStatusSnapshot, BOT_STATUS_QUERY_KEY } from '@/lib/bot-status-client'
+import { isValidBotSnapshot, type BotStatusSnapshot, BOT_STATUS_QUERY_KEY } from '@/lib/bot-status-client'
 import { useToastStore } from '@/lib/toast-store'
 import { cn } from '@/lib/utils'
 import { apiFetch } from '@/lib/api-client'
@@ -249,9 +249,13 @@ function MarketStopModal({
           <div className="min-w-0">
             <p className="text-sm font-semibold text-gray-100">Stop {market}</p>
             <p className="text-xs text-gray-500 mt-0.5">
-              {openTradeCount > 0
-                ? `${openTradeCount} open position${openTradeCount !== 1 ? 's' : ''} · other markets continue running`
-                : 'No open positions · other markets continue running'}
+              {openTradeCount === -1 ? (
+                'Fetching latest positions...'
+              ) : openTradeCount > 0 ? (
+                `${openTradeCount} open position${openTradeCount !== 1 ? 's' : ''} · other markets continue running`
+              ) : (
+                'No open positions · other markets continue running'
+              )}
             </p>
           </div>
           <button onClick={onClose} className="ml-auto text-gray-600 hover:text-gray-300 transition-colors flex-shrink-0">
@@ -308,8 +312,27 @@ export function BotControls({ botData }: { botData: any }) {
   const pushToast = useToastStore((s) => s.push)
   const isFiringRef = useRef(false)
 
+  // Immediate, non-render lock for user actions to prevent duplicate requests
+  const [lockedActions, setLockedActions] = useState<Set<string>>(new Set())
+
+  function lockAction(id: string) {
+    setLockedActions((prev) => new Set(prev).add(id))
+  }
+
+  function unlockAction(id: string) {
+    setLockedActions((prev) => {
+      const copy = new Set(prev)
+      copy.delete(id)
+      return copy
+    })
+  }
+
+  function isLocked(id: string) {
+    return lockedActions.has(id)
+  }
+
   // Prefer the live query data from React Query to avoid stale props
-  const { data: liveBotData } = useBotStatusQuery()
+  const { data: liveBotData, dataUpdatedAt } = useBotStatusQuery()
 
   // Modal state
   const [showStopAllModal, setShowStopAllModal]   = useState(false)
@@ -367,26 +390,41 @@ export function BotControls({ botData }: { botData: any }) {
       if (!res.ok) throw new Error(data.error ?? `Failed to sync bot (HTTP ${res.status})`)
       return data
     },
-    onMutate: async () => {
+    onMutate: async (vars: { markets: MarketId[] }) => {
+      // cancel any in-flight status fetches and snapshot current state
       await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
-      await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY, refetchType: 'none' })
+      const previous = qc.getQueryData<BotStatusSnapshot>(BOT_STATUS_QUERY_KEY)
+
+      // optimistic update: mark markets as active and set running state
+      qc.setQueryData<BotStatusSnapshot | undefined>(BOT_STATUS_QUERY_KEY, (old) => {
+        const base = (old && isValidBotSnapshot(old)) ? old : previous ?? {
+          status: 'running', stopMode: null, activeMarkets: [], started_at: null, stopped_at: null,
+          stopping_at: null, last_heartbeat: null, errorMessage: null, openTradeCount: 0,
+          perMarketOpenTrades: {}, timeoutWarning: false, sessions: [],
+        }
+        const nextActive = Array.from(new Set([...(base.activeMarkets ?? []), ...vars.markets]))
+        return { ...base, status: 'running', activeMarkets: nextActive }
+      })
+
+      return { previous }
     },
-    onError: (err: Error) => {
+    onError: (err: Error, vars, context: any) => {
       pushToast({ tone: 'error', title: 'Session update failed', description: err.message })
+      if (context?.previous && isValidBotSnapshot(context.previous)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previous)
     },
-    onSuccess: (data, vars) => {
-      applyBotStatusSnapshot(qc, data as BotStatusSnapshot, 'start-mutation')
+    onSuccess: (_data, vars) => {
       pushToast({
         tone: 'success',
         title: 'Market sessions updated',
-        description: vars.markets.length
-          ? `Running on ${vars.markets.join(', ')}.`
-          : 'All sessions stopped.',
+        description: vars.markets.length ? `Running on ${vars.markets.join(', ')}.` : 'All sessions stopped.',
       })
     },
-    onSettled: () => {
+    onSettled: async (_data, _err, vars: { markets: MarketId[] } | undefined) => {
       isFiringRef.current = false
-      qc.invalidateQueries({ queryKey: ['bot-status'] })
+      if (vars?.markets) {
+        vars.markets.forEach((m) => unlockAction(`start-market:${m}`))
+      }
+      await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
       qc.invalidateQueries({ queryKey: ['bot-history'] })
     },
   })
@@ -402,11 +440,25 @@ export function BotControls({ botData }: { botData: any }) {
       if (!res.ok) throw new Error(data.error ?? `Failed to stop bot (HTTP ${res.status})`)
       return data
     },
-    onError: (err: Error) => {
-      pushToast({ tone: 'error', title: 'Stop request failed', description: err.message })
+    onMutate: async (mode: 'close_all' | 'graceful') => {
+      const actionId = `stop-all:${mode}`
+      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      const previous = qc.getQueryData<BotStatusSnapshot>(BOT_STATUS_QUERY_KEY)
+      qc.setQueryData<BotStatusSnapshot | undefined>(BOT_STATUS_QUERY_KEY, (old) => {
+        const base = (old && isValidBotSnapshot(old)) ? old : previous ?? {
+          status: 'stopping', stopMode: mode, activeMarkets: [], started_at: null, stopped_at: null,
+          stopping_at: null, last_heartbeat: null, errorMessage: null, openTradeCount: 0,
+          perMarketOpenTrades: {}, timeoutWarning: false, sessions: [],
+        }
+        return { ...base, status: 'stopping', stopMode: mode }
+      })
+      return { previous, actionId }
     },
-    onSuccess: (data, mode) => {
-      applyBotStatusSnapshot(qc, data as BotStatusSnapshot, 'stop-all-mutation')
+    onError: (err: Error, vars, context: any) => {
+      pushToast({ tone: 'error', title: 'Stop request failed', description: err.message })
+      if (context?.previous && isValidBotSnapshot(context.previous)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previous)
+    },
+    onSuccess: (_data, mode) => {
       pushToast({
         tone: mode === 'close_all' ? 'warning' : 'success',
         title: mode === 'close_all' ? 'Emergency stop requested' : 'Graceful drain started',
@@ -415,10 +467,11 @@ export function BotControls({ botData }: { botData: any }) {
           : 'No new trades will open while active positions are drained.',
       })
     },
-    onSettled: () => {
+    onSettled: async (_data, _err, vars: 'close_all' | 'graceful' | undefined) => {
       isFiringRef.current = false
       setShowStopAllModal(false)
-      qc.invalidateQueries({ queryKey: ['bot-status'] })
+      if (vars) unlockAction(`stop-all:${vars}`)
+      await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
       qc.invalidateQueries({ queryKey: ['bot-history'] })
     },
   })
@@ -434,26 +487,40 @@ export function BotControls({ botData }: { botData: any }) {
       if (!res.ok) throw new Error(data.error ?? `Failed to stop ${marketType}`)
       return data
     },
-    onError: (err: Error, vars) => {
+    onMutate: async (vars: { marketType: MarketId; mode: 'graceful' | 'close_all' }) => {
+      const actionId = `stop-market:${vars.marketType}`
+      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      const previous = qc.getQueryData<BotStatusSnapshot>(BOT_STATUS_QUERY_KEY)
+      qc.setQueryData<BotStatusSnapshot | undefined>(BOT_STATUS_QUERY_KEY, (old) => {
+        const base = (old && isValidBotSnapshot(old)) ? old : previous ?? {
+          status: 'running', stopMode: null, activeMarkets: [], started_at: null, stopped_at: null,
+          stopping_at: null, last_heartbeat: null, errorMessage: null, openTradeCount: 0,
+          perMarketOpenTrades: {}, timeoutWarning: false, sessions: [],
+        }
+        const nextActive = (base.activeMarkets ?? []).filter((m) => m !== vars.marketType)
+        return { ...base, status: nextActive.length > 0 ? base.status : 'stopping', activeMarkets: nextActive }
+      })
+      return { previous, actionId }
+    },
+    onError: (err: Error, vars, context: any) => {
       pushToast({ tone: 'error', title: `Failed to stop ${vars.marketType}`, description: err.message })
+      if (context?.previous && isValidBotSnapshot(context.previous)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previous)
     },
     onSuccess: (data) => {
-      applyBotStatusSnapshot(qc, data as BotStatusSnapshot, 'stop-market-mutation')
       const label = MARKETS.find((m) => m.id === data.stoppedMarket)?.label ?? data.stoppedMarket
       pushToast({
         tone: data.mode === 'close_all' ? 'warning' : 'success',
-        title: data.mode === 'close_all'
-          ? `${label} — closing positions`
-          : `${label} drained`,
+        title: data.mode === 'close_all' ? `${label} — closing positions` : `${label} drained`,
         description: data.mode === 'close_all'
           ? `Closing ${data.openPositionsClosed} position${data.openPositionsClosed !== 1 ? 's' : ''}.`
           : 'Market stopped, existing positions remain open.',
       })
     },
-    onSettled: () => {
+    onSettled: async (_data, _err, vars: { marketType: MarketId } | undefined) => {
+      if (vars) unlockAction(`stop-market:${vars.marketType}`)
       setStopModal(null)
       isFiringRef.current = false
-      qc.invalidateQueries({ queryKey: ['bot-status'] })
+      await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
       qc.invalidateQueries({ queryKey: ['bot-history'] })
     },
   })
@@ -490,14 +557,23 @@ export function BotControls({ botData }: { botData: any }) {
     const isActive = activeMarkets.includes(marketId)
 
     if (isActive) {
-      const trades = marketOpenTrades(marketId)
-      setStopModal({ market: marketId, openTrades: trades })
+      // Ensure modal shows the latest positions by refetching before opening
+      setStopModal({ market: marketId, openTrades: -1 })
+      ;(async () => {
+        await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+        const latest = qc.getQueryData<BotStatusSnapshot>(BOT_STATUS_QUERY_KEY)
+        const trades = latest?.perMarketOpenTrades?.[marketId] ?? 0
+        setStopModal({ market: marketId, openTrades: trades })
+      })()
     } else {
       setStartModal({ market: marketId })
     }
   }
 
   function confirmStart(marketId: MarketId) {
+    const actionId = `start-market:${marketId}`
+    if (isLocked(actionId)) return
+    lockAction(actionId)
     isFiringRef.current = true
     const nextMarkets = [...activeMarkets, marketId]
     syncMutation.mutate({ markets: nextMarkets })
@@ -505,8 +581,19 @@ export function BotControls({ botData }: { botData: any }) {
   }
 
   function confirmMarketStop(marketId: MarketId, mode: 'graceful' | 'close_all') {
+    const actionId = `stop-market:${marketId}`
+    if (isLocked(actionId)) return
+    lockAction(actionId)
     isFiringRef.current = true
     stopMarketMutation.mutate({ marketType: marketId, mode })
+  }
+
+  function handleStopAll(mode: 'graceful' | 'close_all') {
+    const actionId = `stop-all:${mode}`
+    if (isLocked(actionId)) return
+    lockAction(actionId)
+    isFiringRef.current = true
+    stopAllMutation.mutate(mode)
   }
 
   const ALL_MARKETS = MARKETS
@@ -539,8 +626,8 @@ export function BotControls({ botData }: { botData: any }) {
           openTradeCount={openTradeCount}
           hasLiveMarkets={hasLiveMarkets}
           onClose={() => setShowStopAllModal(false)}
-          onCloseAll={() => stopAllMutation.mutate('close_all')}
-          onGraceful={() => stopAllMutation.mutate('graceful')}
+          onCloseAll={() => handleStopAll('close_all')}
+          onGraceful={() => handleStopAll('graceful')}
         />
       )}
 
@@ -560,6 +647,9 @@ export function BotControls({ botData }: { botData: any }) {
               <span className="text-xs text-gray-500">
                 {activeMarkets.length} active market{activeMarkets.length === 1 ? '' : 's'}
               </span>
+            </div>
+            <div className="text-xs text-gray-400 mt-1">
+              {dataUpdatedAt ? `Last updated: ${Math.max(0, Math.floor((Date.now() - dataUpdatedAt) / 1000))}s ago` : 'Last updated: —'}
             </div>
           </div>
           <StatusBadge tone={hasLiveMarkets ? 'danger' : 'info'}>

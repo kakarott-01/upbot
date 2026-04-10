@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { BOT_STATUS_QUERY_KEY, isValidBotSnapshot } from '@/lib/bot-status-client'
 import { AlertTriangle, ChevronDown, ChevronUp, Layers3, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { InlineAlert } from '@/components/ui/inline-alert'
@@ -10,6 +11,7 @@ import { InfoTip } from '@/components/ui/tooltip'
 import { useToastStore } from '@/lib/toast-store'
 import { isBotLocked } from '@/lib/bot-lock'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
+import { useTradingGuard } from '@/lib/use-trading-guard'
 
 const MARKETS = [
   { id: 'crypto', label: 'Crypto', publicLabel: 'CRYPTO' },
@@ -243,6 +245,7 @@ export function StrategySettings() {
   })
 
   const { data: botData } = useBotStatusQuery()
+  const { isRunning } = useTradingGuard()
 
   useEffect(() => {
     if (configData?.markets) {
@@ -289,8 +292,13 @@ export function StrategySettings() {
       if (!response.ok) throw new Error(data.error ?? 'Failed to save strategy config')
       return data
     },
-    onMutate: ({ marketType }) => {
+    onMutate: async ({ marketType }) => {
       setSavingMarket(marketType)
+      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+      await qc.cancelQueries({ queryKey: ['strategy-configs'] })
+      const previousBot = qc.getQueryData(BOT_STATUS_QUERY_KEY)
+      const previous = qc.getQueryData(['strategy-configs'])
+      return { previous, previousBot }
     },
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['strategy-configs'] })
@@ -300,7 +308,9 @@ export function StrategySettings() {
         description: 'Strategy allocation and market controls are updated.',
       })
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _vars, context: any) => {
+      if (context?.previous) qc.setQueryData(['strategy-configs'], context.previous)
+      if (context?.previousBot && isValidBotSnapshot(context.previousBot)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previousBot)
       pushToast({
         tone: 'error',
         title: 'Save failed',
@@ -310,6 +320,7 @@ export function StrategySettings() {
     onSettled: () => {
       setSavingMarket(null)
       setPendingAggressiveSave(null)
+      qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
     },
   })
 
@@ -507,7 +518,7 @@ export function StrategySettings() {
                           <button
                             key={mode}
                             type="button"
-                            disabled={isBotActiveHere}
+                            disabled={isBotActiveHere || isRunning}
                             onClick={() => updateMarket(market.id, (current) => ({
                               ...current,
                               executionMode: mode,
@@ -543,7 +554,7 @@ export function StrategySettings() {
                             value={config.maxPositionsPerSymbol}
                             min={1}
                             max={10}
-                            disabled={isBotActiveHere}
+                            disabled={isBotActiveHere || isRunning}
                             onChange={(value) => updateMarket(market.id, (current) => ({ ...current, maxPositionsPerSymbol: value }))}
                           />
                           <NumberField
@@ -553,7 +564,7 @@ export function StrategySettings() {
                             min={1}
                             max={100}
                             suffix="%"
-                            disabled={isBotActiveHere}
+                            disabled={isBotActiveHere || isRunning}
                             onChange={(value) => updateMarket(market.id, (current) => ({ ...current, maxCapitalPerStrategyPct: value }))}
                           />
                         </div>
@@ -565,7 +576,7 @@ export function StrategySettings() {
                               <InfoTip text="NET keeps one net position per symbol. HEDGE allows opposing exposure if the exchange supports it." />
                             </span>
                             <select
-                              disabled={isBotActiveHere || !isAggressive}
+                              disabled={isBotActiveHere || isRunning || !isAggressive}
                               value={config.positionMode}
                               onChange={(event) => updateMarket(market.id, (current) => ({ ...current, positionMode: event.target.value as 'NET' | 'HEDGE' }))}
                               className="w-full rounded-xl border border-gray-800 bg-gray-900 px-3 py-2.5 text-sm text-gray-100 disabled:opacity-60"
@@ -581,7 +592,7 @@ export function StrategySettings() {
                             min={1}
                             max={100}
                             suffix="%"
-                            disabled={isBotActiveHere}
+                            disabled={isBotActiveHere || isRunning}
                             onChange={(value) => updateMarket(market.id, (current) => ({ ...current, maxDrawdownPct: value }))}
                           />
                           <div className="rounded-2xl border border-gray-800 bg-gray-950/50 p-4">
@@ -596,7 +607,7 @@ export function StrategySettings() {
                             <input
                               type="checkbox"
                               checked={config.allowHedgeOpposition}
-                              disabled={isBotActiveHere || config.positionMode !== 'HEDGE'}
+                              disabled={isBotActiveHere || isRunning || config.positionMode !== 'HEDGE'}
                               onChange={(event) => updateMarket(market.id, (current) => ({ ...current, allowHedgeOpposition: event.target.checked }))}
                             />
                             Allow LONG + SHORT simultaneously
@@ -605,7 +616,7 @@ export function StrategySettings() {
                             <input
                               type="checkbox"
                               checked={config.conflictBlocking}
-                              disabled={isBotActiveHere}
+                              disabled={isBotActiveHere || isRunning}
                               onChange={(event) => updateMarket(market.id, (current) => ({ ...current, conflictBlocking: event.target.checked }))}
                             />
                             Block start when conflicts are detected
@@ -679,7 +690,7 @@ export function StrategySettings() {
                             <button
                               key={strategy.strategyKey}
                               type="button"
-                              disabled={isBotActiveHere || (!selected && config.strategyKeys.length >= 2)}
+                              disabled={isBotActiveHere || isRunning || (!selected && config.strategyKeys.length >= 2)}
                               onClick={() => toggleStrategy(market.id, strategy.strategyKey)}
                               className={`rounded-2xl border p-4 text-left transition ${
                                 selected
@@ -723,7 +734,7 @@ export function StrategySettings() {
                                     <InfoTip text="Higher-priority strategies can reserve room when capital is tight in AGGRESSIVE mode." />
                                   </span>
                                   <select
-                                    disabled={isBotActiveHere}
+                                    disabled={isBotActiveHere || isRunning}
                                     value={settings.priority}
                                     onChange={(event) => updateMarket(market.id, (current) => ({
                                       ...current,
@@ -746,7 +757,7 @@ export function StrategySettings() {
                                   min={0}
                                   max={86400}
                                   suffix="s"
-                                  disabled={isBotActiveHere}
+                                  disabled={isBotActiveHere || isRunning}
                                   onChange={(value) => updateMarket(market.id, (current) => ({
                                     ...current,
                                     strategySettings: {
@@ -763,7 +774,7 @@ export function StrategySettings() {
                                   max={100}
                                   step={0.1}
                                   suffix="%"
-                                  disabled={isBotActiveHere || !isAggressive}
+                                  disabled={isBotActiveHere || isRunning || !isAggressive}
                                   onChange={(value) => updateMarket(market.id, (current) => ({
                                     ...current,
                                     strategySettings: {
@@ -783,7 +794,7 @@ export function StrategySettings() {
                                   max={100}
                                   step={0.1}
                                   suffix="%"
-                                  disabled={isBotActiveHere || !isAggressive}
+                                  disabled={isBotActiveHere || isRunning || !isAggressive}
                                   onChange={(value) => updateMarket(market.id, (current) => ({
                                     ...current,
                                     strategySettings: {
@@ -810,7 +821,7 @@ export function StrategySettings() {
                       </div>
                       <Button
                         onClick={() => handleSave(market.id, config)}
-                        disabled={isBotActiveHere || saveMutation.isPending || config.strategyKeys.length === 0}
+                        disabled={isBotActiveHere || isRunning || saveMutation.isPending || config.strategyKeys.length === 0}
                       >
                         {savingMarket === market.id ? (
                           <><Loader2 className="h-4 w-4 animate-spin" />Saving…</>

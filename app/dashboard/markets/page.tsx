@@ -7,6 +7,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useBotStatusQuery } from "@/lib/use-bot-status-query";
+import { useTradingGuard } from '@/lib/use-trading-guard'
 
 interface SavedApi {
   id: string;
@@ -406,6 +407,7 @@ function ExchangeForm({ exch, marketId, prefill, onSaved, onCancel, isEdit }: Ex
   const [saving, setSaving] = useState(false);
   const [saved,  setSaved]  = useState(false);
   const [error,  setError]  = useState("");
+  const [isDirty, setIsDirty] = useState(false)
 
   async function handleSave() {
     const apiKey = vals[exch.fields[0]] ?? "";
@@ -434,6 +436,7 @@ function ExchangeForm({ exch, marketId, prefill, onSaved, onCancel, isEdit }: Ex
 
     if (res.ok) {
       setSaved(true);
+      setIsDirty(false);
       qc.invalidateQueries({ queryKey: ["exchange-apis"] });
       setTimeout(() => { onSaved(); }, 1200);
     } else {
@@ -441,12 +444,25 @@ function ExchangeForm({ exch, marketId, prefill, onSaved, onCancel, isEdit }: Ex
     }
   }
 
+  // Warn on unload when form has unsaved changes
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (isDirty) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty])
+
   return (
     <div className="bg-gray-800/40 rounded-xl border border-gray-700/50 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/40">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700/40">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-gray-300">{exch.name}</span>
           {isEdit && <span className="text-xs text-amber-400 bg-amber-900/20 border border-amber-800/30 px-2 py-0.5 rounded-full">Editing</span>}
+          {isDirty && <span className="text-xs text-amber-300 ml-2">Unsaved changes</span>}
         </div>
         <div className="flex items-center gap-2">
           <a href={exch.docs} target="_blank" rel="noopener noreferrer"
@@ -468,7 +484,7 @@ function ExchangeForm({ exch, marketId, prefill, onSaved, onCancel, isEdit }: Ex
               type="password"
               placeholder={`Paste your ${field}`}
               value={vals[field] ?? ""}
-              onChange={e => setVals(prev => ({ ...prev, [field]: e.target.value }))}
+              onChange={e => { setVals(prev => ({ ...prev, [field]: e.target.value })); setIsDirty(true) }}
               className="w-full px-3 py-2 rounded-lg bg-gray-900/60 border border-gray-700 text-gray-100
                 placeholder-gray-600 font-mono text-sm outline-none transition-all
                 focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:bg-gray-900
@@ -607,6 +623,7 @@ export default function MarketsPage() {
 
   // Fetch bot status to know which markets are actively running
   const { data: botData } = useBotStatusQuery();
+  const { isRunning } = useTradingGuard()
 
   const botRunning      = botData?.status === 'running';
   const activeMarkets: string[] = botData?.activeMarkets ?? [];
@@ -740,8 +757,8 @@ export default function MarketsPage() {
                         setEditPrefill(null);
                       }}
                       onEditOtpModal={() => {
-                        // Block edit if bot is active for this market
-                        if (botActiveHere) return;
+                        // Block edit if bot is active (global or market-specific)
+                        if (botActiveHere || isRunning) return;
                         setEditOtpModal({ marketId: market.id, exchId: exch.id });
                       }}
                     />

@@ -14,7 +14,10 @@ export function useBotStatusQuery(
   return useQuery({
     queryKey: BOT_STATUS_QUERY_KEY,
     queryFn: fetchBotStatus,
-    refetchInterval: BOT_STATUS_POLL_INTERVAL_MS,
+    refetchInterval: (data) => {
+      if (!data) return 5_000
+      return data.status === 'running' || data.status === 'stopping' ? 3_000 : 10_000
+    },
     placeholderData: (prev) => prev,
     ...options,
   })
