@@ -7,9 +7,7 @@ import { useMutationState } from '@tanstack/react-query'
 import { LogOut, Bell, Menu, AlertTriangle } from 'lucide-react'
 import { useState } from 'react'
 import { MobileSidebar } from '@/components/dashboard/sidebar'
-import { useGlobalClockStore } from '@/lib/global-clock-store'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
-import { useElapsedTimerDiagnostics, useStartedAtInvariant } from '@/lib/timer-diagnostics'
 import { formatElapsedDuration, getSessionDurationMs } from '@/lib/time'
 
 interface TopBarProps {
@@ -24,7 +22,7 @@ export function TopBar({ user }: TopBarProps) {
   const [menuOpen,      setMenuOpen]      = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [isSigningOut,  setIsSigningOut]  = useState(false)
-  const now = useGlobalClockStore((state) => state.now)
+  const now = Date.now()
 
   const { data: botData, isLoading: botLoading } = useBotStatusQuery()
 
@@ -49,12 +47,6 @@ export function TopBar({ user }: TopBarProps) {
   const runTime = isRunning && botData?.started_at
     ? formatElapsedDuration(getSessionDurationMs(botData.started_at, null, now))
     : ''
-  const runElapsedMs = isRunning && botData?.started_at
-    ? getSessionDurationMs(botData.started_at, null, now)
-    : null
-
-  useElapsedTimerDiagnostics('topbar', botData?.started_at, runElapsedMs)
-  useStartedAtInvariant('topbar', status, botData?.started_at)
 
   const displayName = user?.name || user?.email?.split('@')[0] || 'User'
   const userInitial = displayName.charAt(0).toUpperCase()

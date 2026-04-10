@@ -49,8 +49,8 @@ SPOT_MARKETS    = {"indian"}
 _ohlcv_cache: Dict[Tuple[str, str, str], Tuple[float, pd.DataFrame]] = {}
 OHLCV_CACHE_TTL_BY_MARKET = {
     "indian":       55,
-    "crypto":      110,
-    "commodities":  80,
+    "crypto":      150,
+    "commodities": 110,
     "global":      110,
 }
 OHLCV_CACHE_TTL_DEFAULT = 55

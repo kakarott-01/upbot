@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { acquireBotLock } from '@/lib/bot-lock'
 import { startBotForUser } from '@/lib/bot/start-service'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
@@ -35,7 +34,6 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}))
     const rawMarkets = body?.markets
-    const rawConflictOverrides = Array.isArray(body?.conflictOverrides) ? body.conflictOverrides : []
 
     if (!rawMarkets || !Array.isArray(rawMarkets) || rawMarkets.length === 0) {
       return NextResponse.json({ error: 'No markets specified' }, { status: 400 })
@@ -49,17 +47,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const invalidConflictOverrides = rawConflictOverrides.filter((market: unknown) => !isMarketName(market))
-    if (invalidConflictOverrides.length > 0) {
-      return NextResponse.json(
-        { error: `Invalid conflict override market(s): ${invalidConflictOverrides.join(', ')}` },
-        { status: 400 },
-      )
-    }
-
-    await startBotForUser(session.id, rawMarkets as MarketName[], {
-      conflictOverrides: rawConflictOverrides as MarketName[],
-    })
+    await startBotForUser(session.id, rawMarkets as MarketName[])
     const { snapshot } = await getBotStatusSnapshot(session.id)
     return NextResponse.json({
       success: true,

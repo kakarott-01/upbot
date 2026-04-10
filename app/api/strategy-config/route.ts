@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
 import { getUserMarketStrategyConfig, upsertUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import { strategyConfigSchema } from '@/lib/strategies/validation'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
+
+const DEFAULT_HEALTH = {
+  minWinRatePct: 30,
+  maxDrawdownPct: 15,
+  maxLossStreak: 5,
+  isAutoDisabled: false,
+  autoDisabledReason: null as string | null,
+  lastTradeAt: null as string | null,
+}
 
 export async function GET(req: NextRequest) {
   let session
@@ -42,7 +50,46 @@ export async function PUT(req: NextRequest) {
   }
 
   try {
-    const parsed = strategyConfigSchema.safeParse(await req.json().catch(() => ({})))
+    const rawBody = await req.json().catch(() => ({}))
+    const marketType = typeof rawBody?.marketType === 'string' ? rawBody.marketType : null
+    const existing = marketType && ['indian', 'crypto', 'commodities', 'global'].includes(marketType)
+      ? await getUserMarketStrategyConfig(session.id, marketType as any)
+      : null
+
+    const strategySettings = Object.fromEntries(
+      Object.entries(rawBody?.strategySettings ?? {}).map(([key, value]) => {
+        const nextValue = value as {
+          priority?: 'HIGH' | 'MEDIUM' | 'LOW'
+          cooldownAfterTradeSec?: number
+          capitalAllocation?: {
+            perTradePercent?: number
+            maxActivePercent?: number
+          }
+        }
+
+        return [
+          key,
+          {
+            priority: nextValue.priority ?? existing?.strategySettings[key]?.priority ?? 'MEDIUM',
+            cooldownAfterTradeSec: nextValue.cooldownAfterTradeSec ?? existing?.strategySettings[key]?.cooldownAfterTradeSec ?? 0,
+            capitalAllocation: {
+              perTradePercent: nextValue.capitalAllocation?.perTradePercent
+                ?? existing?.strategySettings[key]?.capitalAllocation.perTradePercent
+                ?? 10,
+              maxActivePercent: nextValue.capitalAllocation?.maxActivePercent
+                ?? existing?.strategySettings[key]?.capitalAllocation.maxActivePercent
+                ?? 25,
+            },
+            health: existing?.strategySettings[key]?.health ?? DEFAULT_HEALTH,
+          },
+        ]
+      }),
+    )
+
+    const parsed = strategyConfigSchema.safeParse({
+      ...rawBody,
+      strategySettings,
+    })
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
     }

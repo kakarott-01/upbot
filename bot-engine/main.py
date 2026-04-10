@@ -9,8 +9,6 @@ Changes from v3:
   2. Auto-restart on startup still works (no session_ids on watchdog restart —
      falls back to "userId:market" placeholder which is fine for auto-restart
      because reconciliation still restores open positions correctly).
-
-  3. Self-ping every 60s to keep Render free tier warm.
 """
 
 from fastapi import FastAPI, Header, HTTPException, Depends
@@ -109,11 +107,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️  Auto-restart check failed (non-fatal): {e}")
 
-    # ── Step 3: Self-ping loop to keep Render free tier alive ─────────────────
-    engine_url = os.getenv("BOT_ENGINE_URL", "")
-    if engine_url:
-        asyncio.create_task(_self_ping_loop(engine_url), name="self_ping")
-
     logger.info("✅ UpBot Engine v4 ready")
     yield
 
@@ -150,20 +143,6 @@ async def _safe_auto_restart(
             await db.update_bot_status(user_id, "stopped", [])
         except Exception as db_err:
             logger.error(f"❌ Could not update status after failed restart: {db_err}")
-
-
-async def _self_ping_loop(base_url: str):
-    """Pings /health every 60 seconds to keep Render free tier warm."""
-    import httpx
-    await asyncio.sleep(30)
-    while True:
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(f"{base_url}/health")
-                logger.debug(f"💓 Self-ping {r.status_code}")
-        except Exception as e:
-            logger.warning(f"💓 Self-ping failed: {e}")
-        await asyncio.sleep(60)
 
 
 app = FastAPI(title="UpBot Engine", version="4.0.0", lifespan=lifespan)
@@ -206,20 +185,6 @@ class DrainRequest(BaseModel):
 
 class CloseAllRequest(BaseModel):
     user_id: str
-
-class BacktestRequest(BaseModel):
-    user_id: str
-    market_type: str
-    asset: str
-    timeframe: str
-    date_from: str
-    date_to: str
-    initial_capital: float
-    execution_mode: str
-    position_mode: str = "NET"
-    allow_hedge_opposition: bool = False
-    strategy_keys: List[str]
-    strategy_settings: Dict[str, Dict] = {}
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
@@ -332,52 +297,3 @@ async def bot_status(user_id: str):
         raise HTTPException(500, "Scheduler not initialized")
     return _scheduler.get_status(user_id)
 
-
-@app.post("/backtests/run", dependencies=[Depends(_verify)])
-async def run_backtest_endpoint(req: BacktestRequest):
-    from datetime import datetime, timezone
-
-    from exchange_connector import ExchangeConnector
-    from strategy_engine import run_backtest, timeframe_to_millis
-
-    if not _db:
-        raise HTTPException(500, "Database not initialized")
-
-    exchange_configs = await _db.get_exchange_apis(req.user_id)
-    cfg = exchange_configs.get(req.market_type)
-    if not cfg:
-        raise HTTPException(400, f"No exchange API configured for market {req.market_type}")
-
-    connector = ExchangeConnector(
-        exchange_name=cfg["exchange_name"],
-        api_key=cfg["api_key"],
-        api_secret=cfg["api_secret"],
-        extra=cfg.get("extra", {}),
-        market_type=req.market_type,
-    )
-
-    try:
-        start = datetime.fromisoformat(req.date_from.replace("Z", "+00:00"))
-        end = datetime.fromisoformat(req.date_to.replace("Z", "+00:00"))
-        if end <= start:
-            raise HTTPException(400, "date_to must be after date_from")
-
-        candle_ms = timeframe_to_millis(req.timeframe)
-        limit = min(max(int(((end - start).total_seconds() * 1000) / candle_ms) + 5, 100), 2000)
-        since_ms = int(start.replace(tzinfo=timezone.utc).timestamp() * 1000)
-        df = await connector.fetch_ohlcv(req.asset, req.timeframe, limit=limit, since_ms=since_ms)
-        result = run_backtest(
-            df=df,
-            strategy_keys=req.strategy_keys,
-            execution_mode=req.execution_mode,
-            position_mode=req.position_mode,
-            allow_hedge_opposition=req.allow_hedge_opposition,
-            initial_capital=req.initial_capital,
-            strategy_settings=req.strategy_settings,
-        )
-        return result
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"backtest failed user={req.user_id}: {e}", exc_info=True)
-        raise HTTPException(500, str(e))

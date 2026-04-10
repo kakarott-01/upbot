@@ -17,6 +17,7 @@ All other methods from v3 unchanged.
 
 import os
 import json
+import asyncio
 import logging
 import base64
 import hashlib
@@ -24,6 +25,7 @@ from pathlib import Path
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Dict, List, Any
 from datetime import datetime, date, timedelta
+from uuid import uuid4
 
 import asyncpg
 from Crypto.Cipher import AES
@@ -150,6 +152,9 @@ class Database:
             raise RuntimeError("DATABASE_URL not set")
         self._pool: Optional[asyncpg.Pool] = None
         self._spool_path = Path(PENDING_LIVE_TRADE_SPOOL)
+        self._kill_switch_state: Dict[str, Dict[str, Any]] = {}
+        self._global_exposure_reservations: Dict[str, Dict[str, Any]] = {}
+        self._global_exposure_locks: Dict[str, asyncio.Lock] = {}
 
     async def pool(self) -> asyncpg.Pool:
         if not self._pool:
@@ -385,35 +390,30 @@ class Database:
         return dict(row) if row else {}
 
     async def get_kill_switch_state(self, user_id: str) -> Dict[str, Any]:
-        pool = await self.pool()
-        row = await pool.fetchrow(
-            """SELECT is_active, close_positions, reason, activated_at, last_deactivated_at
-               FROM kill_switch_state WHERE user_id=$1""",
-            user_id,
-        )
-        return dict(row) if row else {
+        return self._kill_switch_state.get(user_id, {
             "is_active": False,
             "close_positions": False,
             "reason": None,
             "activated_at": None,
             "last_deactivated_at": None,
-        }
+        })
 
     async def set_kill_switch_state(self, user_id: str, is_active: bool, close_positions: bool = False, reason: Optional[str] = None):
-        pool = await self.pool()
-        await pool.execute(
-            """INSERT INTO kill_switch_state
-               (user_id, is_active, close_positions, reason, activated_at, last_deactivated_at, updated_at)
-               VALUES ($1, $2, $3, $4, CASE WHEN $2 THEN NOW() ELSE NULL END, CASE WHEN NOT $2 THEN NOW() ELSE NULL END, NOW())
-               ON CONFLICT (user_id) DO UPDATE SET
-                 is_active=$2,
-                 close_positions=$3,
-                 reason=$4,
-                 activated_at=CASE WHEN $2 THEN NOW() ELSE kill_switch_state.activated_at END,
-                 last_deactivated_at=CASE WHEN NOT $2 THEN NOW() ELSE kill_switch_state.last_deactivated_at END,
-                 updated_at=NOW()""",
-            user_id, is_active, close_positions, reason,
-        )
+        current = self._kill_switch_state.get(user_id, {
+            "is_active": False,
+            "close_positions": False,
+            "reason": None,
+            "activated_at": None,
+            "last_deactivated_at": None,
+        })
+        now = datetime.utcnow()
+        self._kill_switch_state[user_id] = {
+            "is_active": is_active,
+            "close_positions": close_positions,
+            "reason": reason,
+            "activated_at": now if is_active else current.get("activated_at"),
+            "last_deactivated_at": now if not is_active else current.get("last_deactivated_at"),
+        }
 
     async def get_global_risk_snapshot(self, user_id: str) -> Dict[str, Any]:
         pool = await self.pool()
@@ -486,12 +486,18 @@ class Database:
         details: Optional[Dict[str, Any]] = None,
     ):
         pool = await self.pool()
-        await pool.execute(
-            """INSERT INTO blocked_trades
-               (user_id, market_type, symbol, side, strategy_key, position_scope_key, reason_code, reason_message, details, created_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())""",
-            user_id, market_type, symbol, side.lower(), strategy_key, position_scope_key, reason_code, reason_message, json.dumps(details or {}),
-        )
+        try:
+            await pool.execute(
+                """INSERT INTO blocked_trades
+                   (user_id, market_type, symbol, side, strategy_key, position_scope_key, reason_code, reason_message, details, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())""",
+                user_id, market_type, symbol, side.lower(), strategy_key, position_scope_key, reason_code, reason_message, json.dumps(details or {}),
+            )
+        except asyncpg.UndefinedTableError:
+            logger.warning(
+                "blocked_trades table missing; skipped blocked-trade log user=%s market=%s symbol=%s code=%s",
+                user_id, market_type, symbol, reason_code,
+            )
 
     async def log_risk_event(
         self,
@@ -505,12 +511,18 @@ class Database:
         payload: Optional[Dict[str, Any]] = None,
     ):
         pool = await self.pool()
-        await pool.execute(
-            """INSERT INTO risk_events
-               (user_id, market_type, symbol, strategy_key, event_type, severity, message, payload, created_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())""",
-            user_id, market_type, symbol, strategy_key, event_type, severity, message, json.dumps(payload or {}),
-        )
+        try:
+            await pool.execute(
+                """INSERT INTO risk_events
+                   (user_id, market_type, symbol, strategy_key, event_type, severity, message, payload, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())""",
+                user_id, market_type, symbol, strategy_key, event_type, severity, message, json.dumps(payload or {}),
+            )
+        except asyncpg.UndefinedTableError:
+            logger.warning(
+                "risk_events table missing; skipped risk-event log user=%s market=%s type=%s",
+                user_id, market_type, event_type,
+            )
 
     async def touch_strategy_trade(self, user_id: str, market_type: str, strategy_key: Optional[str]):
         if not strategy_key:
@@ -538,12 +550,15 @@ class Database:
         if not strategy_key:
             return {"auto_disabled": False}
         pool = await self.pool()
-        row = await pool.fetchrow(
-            """SELECT id, total_trades, winning_trades, losing_trades, loss_streak, realized_pnl, best_equity, max_drawdown_pct
-               FROM strategy_performance
-               WHERE user_id=$1 AND market_type=$2 AND strategy_key=$3""",
-            user_id, market_type, strategy_key,
-        )
+        try:
+            row = await pool.fetchrow(
+                """SELECT id, total_trades, winning_trades, losing_trades, loss_streak, realized_pnl, best_equity, max_drawdown_pct
+                   FROM strategy_performance
+                   WHERE user_id=$1 AND market_type=$2 AND strategy_key=$3""",
+                user_id, market_type, strategy_key,
+            )
+        except asyncpg.UndefinedTableError:
+            return {"auto_disabled": False}
 
         total_trades = int(row["total_trades"]) if row else 0
         winning_trades = int(row["winning_trades"]) if row else 0
@@ -564,24 +579,27 @@ class Database:
         drawdown_pct = (((best_equity - realized_pnl) / best_equity) * 100) if best_equity > 0 else 0.0
         win_rate = (winning_trades / total_trades) * 100 if total_trades else 0.0
 
-        if row:
-            await pool.execute(
-                """UPDATE strategy_performance
-                   SET total_trades=$4, winning_trades=$5, losing_trades=$6, loss_streak=$7,
-                       realized_pnl=$8, best_equity=$9, max_drawdown_pct=$10, last_trade_at=NOW(), updated_at=NOW()
-                   WHERE user_id=$1 AND market_type=$2 AND strategy_key=$3""",
-                user_id, market_type, strategy_key, total_trades, winning_trades, losing_trades, loss_streak,
-                _round_pnl(realized_pnl), _round_pnl(best_equity), _round_pct(drawdown_pct),
-            )
-        else:
-            await pool.execute(
-                """INSERT INTO strategy_performance
-                   (user_id, market_type, strategy_key, total_trades, winning_trades, losing_trades, loss_streak,
-                    realized_pnl, best_equity, max_drawdown_pct, last_trade_at, last_health_status, updated_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),'healthy',NOW())""",
-                user_id, market_type, strategy_key, total_trades, winning_trades, losing_trades, loss_streak,
-                _round_pnl(realized_pnl), _round_pnl(best_equity), _round_pct(drawdown_pct),
-            )
+        try:
+            if row:
+                await pool.execute(
+                    """UPDATE strategy_performance
+                       SET total_trades=$4, winning_trades=$5, losing_trades=$6, loss_streak=$7,
+                           realized_pnl=$8, best_equity=$9, max_drawdown_pct=$10, last_trade_at=NOW(), updated_at=NOW()
+                       WHERE user_id=$1 AND market_type=$2 AND strategy_key=$3""",
+                    user_id, market_type, strategy_key, total_trades, winning_trades, losing_trades, loss_streak,
+                    _round_pnl(realized_pnl), _round_pnl(best_equity), _round_pct(drawdown_pct),
+                )
+            else:
+                await pool.execute(
+                    """INSERT INTO strategy_performance
+                       (user_id, market_type, strategy_key, total_trades, winning_trades, losing_trades, loss_streak,
+                        realized_pnl, best_equity, max_drawdown_pct, last_trade_at, last_health_status, updated_at)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),'healthy',NOW())""",
+                    user_id, market_type, strategy_key, total_trades, winning_trades, losing_trades, loss_streak,
+                    _round_pnl(realized_pnl), _round_pnl(best_equity), _round_pct(drawdown_pct),
+                )
+        except asyncpg.UndefinedTableError:
+            return {"auto_disabled": False}
 
         thresholds = await pool.fetchrow(
             """SELECT sel.health_min_win_rate_pct, sel.health_max_drawdown_pct, sel.health_max_loss_streak
@@ -825,89 +843,46 @@ class Database:
         ttl_seconds: int = 30,
         max_total_exposure: float = 0.0,
     ) -> Dict[str, Any]:
-        """Attempt to reserve 'amount' of notional exposure for the user.
-        This acquires an advisory xact lock keyed by user and a fixed token
-        to avoid races across markets. If reservation succeeds, a row is
-        inserted into global_exposure_reservations with an expires_at.
-        Returns a dict with reserved:boolean and reservation_id (uuid) on success.
-        """
         pool = await self.pool()
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                lock_acquired = await conn.fetchval(
-                    "SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2))",
-                    user_id, "global_exposure",
-                )
-                # If we couldn't acquire the lock, report lock timeout
-                if not lock_acquired:
-                    open_row = await conn.fetchrow(
-                        """SELECT COALESCE(SUM(COALESCE(remaining_quantity, quantity) * entry_price), 0) AS total_exposure
-                           FROM trades WHERE user_id=$1 AND status='open'""",
-                        user_id,
-                    )
-                    total_exposure = float(open_row["total_exposure"] or 0) if open_row else 0.0
-                    return {"reserved": False, "lock_timeout": True, "total_exposure": total_exposure, "reason": "Timed out waiting for exposure lock"}
+        lock = self._global_exposure_locks.setdefault(user_id, asyncio.Lock())
+        async with lock:
+            open_row = await pool.fetchrow(
+                """SELECT COALESCE(SUM(COALESCE(remaining_quantity, quantity) * entry_price), 0) AS total_exposure
+                   FROM trades WHERE user_id=$1 AND status='open'""",
+                user_id,
+            )
+            open_exposure = float(open_row["total_exposure"] or 0) if open_row else 0.0
+            now = datetime.utcnow()
 
-                open_row = await conn.fetchrow(
-                    """SELECT COALESCE(SUM(COALESCE(remaining_quantity, quantity) * entry_price), 0) AS total_exposure
-                       FROM trades WHERE user_id=$1 AND status='open'""",
-                    user_id,
-                )
-                open_exposure = float(open_row["total_exposure"] or 0) if open_row else 0.0
-                reserved_row = await conn.fetchrow(
-                    "SELECT COALESCE(SUM(amount),0) as reserved FROM global_exposure_reservations WHERE user_id=$1 AND (expires_at IS NULL OR expires_at > NOW())",
-                    user_id,
-                )
-                reserved_exposure = float(reserved_row["reserved"] or 0) if reserved_row else 0.0
-                current_total = open_exposure + reserved_exposure
-                if max_total_exposure and (current_total + float(amount)) > float(max_total_exposure):
-                    return {"reserved": False, "lock_timeout": False, "total_exposure": current_total, "reason": "Global exposure would exceed configured limit"}
+            expired_ids = [
+                reservation_id
+                for reservation_id, reservation in self._global_exposure_reservations.items()
+                if reservation["user_id"] == user_id
+                and reservation["expires_at"] is not None
+                and reservation["expires_at"] <= now
+            ]
+            for reservation_id in expired_ids:
+                self._global_exposure_reservations.pop(reservation_id, None)
 
-                expires_at = None
-                if ttl_seconds and ttl_seconds > 0:
-                    expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+            reserved_exposure = sum(
+                reservation["amount"]
+                for reservation in self._global_exposure_reservations.values()
+                if reservation["user_id"] == user_id
+            )
+            current_total = open_exposure + reserved_exposure
+            if max_total_exposure and (current_total + float(amount)) > float(max_total_exposure):
+                return {"reserved": False, "lock_timeout": False, "total_exposure": current_total, "reason": "Global exposure would exceed configured limit"}
 
-                row = await conn.fetchrow(
-                    "INSERT INTO global_exposure_reservations (user_id, amount, created_at, expires_at) VALUES ($1,$2,NOW(),$3) RETURNING id",
-                    user_id, str(amount), expires_at,
-                )
-                return {"reserved": True, "reservation_id": str(row["id"]), "total_exposure": current_total + float(amount)}
+            reservation_id = str(uuid4())
+            self._global_exposure_reservations[reservation_id] = {
+                "user_id": user_id,
+                "amount": float(amount),
+                "expires_at": now + timedelta(seconds=ttl_seconds) if ttl_seconds and ttl_seconds > 0 else None,
+            }
+            return {"reserved": True, "reservation_id": reservation_id, "total_exposure": current_total + float(amount)}
 
     async def release_global_exposure_reservation(self, reservation_id: str):
-        pool = await self.pool()
-        try:
-            await pool.execute("DELETE FROM global_exposure_reservations WHERE id=$1", reservation_id)
-        except Exception:
-            logger.exception("Failed to release global exposure reservation %s", reservation_id)
-
-    # ── Watchdog restart counter ──────────────────────────────────────────────
-
-    async def get_watchdog_restart_count(self, user_id: str) -> int:
-        pool = await self.pool()
-        row  = await pool.fetchrow(
-            "SELECT watchdog_restart_count FROM bot_statuses WHERE user_id=$1",
-            user_id,
-        )
-        if row is None or row["watchdog_restart_count"] is None:
-            return 0
-        return int(row["watchdog_restart_count"])
-
-    async def set_watchdog_restart_count(self, user_id: str, count: int):
-        pool = await self.pool()
-        await pool.execute(
-            """INSERT INTO bot_statuses (user_id, status, watchdog_restart_count, updated_at)
-               VALUES ($1, 'error', $2, NOW())
-               ON CONFLICT (user_id) DO UPDATE
-               SET watchdog_restart_count=$2, updated_at=NOW()""",
-            user_id, count,
-        )
-
-    async def reset_watchdog_restart_count(self, user_id: str):
-        pool = await self.pool()
-        await pool.execute(
-            "UPDATE bot_statuses SET watchdog_restart_count=0, updated_at=NOW() WHERE user_id=$1",
-            user_id,
-        )
+        self._global_exposure_reservations.pop(reservation_id, None)
 
     # ── Failed live orders ────────────────────────────────────────────────────
 
@@ -1098,7 +1073,7 @@ class Database:
             # If a global exposure reservation exists for this trade, release it
             if exposure_reservation_id:
                 try:
-                    await pool.execute("DELETE FROM global_exposure_reservations WHERE id=$1", exposure_reservation_id)
+                    await self.release_global_exposure_reservation(exposure_reservation_id)
                 except Exception:
                     logger.exception("Failed to release exposure reservation after paper trade saved")
             return str(row["id"])
@@ -1164,7 +1139,7 @@ class Database:
             # Release any exposure reservation associated with this trade
             if exposure_reservation_id:
                 try:
-                    await pool.execute("DELETE FROM global_exposure_reservations WHERE id=$1", exposure_reservation_id)
+                    await self.release_global_exposure_reservation(exposure_reservation_id)
                 except Exception:
                     logger.exception("Failed to release exposure reservation after live trade saved")
             return str(row["id"])
@@ -1467,14 +1442,20 @@ class Database:
         exchange_order_id: Optional[str] = None, error_message: Optional[str] = None,
     ):
         pool = await self.pool()
-        await pool.execute(
-            """INSERT INTO position_close_log
-               (user_id, trade_id, attempt, status, quantity_req, quantity_fill,
-                exchange_order_id, error_message, attempted_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())""",
-            user_id, trade_id, attempt, status,
-            str(quantity_req), str(quantity_fill), exchange_order_id, error_message,
-        )
+        try:
+            await pool.execute(
+                """INSERT INTO position_close_log
+                   (user_id, trade_id, attempt, status, quantity_req, quantity_fill,
+                    exchange_order_id, error_message, attempted_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())""",
+                user_id, trade_id, attempt, status,
+                str(quantity_req), str(quantity_fill), exchange_order_id, error_message,
+            )
+        except asyncpg.UndefinedTableError:
+            logger.warning(
+                "position_close_log table missing; skipped close-attempt log trade=%s attempt=%s status=%s",
+                trade_id, attempt, status,
+            )
 
     async def increment_close_attempts(self, trade_id: str):
         pool = await self.pool()

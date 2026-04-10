@@ -83,6 +83,19 @@ function defaultStrategySettings() {
   }
 }
 
+function toStrategyPayload(strategySettings: RuntimeConfig['strategySettings']) {
+  return Object.fromEntries(
+    Object.entries(strategySettings).map(([key, settings]) => [
+      key,
+      {
+        priority: settings.priority,
+        cooldownAfterTradeSec: settings.cooldownAfterTradeSec,
+        capitalAllocation: settings.capitalAllocation,
+      },
+    ]),
+  )
+}
+
 function marketCategory(market: MarketId) {
   return MARKETS.find((item) => item.id === market)?.publicLabel ?? 'CRYPTO'
 }
@@ -269,7 +282,7 @@ export function StrategySettings() {
           maxDrawdownPct: config.maxDrawdownPct,
           aggressiveConfirmed,
           strategyKeys: config.strategyKeys,
-          strategySettings: config.strategySettings,
+          strategySettings: toStrategyPayload(config.strategySettings),
         }),
       })
       const data = await response.json()
@@ -784,71 +797,6 @@ export function StrategySettings() {
                                 />
                               </div>
 
-                              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                                <NumberField
-                                  label="Min win rate %"
-                                  tip="Health gate for auto-disabling weak strategies."
-                                  value={settings.health.minWinRatePct}
-                                  min={0}
-                                  max={100}
-                                  suffix="%"
-                                  disabled={isBotActiveHere}
-                                  onChange={(value) => updateMarket(market.id, (current) => ({
-                                    ...current,
-                                    strategySettings: {
-                                      ...current.strategySettings,
-                                      [strategyKey]: {
-                                        ...settings,
-                                        health: { ...settings.health, minWinRatePct: value },
-                                      },
-                                    },
-                                  }))}
-                                />
-                                <NumberField
-                                  label="Health max drawdown %"
-                                  tip="When breached, the strategy can be auto-disabled for safety."
-                                  value={settings.health.maxDrawdownPct}
-                                  min={0.1}
-                                  max={100}
-                                  suffix="%"
-                                  step={0.1}
-                                  disabled={isBotActiveHere}
-                                  onChange={(value) => updateMarket(market.id, (current) => ({
-                                    ...current,
-                                    strategySettings: {
-                                      ...current.strategySettings,
-                                      [strategyKey]: {
-                                        ...settings,
-                                        health: { ...settings.health, maxDrawdownPct: value },
-                                      },
-                                    },
-                                  }))}
-                                />
-                                <NumberField
-                                  label="Max loss streak"
-                                  tip="Health guardrail for repeated losses."
-                                  value={settings.health.maxLossStreak}
-                                  min={1}
-                                  max={100}
-                                  disabled={isBotActiveHere}
-                                  onChange={(value) => updateMarket(market.id, (current) => ({
-                                    ...current,
-                                    strategySettings: {
-                                      ...current.strategySettings,
-                                      [strategyKey]: {
-                                        ...settings,
-                                        health: { ...settings.health, maxLossStreak: value },
-                                      },
-                                    },
-                                  }))}
-                                />
-                              </div>
-
-                              {settings.health.autoDisabledReason ? (
-                                <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-100">
-                                  {settings.health.autoDisabledReason}
-                                </div>
-                              ) : null}
                             </div>
                           )
                         })}

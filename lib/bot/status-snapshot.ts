@@ -1,6 +1,6 @@
 import { and, eq, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { botSessions, botStatuses, killSwitchState, trades } from '@/lib/schema'
+import { botSessions, botStatuses, trades } from '@/lib/schema'
 import { toUtcIsoString } from '@/lib/time'
 
 const BOT_MARKETS = ['crypto', 'indian', 'global', 'commodities'] as const
@@ -40,12 +40,9 @@ function buildSessions(statusRow: BotStatusRow, sessionRows: BotSessionRow[]) {
 }
 
 export async function getBotStatusSnapshot(userId: string) {
-  const [statusRow, killSwitch, sessionRows] = await Promise.all([
+  const [statusRow, sessionRows] = await Promise.all([
     db.query.botStatuses.findFirst({
       where: eq(botStatuses.userId, userId),
-    }),
-    db.query.killSwitchState.findFirst({
-      where: eq(killSwitchState.userId, userId),
     }),
     db.query.botSessions.findMany({
       where: eq(botSessions.userId, userId),
@@ -72,7 +69,6 @@ export async function getBotStatusSnapshot(userId: string) {
         perMarketOpenTrades: {},
         timeoutWarning: false,
         sessions,
-        killSwitchActive: Boolean(killSwitch?.isActive),
       },
     }
   }
@@ -132,7 +128,6 @@ export async function getBotStatusSnapshot(userId: string) {
       perMarketOpenTrades,
       timeoutWarning,
       sessions,
-      killSwitchActive: Boolean(killSwitch?.isActive),
     },
   }
 }

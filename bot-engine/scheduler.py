@@ -43,8 +43,8 @@ logger = logging.getLogger(__name__)
 
 MARKET_INTERVAL = {
     "indian":      60,
-    "crypto":     120,
-    "commodities": 90,
+    "crypto":     180,
+    "commodities": 120,
     "global":     120,
 }
 
@@ -78,6 +78,7 @@ class BotContext:
     market_job_ids:   Dict[str, List[str]]   = field(default_factory=dict)
     started_at:       datetime               = field(default_factory=datetime.utcnow)
     last_heartbeat:   Optional[datetime]     = None
+    heartbeat_tick:   int                    = 0
     close_all_task:   Optional[asyncio.Task] = None
     drain_completing: bool                   = False
 
@@ -523,9 +524,12 @@ class BotScheduler:
                 await _algo.run_cycle()
                 now = datetime.utcnow()
                 if _uid in _scheduler.active_bots:
-                    _scheduler.active_bots[_uid].last_heartbeat = now
+                    ctx = _scheduler.active_bots[_uid]
+                    ctx.last_heartbeat = now
+                    ctx.heartbeat_tick += 1
                 try:
-                    await _scheduler._db.update_heartbeat(_uid)
+                    if _uid in _scheduler.active_bots and _scheduler.active_bots[_uid].heartbeat_tick % 5 == 0:
+                        await _scheduler._db.update_heartbeat(_uid)
                 except Exception as e:
                     logger.warning(f"⚠️  Heartbeat update failed: {e}")
 

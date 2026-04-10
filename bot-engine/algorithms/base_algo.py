@@ -984,15 +984,6 @@ class BaseAlgo(ABC):
         if self._paper_mode:
             balance = await self.db.get_paper_balance(self.user_id)
         else:
-            try:
-                replay = await self.db.flush_spooled_live_trades(self.user_id, self.market_type)
-                if replay["restored"] or replay["remaining"]:
-                    logger.info(
-                        f"[{self.name}] ♻️  spooled live trade replay "
-                        f"restored={replay['restored']} remaining={replay['remaining']}"
-                    )
-            except Exception as e:
-                logger.warning(f"[{self.name}] ⚠️  Could not replay spooled trades: {e}")
             balance = await self.connector.fetch_available_margin(
                 self.config.get("quote_currency", "USDT")
             )

@@ -123,12 +123,14 @@ function StartMarketModal({
   market,
   isLive,
   strategyKeys,
+  warnings,
   onConfirm,
   onClose,
 }: {
   market:       string
   isLive:       boolean
   strategyKeys: string[]
+  warnings:     string[]
   onConfirm:    () => void
   onClose:      () => void
 }) {
@@ -167,6 +169,16 @@ function StartMarketModal({
           {isLive && (
             <InlineAlert tone="danger" title="Real capital will be used">
               All signals for {market} will place real orders on the exchange. Losses are unrecoverable.
+            </InlineAlert>
+          )}
+
+          {warnings.length > 0 && (
+            <InlineAlert tone="warning" title="Potential strategy conflicts detected">
+              <div className="space-y-1">
+                {warnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </div>
             </InlineAlert>
           )}
 
@@ -290,48 +302,6 @@ function MarketStopModal({
   )
 }
 
-// ── Conflict modal ────────────────────────────────────────────────────────────
-function ConflictModal({
-  market,
-  warnings,
-  onCancel,
-  onConfirm,
-}: {
-  market:   string
-  warnings: string[]
-  onCancel: () => void
-  onConfirm: () => void
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(3,7,18,0.88)', backdropFilter: 'blur(4px)' }}
-      onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}
-    >
-      <div className="w-full max-w-lg rounded-3xl border border-amber-500/20 bg-gray-950 shadow-2xl">
-        <div className="border-b border-amber-500/15 px-5 py-4">
-          <p className="text-sm font-semibold text-amber-200">Potential strategy conflict</p>
-          <p className="mt-1 text-xs text-gray-400">Starting {market} may create opposing signals or capital contention.</p>
-        </div>
-        <div className="space-y-3 px-5 py-5">
-          <InlineAlert tone="warning" title="Review before enabling this market.">
-            Override is available, but the bot may block lower-priority strategies when capital is tight.
-          </InlineAlert>
-          <div className="space-y-2 rounded-2xl border border-gray-800 bg-gray-900/60 p-3">
-            {warnings.map((w) => (
-              <p key={w} className="text-xs leading-relaxed text-gray-300">{w}</p>
-            ))}
-          </div>
-          <div className="flex gap-3">
-            <Button variant="secondary" className="flex-1" onClick={onCancel}>Cancel</Button>
-            <Button className="flex-1" onClick={onConfirm}>Override and start</Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ── Main component ────────────────────────────────────────────────────────────
 export function BotControls({ botData }: { botData: any }) {
   const qc        = useQueryClient()
@@ -345,8 +315,6 @@ export function BotControls({ botData }: { botData: any }) {
   const [showStopAllModal, setShowStopAllModal]   = useState(false)
   const [startModal, setStartModal]               = useState<{ market: MarketId } | null>(null)
   const [stopModal, setStopModal]                 = useState<{ market: MarketId; openTrades: number } | null>(null)
-  const [conflictState, setConflictState]         = useState<{ market: MarketId; warnings: string[] } | null>(null)
-  const [pendingStart, setPendingStart]           = useState<MarketId | null>(null)
 
   const { data: modeData } = useQuery({
     queryKey: ['market-modes'],
@@ -389,11 +357,11 @@ export function BotControls({ botData }: { botData: any }) {
 
   const syncMutation = useMutation({
     mutationKey: ['bot-start'],
-    mutationFn: async ({ markets, conflictOverrides = [] }: { markets: MarketId[]; conflictOverrides?: MarketId[] }) => {
+    mutationFn: async ({ markets }: { markets: MarketId[] }) => {
       const res  = await fetch('/api/bot/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ markets, conflictOverrides }),
+        body: JSON.stringify({ markets }),
       })
       const data = await safeJson(res)
       if (!res.ok) throw new Error(data.error ?? `Failed to sync bot (HTTP ${res.status})`)
@@ -525,25 +493,15 @@ export function BotControls({ botData }: { botData: any }) {
       const trades = marketOpenTrades(marketId)
       setStopModal({ market: marketId, openTrades: trades })
     } else {
-      const warnings = marketWarnings(marketId)
-      if (warnings.length > 0) {
-        setConflictState({ market: marketId, warnings })
-        setPendingStart(marketId)
-      } else {
-        setStartModal({ market: marketId })
-      }
+      setStartModal({ market: marketId })
     }
   }
 
-  function confirmStart(marketId: MarketId, overrideConflicts = false) {
+  function confirmStart(marketId: MarketId) {
     isFiringRef.current = true
     const nextMarkets = [...activeMarkets, marketId]
-    syncMutation.mutate({
-      markets: nextMarkets,
-      conflictOverrides: overrideConflicts ? [marketId] : [],
-    })
+    syncMutation.mutate({ markets: nextMarkets })
     setStartModal(null)
-    setPendingStart(null)
   }
 
   function confirmMarketStop(marketId: MarketId, mode: 'graceful' | 'close_all') {
@@ -560,6 +518,7 @@ export function BotControls({ botData }: { botData: any }) {
           market={MARKETS.find((m) => m.id === startModal.market)?.label ?? startModal.market}
           isLive={isMarketLive(startModal.market)}
           strategyKeys={marketStrategyKeys(startModal.market)}
+          warnings={marketWarnings(startModal.market)}
           onConfirm={() => confirmStart(startModal.market)}
           onClose={() => setStartModal(null)}
         />
@@ -572,19 +531,6 @@ export function BotControls({ botData }: { botData: any }) {
           openTradeCount={stopModal.openTrades}
           onDrain={() => confirmMarketStop(stopModal.market, 'graceful')}
           onClose={() => setStopModal(null)}
-        />
-      )}
-
-      {conflictState && (
-        <ConflictModal
-          market={MARKETS.find((m) => m.id === conflictState.market)?.label ?? conflictState.market}
-          warnings={conflictState.warnings}
-          onCancel={() => { setConflictState(null); setPendingStart(null) }}
-          onConfirm={() => {
-            const market = conflictState.market
-            setConflictState(null)
-            setStartModal({ market })
-          }}
         />
       )}
 

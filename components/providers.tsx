@@ -1,8 +1,6 @@
 'use client'
 import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
-import { BotSyncBridge } from '@/components/bot-sync-bridge'
-import { GlobalClockBootstrap } from '@/components/global-clock'
 import { ToastViewport } from '@/components/ui/toast-viewport'
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -46,8 +44,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <GlobalClockBootstrap />
-      <BotSyncBridge />
       {children}
       <ToastViewport />
     </QueryClientProvider>

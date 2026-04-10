@@ -85,6 +85,13 @@
       "when": 1776300000000,
       "tag": "0011_safe_eternity",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1776400000000,
+      "tag": "0012_trim_unused_surfaces",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
-import { botSessions, botStatuses, exchangeApis, killSwitchState, marketConfigs, trades } from '@/lib/schema'
+import { botSessions, botStatuses, exchangeApis, marketConfigs, trades } from '@/lib/schema'
 import { getUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import type { MarketType } from '@/lib/strategies/types'
 import { toUtcIsoString } from '@/lib/time'
@@ -8,25 +8,13 @@ import { toUtcIsoString } from '@/lib/time'
 export async function startBotForUser(
   userId: string,
   rawMarkets: MarketType[],
-  options?: { conflictOverrides?: MarketType[] },
 ) {
   const markets: MarketType[] = Array.from(new Set(rawMarkets))
-  const conflictOverrides = new Set(options?.conflictOverrides ?? [])
 
   const existing = await db.query.botStatuses.findFirst({
     where: eq(botStatuses.userId, userId),
     columns: { status: true, activeMarkets: true, startedAt: true },
   })
-  const killSwitch = await db.query.killSwitchState.findFirst({
-    where: eq(killSwitchState.userId, userId),
-    columns: { isActive: true, reason: true },
-  })
-
-  if (killSwitch?.isActive) {
-    const error = new Error(killSwitch.reason || 'Kill switch is active. Clear it before restarting the bot.')
-    ;(error as Error & { status?: number }).status = 409
-    throw error
-  }
 
   if (existing?.status === 'stopping') {
     const error = new Error('Bot is currently stopping. Wait for it to finish before restarting.')
@@ -77,11 +65,6 @@ export async function startBotForUser(
   for (const { market, config } of marketConfigsForEngine) {
     if (config.strategyKeys.length === 0) {
       const error = new Error(`No strategy configured for ${market}. Configure at least one strategy before starting.`)
-      ;(error as Error & { status?: number }).status = 400
-      throw error
-    }
-    if (config.conflictBlocking && config.conflictWarnings.length > 0 && !conflictOverrides.has(market)) {
-      const error = new Error(`Strategy conflicts block startup for ${market}.`)
       ;(error as Error & { status?: number }).status = 400
       throw error
     }

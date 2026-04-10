@@ -7,8 +7,6 @@ import {
   TrendingUp, TrendingDown, RefreshCw, Bot,
 } from 'lucide-react'
 import { format} from 'date-fns'
-import { useGlobalClockStore } from '@/lib/global-clock-store'
-import { useElapsedTimerDiagnostics } from '@/lib/timer-diagnostics'
 import { formatElapsedDuration, getSessionDurationMs } from '@/lib/time'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -214,9 +212,6 @@ function BotSessionRow({
 }) {
   const pnl = Number(session.totalPnl ?? 0)
   const duration = getDuration(session.started_at, session.stopped_at, now)
-  const elapsedMs = getSessionDurationMs(session.started_at, session.stopped_at, now)
-
-  useElapsedTimerDiagnostics(`bot-history:${session.id}`, session.started_at, elapsedMs)
 
   return (
     <tr className="hover:bg-gray-800/30 transition-colors group">
@@ -274,7 +269,7 @@ function BotSessionRow({
 export default function BotHistoryPage() {
   const qc = useQueryClient()
   const { toast, show: showToast } = useToast()
-  const now = useGlobalClockStore((state) => state.now)
+  const now = Date.now()
 
   const [page,        setPage]        = useState(1)
   const [modeFilter,  setModeFilter]  = useState<'all' | 'paper' | 'live'>('all')

@@ -30,7 +30,6 @@ export type BotStatusSnapshot = {
   perMarketOpenTrades: Record<string, number>
   timeoutWarning: boolean
   sessions: BotStatusSessionSnapshot[]
-  killSwitchActive: boolean
 }
 
 export async function fetchBotStatus(): Promise<BotStatusSnapshot> {

@@ -263,19 +263,19 @@ CREATE TABLE IF NOT EXISTS "strategy_positions" (
 );
 --> statement-breakpoint
 DROP INDEX IF EXISTS "exchange_apis_user_idx";--> statement-breakpoint
-ALTER TABLE "risk_settings" ADD COLUMN "max_total_exposure" numeric(20, 2) DEFAULT '0' NOT NULL;--> statement-breakpoint
-ALTER TABLE "risk_settings" ADD COLUMN "max_daily_loss" numeric(20, 2) DEFAULT '0' NOT NULL;--> statement-breakpoint
-ALTER TABLE "risk_settings" ADD COLUMN "max_open_positions" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
-ALTER TABLE "risk_settings" ADD COLUMN "paper_balance" numeric(20, 2) DEFAULT '10000.00' NOT NULL;--> statement-breakpoint
-ALTER TABLE "risk_state" ADD COLUMN "last_loss_time" double precision;--> statement-breakpoint
-ALTER TABLE "trades" ADD COLUMN "fee_rate" numeric(8, 6) DEFAULT '0.001';--> statement-breakpoint
-ALTER TABLE "trades" ADD COLUMN "fee_amount" numeric(20, 8);--> statement-breakpoint
-ALTER TABLE "trades" ADD COLUMN "net_pnl" numeric(20, 8);--> statement-breakpoint
-ALTER TABLE "trades" ADD COLUMN "filled_quantity" numeric(20, 8) DEFAULT '0';--> statement-breakpoint
-ALTER TABLE "trades" ADD COLUMN "remaining_quantity" numeric(20, 8);--> statement-breakpoint
-ALTER TABLE "trades" ADD COLUMN "strategy_key" varchar(100);--> statement-breakpoint
-ALTER TABLE "trades" ADD COLUMN "position_scope_key" varchar(160) DEFAULT 'default' NOT NULL;--> statement-breakpoint
-ALTER TABLE "trades" ADD COLUMN "stop_loss_order_id" varchar(255);--> statement-breakpoint
+ALTER TABLE "risk_settings" ADD COLUMN IF NOT EXISTS "max_total_exposure" numeric(20, 2) DEFAULT '0' NOT NULL;--> statement-breakpoint
+ALTER TABLE "risk_settings" ADD COLUMN IF NOT EXISTS "max_daily_loss" numeric(20, 2) DEFAULT '0' NOT NULL;--> statement-breakpoint
+ALTER TABLE "risk_settings" ADD COLUMN IF NOT EXISTS "max_open_positions" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "risk_settings" ADD COLUMN IF NOT EXISTS "paper_balance" numeric(20, 2) DEFAULT '10000.00' NOT NULL;--> statement-breakpoint
+ALTER TABLE "risk_state" ADD COLUMN IF NOT EXISTS "last_loss_time" double precision;--> statement-breakpoint
+ALTER TABLE "trades" ADD COLUMN IF NOT EXISTS "fee_rate" numeric(8, 6) DEFAULT '0.001';--> statement-breakpoint
+ALTER TABLE "trades" ADD COLUMN IF NOT EXISTS "fee_amount" numeric(20, 8);--> statement-breakpoint
+ALTER TABLE "trades" ADD COLUMN IF NOT EXISTS "net_pnl" numeric(20, 8);--> statement-breakpoint
+ALTER TABLE "trades" ADD COLUMN IF NOT EXISTS "filled_quantity" numeric(20, 8) DEFAULT '0';--> statement-breakpoint
+ALTER TABLE "trades" ADD COLUMN IF NOT EXISTS "remaining_quantity" numeric(20, 8);--> statement-breakpoint
+ALTER TABLE "trades" ADD COLUMN IF NOT EXISTS "strategy_key" varchar(100);--> statement-breakpoint
+ALTER TABLE "trades" ADD COLUMN IF NOT EXISTS "position_scope_key" varchar(160) DEFAULT 'default' NOT NULL;--> statement-breakpoint
+ALTER TABLE "trades" ADD COLUMN IF NOT EXISTS "stop_loss_order_id" varchar(255);--> statement-breakpoint
 DO $$ BEGIN
  ALTER TABLE "backtest_results" ADD CONSTRAINT "backtest_results_run_id_backtest_runs_id_fk" FOREIGN KEY ("run_id") REFERENCES "public"."backtest_runs"("id") ON DELETE cascade ON UPDATE no action;
 EXCEPTION
