@@ -1,0 +1,31 @@
+name: Validate Migrations
+
+on:
+  push:
+    paths:
+      - 'drizzle/migrations/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'drizzle/migrations/**'
+      - 'scripts/**'
+
+jobs:
+  validate-migrations:
+    name: Validate migrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Run migration validator
+        run: |
+          # Ensure script is runnable and execute
+          chmod +x scripts/ci-validate-migrations.sh || true
+          bash scripts/ci-validate-migrations.sh

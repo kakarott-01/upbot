@@ -53,6 +53,19 @@ async def lifespan(app: FastAPI):
     _scheduler = BotScheduler(_db)
     _watchdog  = Watchdog(_scheduler, _db)
 
+    # Validate default symbols mapping early at startup
+    try:
+        from configured_algo import validate_default_symbols
+        try:
+            valid_defaults = validate_default_symbols()
+        except Exception as e:
+            logger.warning("⚠️ DEFAULT_SYMBOLS validation raised an exception: %s", e)
+            valid_defaults = False
+        if not valid_defaults:
+            logger.warning("⚠️ DEFAULT_SYMBOLS validation reported issues; check TODO.md and logs")
+    except Exception as e:
+        logger.warning("⚠️ Could not run DEFAULT_SYMBOLS validation: %s", e)
+
     # ── Step 1: Clean up stale sessions from previous run ─────────────────────
     try:
         cleaned = await _db.cleanup_stale_sessions()

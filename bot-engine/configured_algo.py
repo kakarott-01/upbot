@@ -27,6 +27,48 @@ DEFAULT_SYMBOLS = {
 }
 
 
+def validate_default_symbols() -> bool:
+    """
+    Basic runtime validation for `DEFAULT_SYMBOLS`.
+
+    Checks that the mapping contains non-empty lists of string symbols for
+    each configured market and logs warnings for suspicious entries.
+    Returns True when no obvious issues are found, False otherwise.
+    """
+    ok = True
+    if not isinstance(DEFAULT_SYMBOLS, dict):
+        logger.error("❌ DEFAULT_SYMBOLS must be a dict")
+        return False
+
+    for market, symbols in DEFAULT_SYMBOLS.items():
+        if not isinstance(market, str) or not market:
+            logger.warning("⚠️ Invalid DEFAULT_SYMBOLS market key: %r", market)
+            ok = False
+            continue
+        if not isinstance(symbols, (list, tuple)) or not symbols:
+            logger.warning("⚠️ DEFAULT_SYMBOLS[%s] is empty or not a list", market)
+            ok = False
+            continue
+        for s in symbols:
+            if not isinstance(s, str) or not s.strip():
+                logger.warning("⚠️ DEFAULT_SYMBOLS[%s] contains invalid symbol: %r", market, s)
+                ok = False
+                continue
+            # Heuristic: crypto pairs usually contain '/'
+            if market == "crypto" and "/" not in s:
+                logger.warning(
+                    "⚠️ DEFAULT_SYMBOLS[crypto] symbol %s does not contain '/' — may be invalid for ccxt",
+                    s,
+                )
+                ok = False
+
+    if ok:
+        logger.info("✅ DEFAULT_SYMBOLS validation passed")
+    else:
+        logger.warning("⚠️ DEFAULT_SYMBOLS validation found issues; see TODO.md")
+    return ok
+
+
 class ConfiguredMultiStrategyAlgo(LeverageMixin, BaseAlgo):
     """
     Black-box multi-strategy algo that delegates to BlackBoxStrategyExecutor.
