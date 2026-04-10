@@ -44,17 +44,21 @@ export async function POST(req: NextRequest) {
   const apiSecretEnc = encrypt(apiSecret)
   const extraFieldsEnc = extraFields ? encryptJSON(extraFields) : null
 
+  // Application-level enforcement: canonicalize to one exchange record per user+market.
+  // The DB migration (added) enforces uniqueness server-side; here we upsert by (userId, marketType).
   const existing = await db.query.exchangeApis.findFirst({
     where: and(
       eq(exchangeApis.userId, session.id),
       eq(exchangeApis.marketType, marketType),
-      eq(exchangeApis.exchangeName, exchangeName),
     ),
   })
 
   if (existing) {
+    // Update the existing canonical record for this user+market
     await db.update(exchangeApis)
       .set({
+        exchangeName,
+        exchangeLabel,
         apiKeyEnc,
         apiSecretEnc,
         extraFieldsEnc,

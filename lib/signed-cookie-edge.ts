@@ -5,6 +5,9 @@ if (!SECRET) {
   throw new Error('NEXTAUTH_SECRET or ENCRYPTION_KEY must be set for signed cookies')
 }
 
+// TTL for signed session payloads (ms). Keep in sync with server setting.
+const SIGNED_COOKIE_TTL_MS = Number(process.env.SIGNED_COOKIE_TTL_MS) || 7 * 24 * 60 * 60 * 1000
+
 const encoder = new TextEncoder()
 
 function toBase64Url(bytes: Uint8Array): string {
@@ -61,7 +64,11 @@ export async function verifySessionCookieEdge(cookie: string | undefined): Promi
   }
 
   try {
-    return JSON.parse(fromBase64Url(data)) as SessionPayload
+    const parsed = JSON.parse(fromBase64Url(data)) as any
+    const iat = typeof parsed.iat === 'number' ? parsed.iat : null
+    if (!iat || Date.now() - iat > SIGNED_COOKIE_TTL_MS) return null
+    const { iat: _ignored, ...rest } = parsed
+    return rest as SessionPayload
   } catch {
     return null
   }

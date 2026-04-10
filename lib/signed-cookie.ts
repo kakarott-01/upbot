@@ -16,6 +16,9 @@ if (!SECRET) {
   throw new Error('NEXTAUTH_SECRET or ENCRYPTION_KEY must be set for signed cookies')
 }
 
+// TTL for signed session payloads (ms). Default 7 days to limit stale cookie window.
+const SIGNED_COOKIE_TTL_MS = Number(process.env.SIGNED_COOKIE_TTL_MS) || 7 * 24 * 60 * 60 * 1000
+
 export interface SessionPayload {
   id:    string
   email: string
@@ -30,7 +33,8 @@ export interface SessionPayload {
  * Store this as the user_session cookie (httpOnly + secure + sameSite=lax).
  */
 export function signSession(payload: SessionPayload): string {
-  const data = Buffer.from(JSON.stringify(payload)).toString('base64url')
+  const wrapped = { ...payload, iat: Date.now() }
+  const data = Buffer.from(JSON.stringify(wrapped)).toString('base64url')
   const sig  = _sign(data)
   return `${data}.${sig}`
 }
@@ -51,7 +55,16 @@ export function verifySession(cookie: string | undefined): SessionPayload | null
 
   const data = cookie.slice(0, dotIdx)
   const sig  = cookie.slice(dotIdx + 1)
-  return _verifySignedParts(data, sig)
+  const parsed = _verifySignedParts(data, sig)
+  if (!parsed) return null
+
+  // Expiry check (defence in depth to cookie maxAge)
+  const iat = typeof parsed.iat === 'number' ? parsed.iat : null
+  if (!iat || Date.now() - iat > SIGNED_COOKIE_TTL_MS) return null
+
+  // Remove iat and return SessionPayload
+  const { iat: _ignored, ...rest } = parsed as any
+  return rest as SessionPayload
 }
 
 // ── Internal ──────────────────────────────────────────────────────────────────
@@ -60,7 +73,7 @@ function _sign(data: string): string {
   return createHmac('sha256', SECRET!).update(data).digest('base64url')
 }
 
-function _verifySignedParts(data: string, providedSig: string): SessionPayload | null {
+function _verifySignedParts(data: string, providedSig: string): any | null {
   const expectedSig = _sign(data)
   try {
     const a = Buffer.from(providedSig, 'base64url')
@@ -70,7 +83,7 @@ function _verifySignedParts(data: string, providedSig: string): SessionPayload |
     return null
   }
   try {
-    return JSON.parse(Buffer.from(data, 'base64url').toString('utf8')) as SessionPayload
+    return JSON.parse(Buffer.from(data, 'base64url').toString('utf8'))
   } catch {
     return null
   }

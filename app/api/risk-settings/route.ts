@@ -5,6 +5,7 @@ import { riskSettings } from '@/lib/schema'
 import { eq } from 'drizzle-orm'
 import { z } from 'zod'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
+import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
 
 const schema = z.object({
   maxPositionPct: z.number().min(0.1).max(100),
@@ -51,6 +52,12 @@ export async function POST(req: NextRequest) {
 
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
+  }
+
+  try {
+    await assertBotStoppedForSensitiveMutation(session.id, 'Stop the bot before changing risk settings.')
+  } catch (error) {
+    return guardErrorResponse(error)
   }
 
   const d = parsed.data

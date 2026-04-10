@@ -282,7 +282,7 @@ export const exchangeApis = pgTable('exchange_apis', {
   createdAt:     timestamp('created_at').defaultNow().notNull(),
   updatedAt:     timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  userExchangeIdx: index('exchange_apis_user_idx').on(t.userId, t.marketType),
+  userExchangeUnique: uniqueIndex('exchange_apis_user_market_uq').on(t.userId, t.marketType),
 }))
 
 // ─── Bot Status ───────────────────────────────────────────────────────────────
