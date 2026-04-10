@@ -43,8 +43,7 @@
       "when": 1775700000000,
       "tag": "0005_production_position_architecture",
       "breakpoints": true
-    }
-    ,
+    },
     {
       "idx": 6,
       "version": "7",
@@ -64,6 +63,27 @@
       "version": "7",
       "when": 1776000000000,
       "tag": "0008_add_global_exposure_reservations",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1776100000000,
+      "tag": "0009_market_configs_uniqueness",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1776200000000,
+      "tag": "0010_exchange_apis_user_market_uq",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1776300000000,
+      "tag": "0011_safe_eternity",
       "breakpoints": true
     }
   ]
