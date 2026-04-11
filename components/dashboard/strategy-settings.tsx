@@ -10,8 +10,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { InfoTip } from '@/components/ui/tooltip'
 import { useToastStore } from '@/lib/toast-store'
 import { isBotLocked } from '@/lib/bot-lock'
-import { useBotStatusQuery } from '@/lib/use-bot-status-query'
-import { useTradingGuard } from '@/lib/use-trading-guard'
+import { useBotStatusQuery } from '@/lib/use-bot-status-query' 
 
 const MARKETS = [
   { id: 'crypto', label: 'Crypto', publicLabel: 'CRYPTO' },
@@ -245,7 +244,6 @@ export function StrategySettings() {
   })
 
   const { data: botData } = useBotStatusQuery()
-  const { isRunning } = useTradingGuard()
 
   useEffect(() => {
     if (configData?.markets) {
@@ -324,14 +322,22 @@ export function StrategySettings() {
     },
   })
 
-  const strategies: StrategyItem[] = strategyData?.strategies ?? []
+  const strategies: StrategyItem[] | undefined = strategyData?.strategies
   // const botIsLocked = botData?.status === 'running' || botData?.status === 'stopping'
   const activeMarkets: string[] = botData?.activeMarkets ?? []
   const totalCapital = Number(riskData?.paperBalance ?? 10000)
   const strategiesByMarket = useMemo(() => {
     const result: Record<string, StrategyItem[]> = {}
+    if (!strategies) {
+      for (const market of MARKETS) {
+        result[market.id] = []
+      }
+      return result
+    }
     for (const market of MARKETS) {
-      result[market.id] = strategies.filter((item) => item.supportedMarkets.includes(marketCategory(market.id) as any))
+      result[market.id] = strategies.filter((item) =>
+        item.supportedMarkets.includes(marketCategory(market.id) as any)
+      )
     }
     return result
   }, [strategies])
@@ -518,7 +524,7 @@ export function StrategySettings() {
                           <button
                             key={mode}
                             type="button"
-                            disabled={isBotActiveHere || isRunning}
+                            disabled={isBotActiveHere}
                             onClick={() => updateMarket(market.id, (current) => ({
                               ...current,
                               executionMode: mode,
@@ -554,7 +560,7 @@ export function StrategySettings() {
                             value={config.maxPositionsPerSymbol}
                             min={1}
                             max={10}
-                            disabled={isBotActiveHere || isRunning}
+                            disabled={isBotActiveHere}
                             onChange={(value) => updateMarket(market.id, (current) => ({ ...current, maxPositionsPerSymbol: value }))}
                           />
                           <NumberField
@@ -564,7 +570,7 @@ export function StrategySettings() {
                             min={1}
                             max={100}
                             suffix="%"
-                            disabled={isBotActiveHere || isRunning}
+                            disabled={isBotActiveHere}
                             onChange={(value) => updateMarket(market.id, (current) => ({ ...current, maxCapitalPerStrategyPct: value }))}
                           />
                         </div>
@@ -576,7 +582,7 @@ export function StrategySettings() {
                               <InfoTip text="NET keeps one net position per symbol. HEDGE allows opposing exposure if the exchange supports it." />
                             </span>
                             <select
-                              disabled={isBotActiveHere || isRunning || !isAggressive}
+                              disabled={isBotActiveHere || !isAggressive}
                               value={config.positionMode}
                               onChange={(event) => updateMarket(market.id, (current) => ({ ...current, positionMode: event.target.value as 'NET' | 'HEDGE' }))}
                               className="w-full rounded-xl border border-gray-800 bg-gray-900 px-3 py-2.5 text-sm text-gray-100 disabled:opacity-60"
@@ -592,7 +598,7 @@ export function StrategySettings() {
                             min={1}
                             max={100}
                             suffix="%"
-                            disabled={isBotActiveHere || isRunning}
+                            disabled={isBotActiveHere}
                             onChange={(value) => updateMarket(market.id, (current) => ({ ...current, maxDrawdownPct: value }))}
                           />
                           <div className="rounded-2xl border border-gray-800 bg-gray-950/50 p-4">
@@ -607,7 +613,7 @@ export function StrategySettings() {
                             <input
                               type="checkbox"
                               checked={config.allowHedgeOpposition}
-                              disabled={isBotActiveHere || isRunning || config.positionMode !== 'HEDGE'}
+                              disabled={isBotActiveHere || config.positionMode !== 'HEDGE'}
                               onChange={(event) => updateMarket(market.id, (current) => ({ ...current, allowHedgeOpposition: event.target.checked }))}
                             />
                             Allow LONG + SHORT simultaneously
@@ -616,7 +622,7 @@ export function StrategySettings() {
                             <input
                               type="checkbox"
                               checked={config.conflictBlocking}
-                              disabled={isBotActiveHere || isRunning}
+                              disabled={isBotActiveHere}
                               onChange={(event) => updateMarket(market.id, (current) => ({ ...current, conflictBlocking: event.target.checked }))}
                             />
                             Block start when conflicts are detected
@@ -690,7 +696,7 @@ export function StrategySettings() {
                             <button
                               key={strategy.strategyKey}
                               type="button"
-                              disabled={isBotActiveHere || isRunning || (!selected && config.strategyKeys.length >= 2)}
+                              disabled={isBotActiveHere || (!selected && config.strategyKeys.length >= 2)}
                               onClick={() => toggleStrategy(market.id, strategy.strategyKey)}
                               className={`rounded-2xl border p-4 text-left transition ${
                                 selected
@@ -734,7 +740,7 @@ export function StrategySettings() {
                                     <InfoTip text="Higher-priority strategies can reserve room when capital is tight in AGGRESSIVE mode." />
                                   </span>
                                   <select
-                                    disabled={isBotActiveHere || isRunning}
+                                    disabled={isBotActiveHere}
                                     value={settings.priority}
                                     onChange={(event) => updateMarket(market.id, (current) => ({
                                       ...current,
@@ -757,7 +763,7 @@ export function StrategySettings() {
                                   min={0}
                                   max={86400}
                                   suffix="s"
-                                  disabled={isBotActiveHere || isRunning}
+                                  disabled={isBotActiveHere}
                                   onChange={(value) => updateMarket(market.id, (current) => ({
                                     ...current,
                                     strategySettings: {
@@ -774,7 +780,7 @@ export function StrategySettings() {
                                   max={100}
                                   step={0.1}
                                   suffix="%"
-                                  disabled={isBotActiveHere || isRunning || !isAggressive}
+                                  disabled={isBotActiveHere || !isAggressive}
                                   onChange={(value) => updateMarket(market.id, (current) => ({
                                     ...current,
                                     strategySettings: {
@@ -794,7 +800,7 @@ export function StrategySettings() {
                                   max={100}
                                   step={0.1}
                                   suffix="%"
-                                  disabled={isBotActiveHere || isRunning || !isAggressive}
+                                  disabled={isBotActiveHere || !isAggressive}
                                   onChange={(value) => updateMarket(market.id, (current) => ({
                                     ...current,
                                     strategySettings: {
@@ -821,7 +827,7 @@ export function StrategySettings() {
                       </div>
                       <Button
                         onClick={() => handleSave(market.id, config)}
-                        disabled={isBotActiveHere || isRunning || saveMutation.isPending || config.strategyKeys.length === 0}
+                        disabled={isBotActiveHere || saveMutation.isPending || config.strategyKeys.length === 0}
                       >
                         {savingMarket === market.id ? (
                           <><Loader2 className="h-4 w-4 animate-spin" />Saving…</>

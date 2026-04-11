@@ -14,8 +14,6 @@ export function useBotStatusQuery(
   return useQuery<BotStatusSnapshot>({
     queryKey: BOT_STATUS_QUERY_KEY,
     queryFn: fetchBotStatus,
-    // react-query types differ across versions — accept either the raw data
-    // or the Query object and extract the snapshot safely.
     refetchInterval: (maybeDataOrQuery: any) => {
       const data: BotStatusSnapshot | undefined =
         maybeDataOrQuery && typeof maybeDataOrQuery.status === 'string'
@@ -23,7 +21,9 @@ export function useBotStatusQuery(
           : maybeDataOrQuery?.data ?? maybeDataOrQuery?.state?.data
 
       if (!data) return BOT_STATUS_POLL_INTERVAL_MS
-      return data.status === 'running' || data.status === 'stopping' ? 3_000 : 10_000
+      // FIX: 8s when running (was 3s), 15s when stopped (was 10s)
+      // Reduces Neon queries by ~60% with negligible UX impact
+      return data.status === 'running' || data.status === 'stopping' ? 8_000 : 15_000
     },
     placeholderData: (prev) => prev,
     ...options,

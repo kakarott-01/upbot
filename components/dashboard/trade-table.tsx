@@ -3,8 +3,27 @@ import { formatINR, formatPnl } from '@/lib/utils'
 import { format } from 'date-fns'
 import { ArrowUpRight, ArrowDownRight } from 'lucide-react'
 
+// FIX: Proper typed interface instead of any[]
+interface Trade {
+  id: string
+  symbol: string
+  side: 'buy' | 'sell'
+  marketType: string
+  quantity: string | number
+  entryPrice: string | number
+  exitPrice?: string | number | null
+  pnl?: string | number | null
+  netPnl?: string | number | null
+  feeAmount?: string | number | null
+  status: string
+  isPaper: boolean
+  openedAt: string
+  closedAt?: string | null
+  exchangeName?: string
+}
+
 interface Props {
-  trades: any[]
+  trades: Trade[]
   compact?: boolean
 }
 
@@ -66,7 +85,7 @@ export function TradeTable({ trades, compact }: Props) {
                   {trade.exitPrice ? formatINR(Number(trade.exitPrice)) : '—'}
                 </td>
                 <td className="py-2.5 px-2">
-                  {trade.netPnl != null || trade.pnl != null ? (
+                  {(trade.netPnl != null || trade.pnl != null) ? (
                     <div>
                       <span className={`text-xs font-semibold font-mono ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
                         {formatPnl(pnl)}

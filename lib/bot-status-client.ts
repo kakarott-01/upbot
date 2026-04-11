@@ -1,7 +1,8 @@
 import type { QueryClient } from '@tanstack/react-query'
 
 export const BOT_STATUS_QUERY_KEY = ['bot-status'] as const
-export const BOT_STATUS_POLL_INTERVAL_MS = 5_000
+// FIX: Increased from 5s to 8s to reduce Neon connection pressure
+export const BOT_STATUS_POLL_INTERVAL_MS = 8_000
 
 export type BotStatusSessionSnapshot = {
   market: string
@@ -37,7 +38,6 @@ export async function fetchBotStatus(): Promise<BotStatusSnapshot> {
   if (!response.ok) {
     throw new Error(`Failed to fetch bot status (HTTP ${response.status})`)
   }
-
   return response.json()
 }
 
@@ -49,26 +49,7 @@ export function isValidBotSnapshot(data: unknown): data is BotStatusSnapshot {
   return true
 }
 
-export function getBotStatusSignature(snapshot: BotStatusSnapshot | null | undefined): string {
-  if (!snapshot) return 'null'
-
-  return JSON.stringify({
-    status: snapshot.status,
-    stopMode: snapshot.stopMode,
-    started_at: snapshot.started_at,
-    stopped_at: snapshot.stopped_at,
-    stopping_at: snapshot.stopping_at,
-    activeMarkets: [...snapshot.activeMarkets].sort(),
-    sessions: snapshot.sessions.map((session) => ({
-      market: session.market,
-      status: session.status,
-      sessionId: session.sessionId,
-      started_at: session.started_at,
-      stopped_at: session.stopped_at,
-    })),
-  })
-}
-
+// Dead code removed: getBotStatusSignature was never used
 export function getBotSyncEventType(snapshot: BotStatusSnapshot): 'BOT_STARTED' | 'BOT_STOPPED' | 'BOT_UPDATED' {
   if (snapshot.status === 'running' && snapshot.started_at) return 'BOT_STARTED'
   if (snapshot.status === 'stopped') return 'BOT_STOPPED'
@@ -80,7 +61,6 @@ export function applyBotStatusSnapshot(
   snapshot: BotStatusSnapshot,
   source: string,
 ) {
-  // Validate incoming snapshot before mutating cache to avoid corrupting UI state
   if (!isValidBotSnapshot(snapshot)) {
     console.warn('[bot-sync] rejected invalid snapshot from', source, snapshot)
     return

@@ -46,7 +46,10 @@ export const PUBLIC_STRATEGY_CATALOG: PublicStrategyCatalogItem[] = [
   },
 ]
 
-let seedPromise: Promise<void> | null = null
+// Module-level flag: survives warm serverless instances, resets on cold start
+// Cold start: will re-seed once then stay seeded for the lifetime of that instance
+let seeded = false
+let seedInProgress: Promise<void> | null = null
 
 export function mapPlatformMarketToStrategyMarket(marketType: 'indian' | 'crypto' | 'commodities' | 'global') {
   switch (marketType) {
@@ -62,26 +65,21 @@ export function mapPlatformMarketToStrategyMarket(marketType: 'indian' | 'crypto
 }
 
 export async function ensureStrategyCatalogSeeded() {
-  if (seedPromise) return seedPromise
+  // Fast path: already seeded in this process instance
+  if (seeded) return
 
-  seedPromise = (async () => {
-    for (const item of PUBLIC_STRATEGY_CATALOG) {
-      const now = new Date()
-      await db.insert(strategies).values({
-        strategyKey: item.strategyKey,
-        name: item.name,
-        description: item.description,
-        riskLevel: item.riskLevel,
-        supportedMarkets: item.supportedMarkets,
-        supportedTimeframes: item.supportedTimeframes,
-        historicalWinRate: item.historicalPerformance.winRate.toFixed(2),
-        historicalAvgReturn: item.historicalPerformance.averageReturn.toFixed(4),
-        historicalMaxDrawdown: item.historicalPerformance.maxDrawdown.toFixed(4),
-        historicalSharpeRatio: item.historicalPerformance.sharpeRatio.toFixed(4),
-        updatedAt: now,
-      }).onConflictDoUpdate({
-        target: strategies.strategyKey,
-        set: {
+  // If seeding is already in progress, wait for it
+  if (seedInProgress) {
+    await seedInProgress
+    return
+  }
+
+  seedInProgress = (async () => {
+    try {
+      for (const item of PUBLIC_STRATEGY_CATALOG) {
+        const now = new Date()
+        await db.insert(strategies).values({
+          strategyKey: item.strategyKey,
           name: item.name,
           description: item.description,
           riskLevel: item.riskLevel,
@@ -91,16 +89,29 @@ export async function ensureStrategyCatalogSeeded() {
           historicalAvgReturn: item.historicalPerformance.averageReturn.toFixed(4),
           historicalMaxDrawdown: item.historicalPerformance.maxDrawdown.toFixed(4),
           historicalSharpeRatio: item.historicalPerformance.sharpeRatio.toFixed(4),
-          isActive: true,
           updatedAt: now,
-        },
-      })
+        }).onConflictDoUpdate({
+          target: strategies.strategyKey,
+          set: {
+            name: item.name,
+            description: item.description,
+            riskLevel: item.riskLevel,
+            supportedMarkets: item.supportedMarkets,
+            supportedTimeframes: item.supportedTimeframes,
+            historicalWinRate: item.historicalPerformance.winRate.toFixed(2),
+            historicalAvgReturn: item.historicalPerformance.averageReturn.toFixed(4),
+            historicalMaxDrawdown: item.historicalPerformance.maxDrawdown.toFixed(4),
+            historicalSharpeRatio: item.historicalPerformance.sharpeRatio.toFixed(4),
+            isActive: true,
+            updatedAt: now,
+          },
+        })
+      }
+      seeded = true
+    } finally {
+      seedInProgress = null
     }
   })()
 
-  try {
-    await seedPromise
-  } finally {
-    seedPromise = null
-  }
+  await seedInProgress
 }

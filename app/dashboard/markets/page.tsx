@@ -7,7 +7,6 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useBotStatusQuery } from "@/lib/use-bot-status-query";
-import { useTradingGuard } from '@/lib/use-trading-guard'
 
 interface SavedApi {
   id: string;
@@ -623,7 +622,6 @@ export default function MarketsPage() {
 
   // Fetch bot status to know which markets are actively running
   const { data: botData } = useBotStatusQuery();
-  const { isRunning } = useTradingGuard()
 
   const botRunning      = botData?.status === 'running';
   const activeMarkets: string[] = botData?.activeMarkets ?? [];
@@ -757,8 +755,8 @@ export default function MarketsPage() {
                         setEditPrefill(null);
                       }}
                       onEditOtpModal={() => {
-                        // Block edit if bot is active (global or market-specific)
-                        if (botActiveHere || isRunning) return;
+                        // Block edit only if the bot is active for this market
+                        if (botActiveHere) return;
                         setEditOtpModal({ marketId: market.id, exchId: exch.id });
                       }}
                     />

@@ -1,10 +1,7 @@
 'use client'
 
-// components/dashboard/topbar.tsx — v2
-// Shows: running / stopping-graceful / stopping-close_all / stopped
-
 import { useMutationState } from '@tanstack/react-query'
-import { LogOut, Bell, Menu, AlertTriangle } from 'lucide-react'
+import { LogOut, Bell, Menu, AlertTriangle, X } from 'lucide-react'
 import { useState } from 'react'
 import { useEffect } from 'react'
 import { MobileSidebar } from '@/components/dashboard/sidebar'
@@ -29,9 +26,18 @@ export function TopBar({ user }: TopBarProps) {
   useEffect(() => {
     try {
       const v = window.localStorage.getItem('sessionExpired')
-      if (v === '1') setSessionExpired(true)
+      if (v === '1') {
+        setSessionExpired(true)
+        // Clear immediately so it doesn't persist across re-login
+        window.localStorage.removeItem('sessionExpired')
+      }
     } catch (_) {}
   }, [])
+
+  function dismissSessionExpired() {
+    setSessionExpired(false)
+    try { window.localStorage.removeItem('sessionExpired') } catch (_) {}
+  }
 
   const { data: botData, isLoading: botLoading } = useBotStatusQuery()
 
@@ -62,12 +68,11 @@ export function TopBar({ user }: TopBarProps) {
 
   async function handleLogout() {
     if (isSigningOut) return
-
     setIsSigningOut(true)
     try {
       await fetch('/api/logout', { method: 'POST' })
     } catch {
-      // Best effort cookie clearing; redirect either way.
+      // Best effort
     } finally {
       window.location.href = '/login'
     }
@@ -117,8 +122,11 @@ export function TopBar({ user }: TopBarProps) {
       {sessionExpired && (
         <div className="w-full bg-red-900/90 text-white px-4 py-2 text-xs flex items-center justify-between">
           <span>Session expired. Please re-login.</span>
-          <div className="flex items-center gap-2">
-            <button onClick={() => { window.location.href = '/login' }} className="underline">Re-login</button>
+          <div className="flex items-center gap-3">
+            <button onClick={() => { window.location.href = '/login' }} className="underline font-medium">Re-login</button>
+            <button onClick={dismissSessionExpired} className="text-white/70 hover:text-white">
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       )}
@@ -132,7 +140,6 @@ export function TopBar({ user }: TopBarProps) {
           <Menu className="w-5 h-5" />
         </button>
 
-        {/* Status pill */}
         {botLoading && !botData && !isStarting ? (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border bg-gray-800 border-gray-700 text-gray-500">
             Loading…

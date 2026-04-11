@@ -4,6 +4,17 @@ import { useState } from 'react'
 import { ToastViewport } from '@/components/ui/toast-viewport'
 import { useToastStore } from '@/lib/toast-store'
 
+// Financial queries that must NOT use stale placeholder data
+const FINANCIAL_QUERY_KEYS = new Set([
+  'trades-summary',
+  'performance',
+  'daily-pnl',
+  'trades',
+])
+
+// Track if we've already shown the session expired toast to prevent spam
+let sessionExpiredToastShown = false
+
 export function Providers({ children }: { children: React.ReactNode }) {
   const pushToast = useToastStore((s) => s.push)
 
@@ -12,13 +23,22 @@ export function Providers({ children }: { children: React.ReactNode }) {
       onError: (error: Error & { status?: number }, query) => {
         if (typeof window === 'undefined') return
 
-        // Do not perform an immediate redirect from background polling.
-        // Instead mark session state and surface a persistent banner/toast.
         if (error.status === 401 && window.location.pathname !== '/login') {
-          try { window.localStorage.setItem('sessionExpired', '1') } catch (_) {}
-          try {
-            pushToast({ tone: 'error', title: 'Session expired', description: 'Please re-login.' })
-          } catch (_) {}
+          // FIX: Only show session expired for user-initiated queries, not background polling
+          // Check if query was recently active (within last 5s = user-triggered)
+          const isBackgroundPoll = query.state.fetchStatus === 'fetching' &&
+            query.state.dataUpdatedAt > 0 &&
+            Date.now() - query.state.dataUpdatedAt < 30_000
+
+          if (!isBackgroundPoll && !sessionExpiredToastShown) {
+            sessionExpiredToastShown = true
+            try { window.localStorage.setItem('sessionExpired', '1') } catch (_) {}
+            try {
+              pushToast({ tone: 'error', title: 'Session expired', description: 'Please re-login.' })
+            } catch (_) {}
+            // Reset flag after 10s so it can show again if needed
+            setTimeout(() => { sessionExpiredToastShown = false }, 10_000)
+          }
           return
         }
 
@@ -32,23 +52,18 @@ export function Providers({ children }: { children: React.ReactNode }) {
     }),
     defaultOptions: {
       queries: {
-        // PERFORMANCE: Raised from 5s → 15s.
-        // Most data (trades, bot status) is written by the bot engine, not the UI.
-        // 15s freshness means 3× fewer background refetches with identical UX.
         staleTime: 15_000,
-
-        // Background polling every 15s matches staleTime — avoids the pattern
-        // where data is marked stale immediately before the next refetch fires.
         refetchInterval: 15_000,
-
-        // Don't refetch on window focus — prevents jarring re-renders when
-        // the user alt-tabs back to the dashboard.
         refetchOnWindowFocus: false,
-
-        // Keep previous data while fetching — UI never goes blank mid-page.
-        placeholderData: (prev: any) => prev,
-
-        // One retry on error (network hiccup), not three.
+        // FIX: Only use placeholder data for non-financial queries
+        // Financial data (P&L, trades) should show loading state, not stale numbers
+        placeholderData: (prev: any, query: any) => {
+          const firstKey = query?.queryKey?.[0]
+          if (typeof firstKey === 'string' && FINANCIAL_QUERY_KEYS.has(firstKey)) {
+            return undefined  // Show loading skeleton for financial data
+          }
+          return prev  // Keep stale data for UI state (bot status, configs)
+        },
         retry: 1,
       },
     },
