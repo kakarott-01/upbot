@@ -6,9 +6,11 @@ import {
   BarChart3, Layers, ArrowUpRight,
 } from 'lucide-react'
 import dynamic from 'next/dynamic'
+import { POLL_INTERVALS } from '@/lib/polling-config'
 const PnlChart = dynamic(() => import('@/components/charts/pnl-chart').then(m => m.PnlChart), { ssr: false, loading: () => <div className="h-40 flex items-center justify-center text-sm text-gray-600">Loading chart…</div> })
-import { Trade, TradeTable} from '@/components/dashboard/trade-table'
-import { BotControls } from '@/components/dashboard/bot-controls'
+const TradeTable = dynamic(() => import('@/components/dashboard/trade-table').then(m => m.TradeTable))
+import type { Trade } from '@/components/dashboard/trade-table'
+const BotControls = dynamic(() => import('@/components/dashboard/bot-controls').then(m => m.BotControls))
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 import { formatCurrency } from '@/lib/utils'
 import { apiFetch } from '@/lib/api-client'
@@ -147,7 +149,8 @@ export default function DashboardPage() {
   const { data: strategyConfigData } = useQuery({
     queryKey: QUERY_KEYS.STRATEGY_CONFIGS,
     queryFn:  () => apiFetch<StrategyConfigListResponse>('/api/strategy-config'),
-    staleTime: 30_000,
+    select: (d) => d,
+    staleTime: POLL_INTERVALS.STRATEGY,
   })
 
   const summary        = summaryData ?? { totalPnl: 0, totalFees: 0, winRate: 0, total: 0, closed: 0 }
@@ -255,7 +258,7 @@ export default function DashboardPage() {
 
         {/* Bot Controls — 1/3 width */}
         <div className="xl:col-span-1 flex flex-col">
-          <BotControls botData={botData} />
+          <BotControls />
         </div>
       </div>
 

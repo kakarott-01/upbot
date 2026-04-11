@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { QUERY_KEYS } from '@/lib/query-keys'
 import { apiFetch } from '@/lib/api-client'
 import { useCallback } from 'react'
+import { POLL_INTERVALS } from '@/lib/polling-config'
 
 export type Trade = {
   id:           string
@@ -57,7 +58,7 @@ export default function useTrades({ market = 'all', status = 'all', mode = 'all'
   const { data, isLoading, refetch } = useQuery<TradesResponse>({
     queryKey: QUERY_KEYS.TRADES({ market, status, mode, page }),
     queryFn:  () => apiFetch<TradesResponse>(`/api/trades?${buildParams(page)}`),
-    staleTime: 15_000,
+    staleTime: POLL_INTERVALS.BOT_IDLE,
     placeholderData: (prev: any) => prev,
   })
 
@@ -65,7 +66,7 @@ export default function useTrades({ market = 'all', status = 'all', mode = 'all'
     qc.prefetchQuery({
       queryKey: QUERY_KEYS.TRADES({ market, status, mode, page: p }),
       queryFn:  () => apiFetch<TradesResponse>(`/api/trades?${buildParams(p)}`),
-      staleTime: 30_000,
+      staleTime: POLL_INTERVALS.STRATEGY,
     })
   }, [qc, market, status, mode, buildParams])
 

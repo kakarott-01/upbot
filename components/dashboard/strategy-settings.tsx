@@ -22,6 +22,7 @@ import { InfoTip } from "@/components/ui/tooltip";
 import { useToastStore } from "@/lib/toast-store";
 import { isBotLocked } from "@/lib/bot-lock";
 import { useBotStatusQuery } from '@/lib/use-bot-status-query';
+import { POLL_INTERVALS } from "@/lib/polling-config";
 import { apiFetch } from '@/lib/api-client';
 
 const MARKETS = [
@@ -263,7 +264,8 @@ export function StrategySettings() {
   const { data: configData, isLoading: configsLoading } = useQuery<StrategyConfigDataResponse>({
     queryKey: QUERY_KEYS.STRATEGY_CONFIGS,
     queryFn: () => apiFetch<StrategyConfigDataResponse>('/api/strategy-config'),
-    staleTime: 30_000, // Match bot-controls.tsx — consistent cache behavior across subscribers
+    select: (data) => data,
+    staleTime: POLL_INTERVALS.STRATEGY, // Match bot-controls.tsx — consistent cache behavior across subscribers
   });
 
   const { data: riskData } = useQuery<RiskSettingsResponse>({

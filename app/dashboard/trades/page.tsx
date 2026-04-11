@@ -1,9 +1,10 @@
- 'use client'
+"use client"
 import { useState, useCallback } from 'react'
 import useTrades from '@/lib/hooks/use-trades'
 import { QUERY_KEYS } from '@/lib/query-keys'
 import { apiFetch } from '@/lib/api-client'
-import { ConfirmModal } from '@/components/modals/confirm-modal'
+import dynamic from 'next/dynamic'
+const ConfirmModal = dynamic(() => import('@/components/modals/confirm-modal').then(m => m.ConfirmModal), { ssr: false })
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { BOT_STATUS_QUERY_KEY, isValidBotSnapshot } from '@/lib/bot-status-client'
 import {

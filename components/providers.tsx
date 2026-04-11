@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { ToastViewport } from '@/components/ui/toast-viewport'
 import { useToastStore } from '@/lib/toast-store'
 import { QUERY_KEYS } from '@/lib/query-keys'
+import { POLL_INTERVALS } from '@/lib/polling-config'
 
 // Financial queries that must NOT use stale placeholder data
 const FINANCIAL_QUERY_KEYS = new Set([
@@ -54,8 +55,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
     }),
     defaultOptions: {
       queries: {
-        staleTime: 15_000,
-        refetchInterval: 15_000,
+        staleTime: POLL_INTERVALS.BOT_IDLE,
+        refetchInterval: POLL_INTERVALS.BOT_IDLE,
         refetchOnWindowFocus: false,
         // FIX: Only use placeholder data for non-financial queries
         // Financial data (P&L, trades) should show loading state, not stale numbers

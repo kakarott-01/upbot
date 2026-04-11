@@ -1,12 +1,8 @@
 'use client'
 
 import { useQuery, type UseQueryOptions } from '@tanstack/react-query'
-import {
-  BOT_STATUS_POLL_INTERVAL_MS,
-  BOT_STATUS_QUERY_KEY,
-  type BotStatusSnapshot,
-  fetchBotStatus,
-} from '@/lib/bot-status-client'
+import { BOT_STATUS_QUERY_KEY, type BotStatusSnapshot, fetchBotStatus } from '@/lib/bot-status-client'
+import { POLL_INTERVALS } from '@/lib/polling-config'
 
 export function useBotStatusQuery(
   options?: Omit<UseQueryOptions<BotStatusSnapshot>, 'queryKey' | 'queryFn'>,
@@ -20,10 +16,11 @@ export function useBotStatusQuery(
           ? maybeDataOrQuery
           : maybeDataOrQuery?.data ?? maybeDataOrQuery?.state?.data
 
-      if (!data) return BOT_STATUS_POLL_INTERVAL_MS
-      // FIX: 8s when running (was 3s), 15s when stopped (was 10s)
-      // Reduces Neon queries by ~60% with negligible UX impact
-      return data.status === 'running' || data.status === 'stopping' ? 8_000 : 15_000
+      if (!data) return POLL_INTERVALS.BOT_RUNNING
+      // Use unified polling constants
+      return data.status === 'running' || data.status === 'stopping'
+        ? POLL_INTERVALS.BOT_RUNNING
+        : POLL_INTERVALS.BOT_IDLE
     },
     placeholderData: (prev) => prev,
     ...options,
