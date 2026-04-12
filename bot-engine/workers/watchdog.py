@@ -1,6 +1,30 @@
 """
-bot-engine/workers/watchdog.py  — v2
+bot-engine/workers/watchdog.py  — v3
 =======================================
+
+FIXES from v2:
+  1. HEARTBEAT_TIMEOUT_SECONDS raised from 180 → 420.
+     Root cause of the infinite-restart loop: the cycle interval is 180s and
+     the watchdog timeout was also 180s.  The watchdog fired at the exact same
+     moment as the first cycle, before the cycle had a chance to update
+     ctx.last_heartbeat, so every bot was considered dead immediately after
+     its first cycle.  420s = 2.3× the cycle interval — the bot must now miss
+     at least two full cycles before a restart is triggered.
+
+  2. Double grace period for new-context bots (last_heartbeat is None).
+     The existing grace `elapsed < timeout` was still the same 180s that the
+     cycle fires at.  Changed to `elapsed < timeout * _NEW_BOT_GRACE_MULTIPLIER`
+     (2×, so 840s) so a freshly-started bot is never restarted before it has
+     had a chance to complete two cycles.
+
+  3. Preserve original started_at on restart.
+     Previously start_user_bot was called with `started_at=now`, which wrote
+     the restart timestamp into bot_statuses.started_at, making the TopBar
+     show "38s" while Bot History (which reads bot_sessions, written once at
+     user-initiated start) showed the correct duration.
+     Fix: pass `ctx.started_at` — the original start time preserved in the
+     BotContext — so the DB never loses the true session origin.
+
 Watchdog restart counters are tracked in memory per process.
 """
 
@@ -15,10 +39,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-HEARTBEAT_TIMEOUT_SECONDS = 180   # restart bot if no heartbeat for 3 minutes
+# FIX 1: was 180 — equalled the cycle interval, causing a race-condition restart
+# on every first cycle.  420s = 2.3× the 180s crypto cycle.
+HEARTBEAT_TIMEOUT_SECONDS = 420
 WATCHDOG_INTERVAL_SECONDS =  60   # check every 60 seconds
 MAX_RESTARTS              =   3   # give up after this many consecutive restart attempts
 HEALTHY_SUSTAIN_SECONDS   = 300   # require 5 minutes of healthy runtime before reset
+
+# FIX 2: grace multiplier for bots that haven't produced a heartbeat yet.
+# Allows 2 full cycles (2 × 420 = 840s) before considering a new bot dead.
+_NEW_BOT_GRACE_MULTIPLIER = 2
 
 
 class Watchdog:
@@ -33,14 +63,17 @@ class Watchdog:
 
     async def run(self):
         self._running = True
-        logger.info(f"🐕 Watchdog running (checks every {WATCHDOG_INTERVAL_SECONDS}s, max restarts={MAX_RESTARTS})")
+        logger.info(
+            "🐕 Watchdog running (checks every %ds, timeout=%ds, max restarts=%d)",
+            WATCHDOG_INTERVAL_SECONDS, HEARTBEAT_TIMEOUT_SECONDS, MAX_RESTARTS,
+        )
 
         while self._running:
             await asyncio.sleep(WATCHDOG_INTERVAL_SECONDS)
             try:
                 await self._check()
             except Exception as e:
-                logger.error(f"🐕 Watchdog error (non-fatal): {e}", exc_info=True)
+                logger.error("🐕 Watchdog error (non-fatal): %s", e, exc_info=True)
 
     async def _check(self):
         contexts = self._scheduler.get_all_contexts()
@@ -49,20 +82,26 @@ class Watchdog:
 
         now = datetime.utcnow()
         timeout = timedelta(seconds=HEARTBEAT_TIMEOUT_SECONDS)
+        # FIX 2: wider grace window for bots whose first cycle hasn't fired yet
+        grace = timedelta(seconds=HEARTBEAT_TIMEOUT_SECONDS * _NEW_BOT_GRACE_MULTIPLIER)
 
         for user_id, ctx in contexts.items():
             if ctx.last_heartbeat is None:
+                # Bot just started — give it the full grace window before judging
                 elapsed = now - ctx.started_at
-                if elapsed < timeout:
+                if elapsed < grace:
                     continue
+                # Grace expired with no heartbeat at all → treat as dead
             elif (now - ctx.last_heartbeat) < timeout:
+                # Active heartbeat within the timeout window
                 healthy_for = (now - ctx.started_at).total_seconds()
                 if healthy_for >= HEALTHY_SUSTAIN_SECONDS:
                     self._restart_counts[user_id] = 0
                 logger.debug(
-                    f"🐕 {user_id[:8]}… heartbeat OK "
-                    f"({int((now - ctx.last_heartbeat).total_seconds())}s ago, "
-                    f"healthy_for={int(healthy_for)}s)"
+                    "🐕 %s… heartbeat OK (%ds ago, healthy_for=%ds)",
+                    user_id[:8],
+                    int((now - ctx.last_heartbeat).total_seconds()),
+                    int(healthy_for),
                 )
                 continue
 
@@ -70,9 +109,9 @@ class Watchdog:
 
             if current_count >= MAX_RESTARTS:
                 logger.error(
-                    f"🐕 GIVING UP on user={user_id[:8]}… "
-                    f"after {current_count} consecutive restart attempts. "
-                    "Marking bot as error — manual intervention required."
+                    "🐕 GIVING UP on user=%s… after %d consecutive restart attempts. "
+                    "Marking bot as error — manual intervention required.",
+                    user_id[:8], current_count,
                 )
                 try:
                     await self._db.update_bot_status(
@@ -84,15 +123,16 @@ class Watchdog:
                     )
                     await self._scheduler.stop_user_bot(user_id)
                 except Exception as e:
-                    logger.error(f"🐕 Failed to mark error state for {user_id[:8]}…: {e}")
+                    logger.error("🐕 Failed to mark error state for %s…: %s", user_id[:8], e)
                 self._restart_counts[user_id] = 0
                 continue
 
             since = ctx.last_heartbeat or ctx.started_at
             logger.warning(
-                f"🐕 DEAD BOT DETECTED user={user_id[:8]}… "
-                f"last heartbeat {int((now - since).total_seconds())}s ago — "
-                f"restarting (attempt {current_count + 1}/{MAX_RESTARTS})"
+                "🐕 DEAD BOT DETECTED user=%s… last heartbeat %ds ago — "
+                "restarting (attempt %d/%d)",
+                user_id[:8], int((now - since).total_seconds()),
+                current_count + 1, MAX_RESTARTS,
             )
 
             new_count = current_count + 1
@@ -100,26 +140,29 @@ class Watchdog:
 
             try:
                 markets = ctx.markets
+                # FIX 3: preserve the ORIGINAL started_at so bot_statuses.started_at
+                # is never overwritten with the watchdog-restart timestamp.
+                # The TopBar reads started_at from bot_statuses; overwriting it caused
+                # the display to reset to "0s" / "38s" on every watchdog restart.
+                original_started_at = ctx.started_at
+
                 await self._scheduler.stop_user_bot(user_id)
                 await asyncio.sleep(2)
-                # Use the current time as the restarted bot's `started_at`
-                # so the watchdog doesn't immediately treat an old
-                # `started_at` (from previous runs) as a missing heartbeat
-                # and trigger another restart loop.
                 await self._scheduler.start_user_bot(
                     user_id,
                     markets,
-                    started_at=now,
+                    started_at=original_started_at,   # FIX 3
                 )
                 logger.info(
-                    f"🐕 Bot restarted for user={user_id[:8]}… markets={markets} "
-                    f"(attempt {new_count}/{MAX_RESTARTS})"
+                    "🐕 Bot restarted for user=%s… markets=%s (attempt %d/%d, original_started_at=%s)",
+                    user_id[:8], markets, new_count, MAX_RESTARTS,
+                    original_started_at.isoformat(),
                 )
                 self._restart_counts[user_id] = 0
             except Exception as e:
                 logger.error(
-                    f"🐕 Restart attempt {new_count} failed for user={user_id[:8]}…: {e}",
-                    exc_info=True,
+                    "🐕 Restart attempt %d failed for user=%s…: %s",
+                    new_count, user_id[:8], e, exc_info=True,
                 )
                 await self._db.update_bot_status(
                     user_id, "error", ctx.markets,

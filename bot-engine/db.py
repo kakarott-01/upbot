@@ -1552,16 +1552,40 @@ class Database:
         self, user_id: str, status: str, markets: List[str],
         error: Optional[str] = None, started_at: Optional[datetime] = None,
     ):
+        """
+        FIX: `started_at` is now preserved when the bot is already running.
+ 
+        Previous ON CONFLICT:
+            started_at = COALESCE(EXCLUDED.started_at, bot_statuses.started_at)
+        This unconditionally overwrote the stored value whenever a non-NULL
+        started_at was supplied — including every watchdog restart.  The TopBar
+        reads started_at from bot_statuses, so it reset to "0s / 38s" on each
+        watchdog restart while Bot History (reads bot_sessions, written once at
+        user-initiated start) showed the correct duration.
+ 
+        Fix: only update started_at when transitioning FROM a stopped/error state.
+        Watchdog restarts (status was already 'running') leave the original time.
+        """
+        
         pool = await self.pool()
         now  = datetime.utcnow()
         await pool.execute(
-            """INSERT INTO bot_statuses
+            """
+            INSERT INTO bot_statuses
                (user_id, status, active_markets, started_at, last_heartbeat, error_message, updated_at)
-               VALUES ($1,$2,$3,$4,$5,$6,$7)
-               ON CONFLICT (user_id) DO UPDATE SET
-                 status=$2, active_markets=$3,
-                 started_at=COALESCE(EXCLUDED.started_at, bot_statuses.started_at),
-                 last_heartbeat=$5, error_message=$6, updated_at=$7""",
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (user_id) DO UPDATE SET
+                 status         = EXCLUDED.status,
+                 active_markets = EXCLUDED.active_markets,
+                 started_at     = CASE
+                                    WHEN bot_statuses.status IN ('stopped', 'error', 'stopping')
+                                      THEN COALESCE(EXCLUDED.started_at, NOW())
+                                    ELSE bot_statuses.started_at
+                                  END,
+                 last_heartbeat = EXCLUDED.last_heartbeat,
+                 error_message  = EXCLUDED.error_message,
+                 updated_at     = EXCLUDED.updated_at
+            """,
             user_id, status, json.dumps(markets),
             started_at or (now if status == "running" else None),
             now, error, now,
