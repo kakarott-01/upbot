@@ -243,7 +243,9 @@ export default function TradesPage() {
       showToast('Failed to delete', 'error')
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.TRADES() })
+      // Only refresh the current trades page + summary to avoid refetching all cached pages
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.TRADES({ market, status, mode, page }) })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.TRADES_SUMMARY })
       qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
     },
   })
@@ -273,7 +275,9 @@ export default function TradesPage() {
       showToast('Bulk delete failed', 'error'); setConfirm(null)
     },
     onSettled: (_data, _err, _vars, _context) => {
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.TRADES() })
+      // Targeted invalidation: current filters/page and the summary only
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.TRADES({ market, status, mode, page }) })
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.TRADES_SUMMARY })
       qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
       setSelected(new Set()); setConfirm(null)
     },
@@ -281,12 +285,13 @@ export default function TradesPage() {
 
   // ── Selection ──────────────────────────────────────────────────────────────
   const allSelected  = trades.length > 0 && selected.size === trades.length
-  function toggleAll() {
-    setSelected(allSelected ? new Set() : new Set(trades.map(t => t.id)))
-  }
-  function toggleOne(id: string) {
+  const toggleAll = useCallback(() => {
+    setSelected(prev => (prev.size === trades.length ? new Set() : new Set(trades.map(t => t.id))))
+  }, [trades])
+
+  const toggleOne = useCallback((id: string) => {
     setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
-  }
+  }, [])
 
   function handleConfirmedDelete() {
     if (!confirm) return
@@ -305,6 +310,8 @@ export default function TradesPage() {
         active ? 'bg-brand-500/15 border-brand-500/30 text-brand-500' : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
       }`}>{label ?? value}</button>
   )
+
+  const deleteTrade = useCallback((id: string) => deleteSingle.mutate(id), [deleteSingle])
 
   return (
     <div className="space-y-4 max-w-6xl mx-auto">
@@ -476,8 +483,8 @@ export default function TradesPage() {
                     trade={trade}
                     showCheckbox={true}
                     isChecked={isChecked}
-                    onToggle={() => toggleOne(trade.id)}
-                    onDelete={() => deleteSingle.mutate(trade.id)}
+                    onToggle={toggleOne}
+                    onDelete={deleteTrade}
                     isBusy={isBusy}
                     showMode={true}
                   />

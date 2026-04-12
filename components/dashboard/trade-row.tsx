@@ -10,8 +10,8 @@ interface Props {
   trade: Trade
   showCheckbox?: boolean
   isChecked?: boolean
-  onToggle?: () => void
-  onDelete?: () => void
+  onToggle?: (id: string) => void
+  onDelete?: (id: string) => void
   isBusy?: boolean
   showMode?: boolean
 }
@@ -26,7 +26,7 @@ function TradeRow({ trade, showCheckbox = false, isChecked = false, onToggle, on
     <tr className={`hover:bg-gray-800/30 transition-colors group ${showCheckbox && isChecked ? 'bg-brand-500/5' : ''}`}>
       {showCheckbox ? (
         <td className="py-2.5 pl-4 w-10">
-          <button onClick={onToggle} className="text-gray-600 hover:text-brand-500 transition-colors">
+          <button onClick={() => onToggle?.(trade.id)} className="text-gray-600 hover:text-brand-500 transition-colors">
             {isChecked ? <CheckSquare className="w-4 h-4 text-brand-500" /> : <Square className="w-4 h-4" />}
           </button>
         </td>
@@ -94,7 +94,7 @@ function TradeRow({ trade, showCheckbox = false, isChecked = false, onToggle, on
 
       {onDelete ? (
         <td className="py-2.5 px-2 pr-4">
-          <button onClick={onDelete} disabled={isBusy}
+          <button onClick={() => onDelete?.(trade.id)} disabled={isBusy}
             className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-900/20 disabled:opacity-40">
             <Trash2 className="w-3.5 h-3.5" />
           </button>

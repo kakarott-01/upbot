@@ -53,10 +53,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
         }
       },
     }),
-    defaultOptions: {
+      defaultOptions: {
       queries: {
         staleTime: POLL_INTERVALS.BOT_IDLE,
-        refetchInterval: POLL_INTERVALS.BOT_IDLE,
+        // Disable global polling by default — enable polling per-query where needed
+        refetchInterval: false,
         refetchOnWindowFocus: false,
         // FIX: Only use placeholder data for non-financial queries
         // Financial data (P&L, trades) should show loading state, not stale numbers

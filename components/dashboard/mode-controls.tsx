@@ -143,6 +143,8 @@ export function ModeControls() {
     queryKey:        QUERY_KEYS.MARKET_MODES,
     queryFn:         () => apiFetch('/api/mode'),
     refetchInterval: 10_000,
+    // Reduce broad re-renders for market modes updates
+    notifyOnChangeProps: ('tracked' as unknown as any),
   })
 
   const switchMut = useMutation({

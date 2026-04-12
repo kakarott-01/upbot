@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BOT_STATUS_QUERY_KEY,
@@ -285,35 +285,35 @@ export function StrategySettings() {
   const totalCapital = Number(riskData?.paperBalance ?? 10000);
   const strategiesByMarket: Record<string, StrategyItem[]> = strategyData?.strategiesByMarket ?? {};
 
-  function updateMarket(
-    marketType: MarketId,
-    updater: (current: RuntimeConfig) => RuntimeConfig,
-  ) {
-    // mark this market as dirty so local edits aren't clobbered by refetches
-    setDirtyMarkets((prev) => {
-      const copy = new Set(prev)
-      copy.add(marketType)
-      return copy
-    })
-    setConfigs((previous) => {
-      const current = previous[marketType] ?? {
-        executionMode: "SAFE",
-        positionMode: "NET",
-        allowHedgeOpposition: false,
-        conflictBlocking: false,
-        maxPositionsPerSymbol: 2,
-        maxCapitalPerStrategyPct: 25,
-        maxDrawdownPct: 12,
-        strategyKeys: [],
-        strategySettings: {},
-        conflictWarnings: [],
-        exchangeCapabilities: null,
-      };
-      return { ...previous, [marketType]: updater(current) };
-    });
-  }
+  const updateMarket = useCallback(
+    (marketType: MarketId, updater: (current: RuntimeConfig) => RuntimeConfig) => {
+      // mark this market as dirty so local edits aren't clobbered by refetches
+      setDirtyMarkets((prev) => {
+        const copy = new Set(prev)
+        copy.add(marketType)
+        return copy
+      })
+      setConfigs((previous) => {
+        const current = previous[marketType] ?? {
+          executionMode: "SAFE",
+          positionMode: "NET",
+          allowHedgeOpposition: false,
+          conflictBlocking: false,
+          maxPositionsPerSymbol: 2,
+          maxCapitalPerStrategyPct: 25,
+          maxDrawdownPct: 12,
+          strategyKeys: [],
+          strategySettings: {},
+          conflictWarnings: [],
+          exchangeCapabilities: null,
+        };
+        return { ...previous, [marketType]: updater(current) };
+      });
+    },
+    [],
+  )
 
-  function toggleStrategy(marketType: MarketId, strategyKey: string) {
+  const toggleStrategy = useCallback((marketType: MarketId, strategyKey: string) => {
     updateMarket(marketType, (current) => {
       const exists = current.strategyKeys.includes(strategyKey);
       const nextKeys = exists
@@ -331,18 +331,18 @@ export function StrategySettings() {
         strategySettings: nextSettings,
       };
     });
-  }
+  }, [updateMarket])
 
-  function handleSave(marketType: MarketId, config: RuntimeConfig) {
+  const handleSave = useCallback((marketType: MarketId, config: RuntimeConfig) => {
     if (config.executionMode === "AGGRESSIVE") {
       setPendingAggressiveSave({ marketType, config });
       return;
     }
     saveMutation.mutate({ marketType, config, aggressiveConfirmed: false });
-  }
+  }, [saveMutation])
 
   // ── Toggle expand/collapse for a market section ───────────────────────────
-  function toggleMarket(marketId: string) {
+  const toggleMarket = useCallback((marketId: string) => {
     setExpandedMarkets((prev) => {
       const next = new Set(prev);
       if (next.has(marketId)) {
@@ -352,7 +352,7 @@ export function StrategySettings() {
       }
       return next;
     });
-  }
+  }, [])
 
   if (strategiesLoading || configsLoading) {
     return (
@@ -793,9 +793,10 @@ export function StrategySettings() {
                             <StrategyCard
                               key={strategy.strategyKey}
                               strategy={strategy}
+                              marketId={market.id}
                               selected={selected}
                               disabled={isBotActiveHere || (!selected && config.strategyKeys.length >= 2)}
-                              onToggle={() => toggleStrategy(market.id, strategy.strategyKey)}
+                              onToggle={toggleStrategy}
                             />
                           )
                         })}

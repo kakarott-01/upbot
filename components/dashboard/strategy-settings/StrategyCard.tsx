@@ -2,20 +2,23 @@
 import React from 'react'
 import { StatusBadge } from '@/components/ui/status-badge'
 
+type MarketId = 'crypto' | 'indian' | 'global' | 'commodities'
+
 type Props = {
   strategy: any
   selected: boolean
   disabled?: boolean
-  onToggle?: () => void
+  marketId?: MarketId
+  onToggle?: (marketId: MarketId, strategyKey: string) => void
 }
 
-function StrategyCard({ strategy, selected, disabled = false, onToggle }: Props) {
+function StrategyCard({ strategy, selected, disabled = false, marketId, onToggle }: Props) {
   return (
     <button
       key={strategy.strategyKey}
       type="button"
       disabled={disabled}
-      onClick={onToggle}
+      onClick={() => marketId && onToggle?.(marketId, strategy.strategyKey)}
       className={`rounded-2xl border p-4 text-left transition ${selected ? 'border-brand-500/50 bg-brand-500/10' : 'border-gray-800 bg-gray-950/60 hover:border-gray-700'} disabled:cursor-not-allowed disabled:opacity-50`}
     >
       <div className="flex items-start justify-between gap-2">

@@ -17,14 +17,14 @@ type Props = {
   openTrades?: number
   isThisMarketMutating?: boolean
   disabled?: boolean
-  onClick?: () => void
+  onClick?: (id: string) => void
 }
 
 function MarketRow({ market, session, isActive, config, warnings = [], isLive = false, openTrades = 0, isThisMarketMutating = false, disabled = false, onClick }: Props) {
   return (
     <MarketButton
       disabled={disabled}
-      onClick={onClick}
+      onClick={() => onClick?.(market.id)}
       className={cn(
         'flex w-full items-center justify-between rounded-2xl border px-4 py-3 text-left transition group',
         isActive

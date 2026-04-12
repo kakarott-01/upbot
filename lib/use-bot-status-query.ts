@@ -5,11 +5,13 @@ import { BOT_STATUS_QUERY_KEY, type BotStatusSnapshot, fetchBotStatus } from '@/
 import { POLL_INTERVALS } from '@/lib/polling-config'
 
 export function useBotStatusQuery(
-  options?: Omit<UseQueryOptions<BotStatusSnapshot>, 'queryKey' | 'queryFn'>,
+  options?: Omit<UseQueryOptions<BotStatusSnapshot, unknown, BotStatusSnapshot>, 'queryKey' | 'queryFn'>,
 ) {
-  return useQuery<BotStatusSnapshot>({
+  return useQuery<BotStatusSnapshot, unknown, BotStatusSnapshot>({
     queryKey: BOT_STATUS_QUERY_KEY,
     queryFn: fetchBotStatus,
+    // Reduce broad re-renders across subscribers by tracking changed props only
+    notifyOnChangeProps: ('tracked' as unknown as any),
     refetchInterval: (maybeDataOrQuery: any) => {
       const data: BotStatusSnapshot | undefined =
         maybeDataOrQuery && typeof maybeDataOrQuery.status === 'string'

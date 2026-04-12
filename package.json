@@ -59,6 +59,7 @@
   },
   "devDependencies": {
     "eslint": "^9.39.4",
-    "eslint-config-next": "^16.2.3"
+    "eslint-config-next": "^16.2.3",
+    "puppeteer": "^24.40.0"
   }
 }

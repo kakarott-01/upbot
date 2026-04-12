@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, useCallback } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 import { QUERY_KEYS } from '@/lib/query-keys'
@@ -93,6 +93,7 @@ export function BotControls() {
     queryKey: QUERY_KEYS.MARKET_MODES,
     queryFn:  () => apiFetch<ModeDataResponse>('/api/mode'),
     staleTime: POLL_INTERVALS.MARKET_MODES,
+    notifyOnChangeProps: ('tracked' as unknown as any),
   })
 
   const { data: strategyConfigData } = useQuery({
@@ -100,6 +101,7 @@ export function BotControls() {
     queryFn:  () => apiFetch<StrategyConfigDataResponse>('/api/strategy-config'),
     select: (d) => d,
     staleTime: POLL_INTERVALS.STRATEGY,
+    notifyOnChangeProps: ('tracked' as unknown as any),
   })
 
   const status:         string    = data?.status        ?? 'stopped'
@@ -281,17 +283,17 @@ export function BotControls() {
 
   // ── Click handler ────────────────────────────────────────────────────────────
 
-  function handleMarketClick(marketId: MarketId) {
+  const handleMarketClick = useCallback((marketId: string) => {
     if (isFiringRef.current || syncMutation.isPending || stopAllMutation.isPending || stopMarketMutation.isPending || isStopping) return
 
     const isActive = activeMarkets.includes(marketId)
 
     if (isActive) {
-      modalsRef.current?.openStopModal?.(marketId)
+      modalsRef.current?.openStopModal?.(marketId as MarketId)
     } else {
-      modalsRef.current?.openStartModal?.(marketId)
+      modalsRef.current?.openStartModal?.(marketId as MarketId)
     }
-  }
+  }, [syncMutation.isPending, stopAllMutation.isPending, stopMarketMutation.isPending, isStopping, activeMarkets])
 
   function confirmStart(marketId: MarketId) {
     const actionId = `start-market:${marketId}`
@@ -380,7 +382,7 @@ export function BotControls() {
                 openTrades={openTrades}
                 isThisMarketMutating={isThisMarketMutating}
                 disabled={disabled}
-                onClick={() => handleMarketClick(market.id)}
+                onClick={handleMarketClick}
               />
             )
           })}

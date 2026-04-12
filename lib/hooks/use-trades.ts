@@ -64,6 +64,8 @@ export default function useTrades({ market = 'all', status = 'all', mode = 'all'
     queryKey: QUERY_KEYS.TRADES({ market, status, mode, page }),
     queryFn:  () => apiFetch<TradesResponse>(`/api/trades?${buildParams(page)}`),
     staleTime: POLL_INTERVALS.BOT_IDLE,
+    // Limit re-renders while paginated data updates or optimistic edits occur
+    notifyOnChangeProps: ('tracked' as unknown as any),
     placeholderData: (prev: any) => prev,
   })
 
@@ -71,7 +73,7 @@ export default function useTrades({ market = 'all', status = 'all', mode = 'all'
     qc.prefetchQuery({
       queryKey: QUERY_KEYS.TRADES({ market, status, mode, page: p }),
       queryFn:  () => apiFetch<TradesResponse>(`/api/trades?${buildParams(p)}`),
-      staleTime: POLL_INTERVALS.STRATEGY,
+      staleTime: POLL_INTERVALS.BOT_IDLE,
     })
   }, [qc, market, status, mode, buildParams])
 
