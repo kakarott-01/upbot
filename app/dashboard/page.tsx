@@ -132,11 +132,12 @@ export default function DashboardPage() {
     refetchInterval: 15_000,
   })
 
-  const { data: perfData } = useQuery({
-    queryKey: QUERY_KEYS.PERFORMANCE_CHART,
+  const { data: perfChart } = useQuery<PerformanceResponse, unknown, Array<{ date: string; pnl: number }>>({
+    queryKey: QUERY_KEYS.PERFORMANCE(),
     queryFn:  () => apiFetch<PerformanceResponse>('/api/performance'),
     staleTime: 60_000,
     refetchInterval: 60_000,
+    select: (d) => d.cumPnl ?? [],
   })
 
   const { data: tradesData } = useQuery({
@@ -155,7 +156,7 @@ export default function DashboardPage() {
 
   const summary        = summaryData ?? { totalPnl: 0, totalFees: 0, winRate: 0, total: 0, closed: 0 }
   const recentTrades   = tradesData?.trades?.slice(0, 10) ?? []
-  const cumPnlData     = perfData?.cumPnl ?? []
+  const cumPnlData     = perfChart ?? []
 
   const botStatus        = botData?.status ?? 'stopped'
   const botActiveMarkets = botData?.activeMarkets ?? []

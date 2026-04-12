@@ -125,9 +125,14 @@ export default function PerformancePage() {
   if (mode !== 'all') params.set('mode', mode)
   if (market !== 'all') params.set('market', market)
 
+  const hasFilters = mode !== 'all' || market !== 'all'
+  const filters = hasFilters ? { mode, market } : undefined
+  const qs = params.toString()
+  const perfPath = qs ? `/api/performance?${qs}` : '/api/performance'
+
   const { data, isLoading } = useQuery<PerformanceResponse & { principle?: number; currentBalance?: number; totalFees?: number; totalTrades?: number }>( {
-    queryKey: QUERY_KEYS.PERFORMANCE({ mode, market }),
-    queryFn: () => apiFetch<PerformanceResponse>(`/api/performance?${params}`),
+    queryKey: QUERY_KEYS.PERFORMANCE(filters),
+    queryFn: () => apiFetch<PerformanceResponse>(perfPath),
     staleTime: 30_000,
   })
 
