@@ -255,11 +255,20 @@ class CryptoAlgo(BaseAlgo):
             )
             return None
 
-        # ── 8. Leverage mapping ────────────────────────────────────────────────
+        # ── 8. Leverage mapping ────────────────────────────────────────────────────
+        # leverage_from_score returns None when confidence < 40, meaning
+        # "skip this trade entirely". We honour that and return None rather
+        # than substituting 1× — leverage=1 makes actual_notional == risk_amount
+        # which triggers the guard in _build_level_plan and crashes the cycle.
         leverage = leverage_from_score(confidence)
         if leverage is None:
-            # Below absolute minimum confidence → use 1× (paper mode is safe)
-            leverage = 1
+            logger.debug(
+                "⛔ %s: confidence=%.1f too low for any leverage tier — skipping",
+                symbol, confidence,
+            )
+            if hasattr(self, "_discard_staged_open"):
+                self._discard_staged_open(symbol)
+            return None
 
         leverage = _crypto_leverage_only(self.market_type, leverage)
 

@@ -345,7 +345,7 @@ class BaseAlgo(ABC):
         if actual_notional <= 0:
             raise ValueError("Actual notional must be positive")
         fee_rate = float(self.config.get("fee_rate", 0.001) if fee_rate is None else fee_rate)
-        if self.market_type == "crypto" or leverage > 1:
+        if leverage > 1:
             if actual_notional <= risk_amount:
                 raise ValueError("Rounded quantity produced notional too small for a defined stop-loss")
             max_distance = risk_amount / actual_notional
