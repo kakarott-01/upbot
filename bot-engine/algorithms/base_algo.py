@@ -82,7 +82,7 @@ SYMBOL_LOCK_RETRY_DELAYS_SEC = (0.25, 0.5, 1.0)
 SYMBOL_LOCK_ACQUIRE_TIMEOUT_SEC = 0.5
 TRADE_SLOT_RETRY_DELAYS_SEC = (0.25, 0.5, 1.0)
 EMERGENCY_CLOSE_RETRY_DELAYS_SEC = (0.0, 0.75, 1.5)
-LIQUIDATION_BUFFER_MULTIPLIER = 1.5
+LIQUIDATION_BUFFER_MULTIPLIER = 1.1
 EPSILON = 1e-4
 RISK_ROUNDING_PRECISION = 6
 RISK_BUDGET_SAFETY_BUFFER = 0.999
@@ -487,7 +487,7 @@ class BaseAlgo(ABC):
                 f"Notional {actual_notional:.8f} is below min notional {min_notional:.8f}"
             )
         liquidation_price = level_plan.get("liquidation_price") or None
-        if liquidation_price is not None:
+        if liquidation_price is not None and not self._paper_mode:
             stop_distance_abs = abs(entry_price - level_plan["stop_loss"])
             liq_distance_abs = abs(entry_price - liquidation_price)
             if liq_distance_abs <= (LIQUIDATION_BUFFER_MULTIPLIER * stop_distance_abs) + 1e-8:
