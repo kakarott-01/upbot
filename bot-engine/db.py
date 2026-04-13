@@ -938,44 +938,58 @@ class Database:
             )
 
     async def spool_live_trade(self, payload: Dict[str, Any]):
-        self._ensure_spool_parent()
-        line = json.dumps(payload, separators=(",", ":"))
-        with self._spool_path.open("a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-        logger.critical(
-            f"💾 Live trade spooled locally for recovery: "
-            f"{payload.get('symbol')} order={payload.get('order_id')}"
-        )
+        """
+        F9/C-2 FIX: Replaced /tmp file spool with DB table.
+        /tmp is ephemeral on Render — wiped on every deploy/restart.
+        A DB row survives restarts and can be replayed on next startup.
+        """
+        pool = await self.pool()
+        try:
+            await pool.execute(
+                """INSERT INTO trade_spool
+                (user_id, payload, retry_count, created_at)
+                VALUES ($1, $2::jsonb, 0, NOW())""",
+                payload["user_id"], json.dumps(payload),
+            )
+            logger.critical(
+                "💾 Live trade spooled to DB for recovery: "
+                "%s order=%s", payload.get("symbol"), payload.get("order_id")
+            )
+        except Exception as e:
+            # DB is also down — last resort: try /tmp as fallback, log loudly
+            logger.critical(
+                "💀 BOTH DB AND SPOOL FAILED for %s order=%s: %s. "
+                "MANUAL EXCHANGE ACTION REQUIRED.",
+                payload.get("symbol"), payload.get("order_id"), e
+            )
+            # /tmp fallback for absolute emergencies only
+            self._ensure_spool_parent()
+            line = json.dumps(payload, separators=(",", ":"))
+            with self._spool_path.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
 
-    async def flush_spooled_live_trades(
-        self,
-        user_id: Optional[str] = None,
-        market_type: Optional[str] = None,
-    ) -> Dict[str, int]:
-        if not self._spool_path.exists():
-            return {"restored": 0, "remaining": 0}
-
+    async def flush_spooled_live_trades(self, user_id=None, market_type=None) -> Dict[str, int]:
+        pool = await self.pool()
         restored = 0
-        retained: List[str] = []
+        retained = 0
 
-        with self._spool_path.open("r", encoding="utf-8") as fh:
-            lines = [line.strip() for line in fh.readlines() if line.strip()]
+        try:
+            rows = await pool.fetch(
+                """SELECT id, payload FROM trade_spool
+                WHERE ($1::uuid IS NULL OR user_id = $1)
+                ORDER BY created_at ASC
+                LIMIT 100""",
+                user_id,
+            )
+        except asyncpg.UndefinedTableError:
+            rows = []
 
-        for line in lines:
+        for row in rows:
             try:
-                payload = json.loads(line)
-            except Exception:
-                retained.append(line)
-                continue
-
-            if user_id and payload.get("user_id") != user_id:
-                retained.append(line)
-                continue
-            if market_type and payload.get("market_type") != market_type:
-                retained.append(line)
-                continue
-
-            try:
+                payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
+                if market_type and payload.get("market_type") != market_type:
+                    retained += 1
+                    continue
                 trade_id = await self.save_live_trade(
                     user_id=payload["user_id"],
                     symbol=payload["symbol"],
@@ -987,38 +1001,29 @@ class Database:
                     order_id=payload["order_id"],
                     algo_name=payload["algo_name"],
                     market_type=payload["market_type"],
-                    session_ref=payload.get("session_ref", "") or "",
+                    session_ref=payload.get("session_ref", ""),
                     actual_quantity=float(payload["actual_quantity"]),
                     exchange_name=payload.get("exchange_name", "live"),
                     fee_rate=float(payload.get("fee_rate", 0.001)),
                     strategy_key=payload.get("strategy_key"),
                     position_scope_key=payload.get("position_scope_key"),
                     stop_loss_order_id=payload.get("stop_loss_order_id"),
-                    exposure_reservation_id=payload.get("exposure_reservation_id"),
                 )
                 if trade_id:
+                    await pool.execute("DELETE FROM trade_spool WHERE id = $1", row["id"])
                     restored += 1
-                    logger.info(
-                        f"♻️  Restored spooled live trade {payload['symbol']} "
-                        f"order={payload['order_id']}"
-                    )
                 else:
-                    logger.warning(
-                        f"♻️  Spool replay skipped duplicate open trade for "
-                        f"{payload['symbol']} order={payload['order_id']}"
-                    )
+                    # Duplicate — also delete, no need to retry
+                    await pool.execute("DELETE FROM trade_spool WHERE id = $1", row["id"])
             except Exception as e:
-                payload["retry_count"] = int(payload.get("retry_count", 0)) + 1
-                payload["last_error"] = str(e)[:300]
-                retained.append(json.dumps(payload, separators=(",", ":")))
+                retained += 1
+                await pool.execute(
+                    "UPDATE trade_spool SET retry_count = retry_count + 1 WHERE id = $1",
+                    row["id"],
+                )
+                logger.error("Failed to replay spooled trade %s: %s", row["id"], e)
 
-        self._ensure_spool_parent()
-        with self._spool_path.open("w", encoding="utf-8") as fh:
-            for line in retained:
-                fh.write(line + "\n")
-
-        return {"restored": restored, "remaining": len(retained)}
-
+        return {"restored": restored, "remaining": retained}
     # ── Signal storage ────────────────────────────────────────────────────────
 
     async def save_signal(
