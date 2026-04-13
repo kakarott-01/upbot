@@ -77,6 +77,7 @@ class BotContext:
     job_ids:          List[str]              = field(default_factory=list)
     market_job_ids:   Dict[str, List[str]]   = field(default_factory=dict)
     started_at:       datetime               = field(default_factory=datetime.utcnow)
+    last_restart_at:  datetime               = field(default_factory=datetime.utcnow)  # ADD
     last_heartbeat:   Optional[datetime]     = None
     heartbeat_tick:   int                    = 0
     close_all_task:   Optional[asyncio.Task] = None

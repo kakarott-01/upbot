@@ -87,8 +87,10 @@ class Watchdog:
 
         for user_id, ctx in contexts.items():
             if ctx.last_heartbeat is None:
-                # Bot just started — give it the full grace window before judging
-                elapsed = now - ctx.started_at
+                # Use last_restart_at — the time THIS execution attempt started.
+            # ctx.started_at is the original session time (preserved for TopBar)
+            # and can be hours/days old, which would collapse the grace window.
+                elapsed = now - ctx.last_restart_at          # WAS: ctx.started_at
                 if elapsed < grace:
                     continue
                 # Grace expired with no heartbeat at all → treat as dead
