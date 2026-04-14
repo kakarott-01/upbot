@@ -143,6 +143,8 @@ class BaseAlgo(ABC):
         self._reconciled  = False
         # Indicates whether the startup reconcile completed successfully
         self._reconcile_succeeded = False
+        self._block_new_entries_until_reconcile: bool = False
+        self._reconcile_retry_counter: int = 0
         # Current market symbols known for this algo instance (updated each cycle)
         self._current_markets: list = []
         self._risk_loaded = False
@@ -978,11 +980,31 @@ class BaseAlgo(ABC):
 
         if not self._reconciled:
             await self._reconcile_positions()
-        # If startup reconcile did not succeed for non-paper markets, warn and avoid accepting new trades silently
-        if self.market_type not in ("paper",) and not getattr(self, "_reconcile_succeeded", False):
-            logger.warning(f"[{self.name}] ⚠️  Startup reconcile failed — position state may be stale")
-            # Prevent the cycle from continuing and potentially opening new trades
-            return
+
+        # ── NEW: periodic reconcile retry after initial failure ──────────────
+        RECONCILE_RETRY_CYCLES = 3   # retry every 3 cycles
+        _reconcile_retry_counter = getattr(self, "_reconcile_retry_counter", 0)
+
+        if (not self._paper_mode
+                and not getattr(self, "_reconcile_succeeded", False)):
+            _reconcile_retry_counter += 1
+            self._reconcile_retry_counter = _reconcile_retry_counter
+            if _reconcile_retry_counter >= RECONCILE_RETRY_CYCLES:
+                logger.info(
+                    f"[{self.name}] 🔄 Retrying startup reconcile "
+                    f"(attempt {_reconcile_retry_counter // RECONCILE_RETRY_CYCLES})…"
+                )
+                self._reconciled = False
+                self._reconcile_succeeded = False
+                self._reconcile_retry_counter = 0
+                await self._reconcile_positions()
+            self._block_new_entries_until_reconcile = not getattr(
+                self, "_reconcile_succeeded", False
+            )
+        else:
+            self._block_new_entries_until_reconcile = False
+            self._reconcile_retry_counter = 0
+        # ──────────────────────────────────────────────────────────────────────
         if not self._risk_loaded:
             await self._load_risk_state()
         await self.risk.ensure_current_day(self.db, self.user_id, self.market_type)
@@ -1067,6 +1089,17 @@ class BaseAlgo(ABC):
                 if is_exit and open_trade_id:
                     await self._close_trade(symbol, signal, open_trade_id, open_entry_price, open_side, balance)
                     return
+
+                # ── NEW: Block new entries if reconcile failed ──────────────
+                if getattr(self, "_block_new_entries_until_reconcile", False):
+                    if hasattr(self, "_discard_staged_open"):
+                        self._discard_staged_open(symbol)
+                    logger.info(
+                        f"[{self.name}] ⛔ {symbol}: new entry blocked "
+                        "(startup reconcile did not succeed)"
+                    )
+                    return
+                # ───────────────────────────────────────────────────────────
 
                 if is_draining:
                     logger.info(f"[{self.name}] 🚿 {symbol}: blocking new entry (drain mode)")

@@ -348,54 +348,66 @@ class BotScheduler:
     # ── Internal ───────────────────────────────────────────────────────────────
 
     async def _stop_jobs(self, user_id: str):
-        ctx = self.active_bots.get(user_id)
+        ctx = self.active_bots.get(user_id)   # ← get, do NOT pop yet
         if not ctx:
             return
 
-        # Persist any per-market risk manager state before removing jobs.
+        # ── Step 1: Persist risk manager state ───────────────────────────────
         try:
             for market, rm in list(ctx.risk_managers.items()):
                 try:
                     await rm.persist_state(self._db, user_id, market)
-                    logger.info(f"💾 Persisted risk state for user={user_id[:8]} market={market}")
+                    logger.info(
+                        f"💾 Persisted risk state for user={user_id[:8]} market={market}"
+                    )
                 except Exception as e:
-                    logger.warning(f"⚠️  Could not persist risk state for user={user_id[:8]} market={market}: {e}")
+                    logger.warning(
+                        f"⚠️  Could not persist risk state for "
+                        f"user={user_id[:8]} market={market}: {e}"
+                    )
         except Exception as e:
-            logger.warning(f"⚠️  Error while persisting risk managers before stop for user={user_id[:8]}: {e}")
+            logger.warning(
+                f"⚠️  Error while persisting risk managers for user={user_id[:8]}: {e}"
+            )
 
-        # Now remove scheduled jobs and clear the active bot context
-        # Do NOT pop the active context until scheduled jobs are removed successfully.
-        ctx = self.active_bots.get(user_id)
-        if not ctx:
-            return
-
-        failed_removal = False
+        # ── Step 2: Remove scheduler jobs BEFORE popping active_bots ─────────
+        # Keeping the context in active_bots during this window means the
+        # watchdog can still see the bot if removal takes time or partially fails.
+        orphaned_job_ids: list[str] = []
         for job_id in list(ctx.job_ids):
             try:
                 self._scheduler.remove_job(job_id)
                 logger.info(f"  ✂️  Removed job {job_id}")
+                # Verify removal
                 try:
                     if self._scheduler.get_job(job_id) is not None:
-                        logger.critical(f"❌ Failed to remove job {job_id}; scheduler still returns it")
-                        failed_removal = True
+                        logger.critical(
+                            f"❌ Job {job_id} still present after remove_job() — "
+                            "APScheduler did not honour the removal request. "
+                            "Manual intervention required."
+                        )
+                        orphaned_job_ids.append(job_id)
                 except Exception as check_exc:
-                    logger.critical(f"❌ Could not verify removal of job {job_id}: {check_exc}", exc_info=True)
-                    failed_removal = True
+                    logger.warning(
+                        f"⚠️  Could not verify removal of job {job_id}: {check_exc}"
+                    )
             except Exception as exc:
-                logger.critical(f"❌ Error removing job {job_id} for user={user_id[:8]}: {exc}", exc_info=True)
-                try:
-                    if self._scheduler.get_job(job_id) is not None:
-                        logger.critical(f"❌ Job {job_id} still present after failed remove; manual intervention required")
-                except Exception as check_exc:
-                    logger.critical(f"❌ Could not verify job removal for {job_id}: {check_exc}", exc_info=True)
-                failed_removal = True
+                logger.critical(
+                    f"❌ remove_job({job_id}) raised for user={user_id[:8]}: {exc}",
+                    exc_info=True,
+                )
+                orphaned_job_ids.append(job_id)
 
-        if failed_removal:
-            logger.critical(f"❌ Could not remove all jobs for user={user_id[:8]}; leaving active context in place to avoid orphaned jobs")
-            return
-
-        # All scheduled jobs removed successfully — clear the active bot context
+        # ── Step 3: Pop from active_bots ─────────────────────────────────────
+        # Do this AFTER job removal so the watchdog had coverage during removal.
         self.active_bots.pop(user_id, None)
+
+        if orphaned_job_ids:
+            logger.critical(
+                f"❌ ORPHANED JOBS for user={user_id[:8]}: {orphaned_job_ids}. "
+                "These jobs will continue executing without watchdog coverage. "
+                "Restart the bot engine to clear them."
+            )
 
     async def _stop_market_jobs(self, user_id: str, market: str):
         ctx = self.active_bots.get(user_id)
