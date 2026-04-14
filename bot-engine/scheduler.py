@@ -371,8 +371,18 @@ class BotScheduler:
             try:
                 self._scheduler.remove_job(job_id)
                 logger.info(f"  ✂️  Removed job {job_id}")
-            except Exception:
-                pass
+                try:
+                    if self._scheduler.get_job(job_id) is not None:
+                        logger.critical(f"❌ Failed to remove job {job_id}; scheduler still returns it")
+                except Exception as check_exc:
+                    logger.critical(f"❌ Could not verify removal of job {job_id}: {check_exc}", exc_info=True)
+            except Exception as exc:
+                logger.critical(f"❌ Error removing job {job_id} for user={user_id[:8]}: {exc}", exc_info=True)
+                try:
+                    if self._scheduler.get_job(job_id) is not None:
+                        logger.critical(f"❌ Job {job_id} still present after failed remove; manual intervention required")
+                except Exception as check_exc:
+                    logger.critical(f"❌ Could not verify job removal for {job_id}: {check_exc}", exc_info=True)
 
     async def _stop_market_jobs(self, user_id: str, market: str):
         ctx = self.active_bots.get(user_id)

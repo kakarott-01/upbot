@@ -141,6 +141,10 @@ class BaseAlgo(ABC):
         self._strategy_runtime_config: Dict = {}
 
         self._reconciled  = False
+        # Indicates whether the startup reconcile completed successfully
+        self._reconcile_succeeded = False
+        # Current market symbols known for this algo instance (updated each cycle)
+        self._current_markets: list = []
         self._risk_loaded = False
         self._blocked_symbols: Dict[str, str] = {}
         self._symbols_pending_verification: set[str] = set()
@@ -182,6 +186,16 @@ class BaseAlgo(ABC):
         synced_open_count = await self.db.sync_open_trade_count(self.user_id, self.market_type)
         self.risk.open_trade_count = synced_open_count
         await self.risk.persist_state(self.db, self.user_id, self.market_type)
+
+    async def _populate_levels_from_trade_plan(self, symbol: str, trade_plan: Dict):
+        """Ensure in-memory open position has stop_loss/take_profit from trade_plan."""
+        try:
+            pos = getattr(self, "_open_positions", {}).get(symbol) if hasattr(self, "_open_positions") else None
+            if pos is not None:
+                pos["stop_loss"] = trade_plan.get("stop_loss")
+                pos["take_profit"] = trade_plan.get("take_profit")
+        except Exception as e:
+            logger.warning(f"[{self.name}] ⚠️  Could not populate SL/TP for {symbol}: {e}")
 
     async def _get_bot_stop_mode(self) -> Optional[str]:
         try:
@@ -837,14 +851,14 @@ class BaseAlgo(ABC):
                 symbol = trade["symbol"]
                 if symbol not in exchange_symbols:
                     # Before treating as orphan, perform a per-symbol verification
-                                try:
-                                    present = await self._symbol_present_on_exchange(symbol)
-                                except Exception as e:
-                                    logger.warning(f"[{self.name}] ⚠️  Per-symbol check failed for {symbol}: {e}")
-                                    # On per-symbol check errors assume the symbol is present to
-                                    # avoid false orphan cancellation when the exchange API
-                                    # is temporarily unavailable.
-                                    present = True
+                    try:
+                        present = await self._symbol_present_on_exchange(symbol)
+                    except Exception as e:
+                        logger.warning(f"[{self.name}] ⚠️  Per-symbol check failed for {symbol}: {e}")
+                        # On per-symbol check errors assume the symbol is present to
+                        # avoid false orphan cancellation when the exchange API
+                        # is temporarily unavailable.
+                        present = True
 
                     if present:
                         logger.info(f"[{self.name}] ℹ️  Symbol {symbol} present on exchange (detected by per-symbol check); skipping orphan cancel")
@@ -859,6 +873,8 @@ class BaseAlgo(ABC):
                     orphaned += 1
             if orphaned:
                 logger.info(f"[{self.name}] Startup reconciled {orphaned} orphan trade(s)")
+            # Mark reconcile as succeeded only when no exception bubbled up
+            self._reconcile_succeeded = True
         except Exception as e:
             logger.error(f"[{self.name}] ❌ Startup reconciliation error: {e}", exc_info=True)
         finally:
@@ -943,7 +959,7 @@ class BaseAlgo(ABC):
         except Exception as e:
             logger.error(f"[{self.name}] ❌ run_cycle crashed: {e}", exc_info=True)
             try:
-                await self.db.update_bot_status(self.user_id, "error", [], error=str(e))
+                await self.db.update_bot_status(self.user_id, "error", self._current_markets or [], error=str(e))
             except Exception:
                 pass
 
@@ -953,8 +969,18 @@ class BaseAlgo(ABC):
             logger.warning(f"[{self.name}] Bot status is error — skipping cycle")
             return
 
+        # Refresh current market list for error reporting and status updates
+        try:
+            self._current_markets = list(self.get_symbols())
+        except Exception as e:
+            logger.debug(f"[{self.name}] Could not determine current markets: {e}")
+            self._current_markets = getattr(self, "_current_markets", []) or []
+
         if not self._reconciled:
             await self._reconcile_positions()
+        # If startup reconcile did not succeed for non-paper markets, warn and avoid accepting new trades silently
+        if self.market_type not in ("paper",) and not getattr(self, "_reconcile_succeeded", False):
+            logger.warning(f"[{self.name}] ⚠️  Startup reconcile failed — position state may be stale")
         if not self._risk_loaded:
             await self._load_risk_state()
         await self.risk.ensure_current_day(self.db, self.user_id, self.market_type)
@@ -1245,6 +1271,8 @@ class BaseAlgo(ABC):
                     if trade_id:
                         if hasattr(self, "_confirm_staged_open"):
                             self._confirm_staged_open(symbol)
+                        if hasattr(self, "_populate_levels_from_trade_plan"):
+                            await self._populate_levels_from_trade_plan(symbol, trade_plan)
                         await self.db.touch_strategy_trade(self.user_id, self.market_type, self.strategy_key)
                         await self.risk.persist_state(self.db, self.user_id, self.market_type)
                         logger.info(f"[{self.name}] 🧪 PAPER OPEN {signal} {quantity:.6f} {symbol} @ {price}")
@@ -1254,6 +1282,9 @@ class BaseAlgo(ABC):
                         self.risk.open_trade_count = await self.db.release_trade_slot(self.user_id, self.market_type)
                 else:
                     opened = await self._execute_live_trade(symbol, signal, quantity, price, trade_plan, exposure_reservation_id=exposure_reservation_id)
+                    if opened:
+                        if hasattr(self, "_populate_levels_from_trade_plan"):
+                            await self._populate_levels_from_trade_plan(symbol, trade_plan)
                     if not opened:
                         if exposure_reservation_id:
                             try:
