@@ -1065,7 +1065,7 @@ class BaseAlgo(ABC):
             return
 
         for symbol in self.get_symbols():
-            await self._process_symbol(symbol, balance, is_draining=is_draining)
+            await self._process_symbol(symbol, balance, is_draining=is_draining, global_snapshot=global_snapshot)
 
     async def _process_symbol(self, symbol: str, balance: float, is_draining: bool = False, global_snapshot: Optional[Dict] = None):
         slot_reserved = False
@@ -1833,8 +1833,9 @@ class BaseAlgo(ABC):
             if elapsed < cooldown_after_trade_sec:
                 return quantity, False, f"Cooldown active for {cooldown_after_trade_sec - elapsed:.0f}s", {"cooldownRemaining": cooldown_after_trade_sec - elapsed}
 
-        #if global_snapshot is None:
-        # global_snapshot = await self.db.get_global_risk_snapshot(self.user_id)
+        if global_snapshot is None:
+            logger.warning("[%s] global_snapshot was None in _apply_entry_controls — fetching (should not happen)", self.name)
+            global_snapshot = await self.db.get_global_risk_snapshot(self.user_id)
 
         if self.execution_mode == "AGGRESSIVE" and self.strategy_key:
             capital_allocation = runtime_settings.get("capital_allocation", {})
