@@ -364,18 +364,23 @@ class BotScheduler:
             logger.warning(f"⚠️  Error while persisting risk managers before stop for user={user_id[:8]}: {e}")
 
         # Now remove scheduled jobs and clear the active bot context
-        ctx = self.active_bots.pop(user_id, None)
+        # Do NOT pop the active context until scheduled jobs are removed successfully.
+        ctx = self.active_bots.get(user_id)
         if not ctx:
             return
-        for job_id in ctx.job_ids:
+
+        failed_removal = False
+        for job_id in list(ctx.job_ids):
             try:
                 self._scheduler.remove_job(job_id)
                 logger.info(f"  ✂️  Removed job {job_id}")
                 try:
                     if self._scheduler.get_job(job_id) is not None:
                         logger.critical(f"❌ Failed to remove job {job_id}; scheduler still returns it")
+                        failed_removal = True
                 except Exception as check_exc:
                     logger.critical(f"❌ Could not verify removal of job {job_id}: {check_exc}", exc_info=True)
+                    failed_removal = True
             except Exception as exc:
                 logger.critical(f"❌ Error removing job {job_id} for user={user_id[:8]}: {exc}", exc_info=True)
                 try:
@@ -383,6 +388,14 @@ class BotScheduler:
                         logger.critical(f"❌ Job {job_id} still present after failed remove; manual intervention required")
                 except Exception as check_exc:
                     logger.critical(f"❌ Could not verify job removal for {job_id}: {check_exc}", exc_info=True)
+                failed_removal = True
+
+        if failed_removal:
+            logger.critical(f"❌ Could not remove all jobs for user={user_id[:8]}; leaving active context in place to avoid orphaned jobs")
+            return
+
+        # All scheduled jobs removed successfully — clear the active bot context
+        self.active_bots.pop(user_id, None)
 
     async def _stop_market_jobs(self, user_id: str, market: str):
         ctx = self.active_bots.get(user_id)

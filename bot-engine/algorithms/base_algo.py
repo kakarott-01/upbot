@@ -981,6 +981,8 @@ class BaseAlgo(ABC):
         # If startup reconcile did not succeed for non-paper markets, warn and avoid accepting new trades silently
         if self.market_type not in ("paper",) and not getattr(self, "_reconcile_succeeded", False):
             logger.warning(f"[{self.name}] ⚠️  Startup reconcile failed — position state may be stale")
+            # Prevent the cycle from continuing and potentially opening new trades
+            return
         if not self._risk_loaded:
             await self._load_risk_state()
         await self.risk.ensure_current_day(self.db, self.user_id, self.market_type)
