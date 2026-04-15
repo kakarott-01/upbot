@@ -218,6 +218,22 @@ export default function PerformancePage() {
       color: s.liveCount > 0 ? 'text-red-400' : 'text-gray-500',
       icon: AlertTriangle,
     },
+    {
+      label: 'Principle Capital',
+      value: formatINR(principle),
+      sub: isLoading ? 'Loading balance baseline...' : 'Starting capital for the current filter',
+      color: 'text-gray-200',
+      icon: Banknote,
+    },
+    {
+      label: 'Current Balance',
+      value: formatINR(currentBalance),
+      sub: isLoading
+        ? 'Loading current balance...'
+        : `${balanceChangePct >= 0 ? '+' : ''}${balanceChangePct.toFixed(2)}% from principle · ${formatPnl(todayPnl)} today`,
+      color: currentBalance >= principle ? 'text-emerald-400' : 'text-red-400',
+      icon: Wallet,
+    },
   ] : []
 
   return (
@@ -260,7 +276,7 @@ export default function PerformancePage() {
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {isLoading
-          ? Array.from({ length: 9 }).map((_, i) => <SkeletonCard key={i} />)
+          ? Array.from({ length: 11 }).map((_, i) => <SkeletonCard key={i} />)
           : metrics.map((metric) => {
               const Icon = metric.icon
               return (
@@ -282,27 +298,8 @@ export default function PerformancePage() {
         <div>
           <h2 className="text-sm font-medium text-gray-300">Daily Balance</h2>
           <p className="mt-1 text-xs text-gray-500">
-            Principle, current balance, and day-by-day outcomes for the selected market and mode.
+            Day-by-day outcomes for the selected market and mode.
           </p>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <BalanceCard
-            label="Principle Capital"
-            value={formatINR(principle)}
-            sub={isLoading ? 'Loading balance baseline...' : 'Starting capital for the current filter'}
-            color="text-gray-200"
-            icon={Banknote}
-          />
-          <BalanceCard
-            label="Current Balance"
-            value={formatINR(currentBalance)}
-            sub={isLoading
-              ? 'Loading current balance...'
-              : `${balanceChangePct >= 0 ? '+' : ''}${balanceChangePct.toFixed(2)}% from principle · ${formatPnl(todayPnl)} today`}
-            color={currentBalance >= principle ? 'text-emerald-400' : 'text-red-400'}
-            icon={Wallet}
-          />
         </div>
 
         <div className="card overflow-hidden p-0">
