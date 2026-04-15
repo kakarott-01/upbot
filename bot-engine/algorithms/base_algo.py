@@ -47,6 +47,7 @@ from typing import Optional, Dict, List, Tuple
 from datetime import datetime, timedelta
 
 from exchange_connector import ExchangeConnector, FatalExecutionError
+import ccxt.async_support as ccxt
 from fee_calculator import calculate_net_pnl
 from risk_manager import GlobalRiskManager, RiskManager
 
@@ -88,6 +89,9 @@ RISK_ROUNDING_PRECISION = 6
 RISK_BUDGET_SAFETY_BUFFER = 0.999
 MAX_RISK_RESCALE_ATTEMPTS = 3
 _ACTIVE_TRADE_LOCKS: Dict[Tuple[str, str, str], asyncio.Lock] = {}
+
+# Configurable: how many consecutive reconcile failures before marking bot as error
+RECONCILE_MAX_FAILURES = int(os.getenv("RECONCILE_MAX_FAILURES", "10"))
 
 
 class TradePersistenceError(RuntimeError):
@@ -986,26 +990,59 @@ class BaseAlgo(ABC):
         # ── NEW: periodic reconcile retry after initial failure ──────────────
         RECONCILE_RETRY_CYCLES = 3   # retry every 3 cycles
         _reconcile_retry_counter = getattr(self, "_reconcile_retry_counter", 0)
+        _reconcile_failure_count = getattr(self, "_reconcile_failure_count", 0)
 
         if (not self._paper_mode
                 and not getattr(self, "_reconcile_succeeded", False)):
             _reconcile_retry_counter += 1
             self._reconcile_retry_counter = _reconcile_retry_counter
             if _reconcile_retry_counter >= RECONCILE_RETRY_CYCLES:
+                attempt_no = (_reconcile_retry_counter // RECONCILE_RETRY_CYCLES)
                 logger.info(
-                    f"[{self.name}] 🔄 Retrying startup reconcile "
-                    f"(attempt {_reconcile_retry_counter // RECONCILE_RETRY_CYCLES})…"
+                    f"[{self.name}] 🔄 Retrying startup reconcile (attempt {attempt_no})…"
                 )
                 self._reconciled = False
                 self._reconcile_succeeded = False
                 self._reconcile_retry_counter = 0
                 await self._reconcile_positions()
+
+                # If reconcile still not succeeded, increment failure counter and warn.
+                if not getattr(self, "_reconcile_succeeded", False):
+                    _reconcile_failure_count = getattr(self, "_reconcile_failure_count", 0) + 1
+                    self._reconcile_failure_count = _reconcile_failure_count
+                    # Log a clear warning once when blocking begins
+                    if not getattr(self, "_reconcile_blocking_logged", False):
+                        logger.warning(
+                            f"[{self.name}] ⛔ Startup reconcile failing — blocking new entries until reconcile succeeds. "
+                            f"Will mark bot as error after {RECONCILE_MAX_FAILURES} consecutive failures."
+                        )
+                        self._reconcile_blocking_logged = True
+
+                    if _reconcile_failure_count >= RECONCILE_MAX_FAILURES:
+                        msg = (
+                            f"Startup reconciliation failed {int(_reconcile_failure_count)} times; "
+                            "marking bot as error for manual intervention."
+                        )
+                        logger.critical(f"[{self.name}] {msg}")
+                        try:
+                            await self.db.set_bot_error_state(self.user_id, msg)
+                        except Exception:
+                            logger.exception("Failed to set bot error state after reconcile failures")
+                        return
+                else:
+                    # Reconcile succeeded — reset failure counters and logs
+                    self._reconcile_failure_count = 0
+                    self._reconcile_blocking_logged = False
+
             self._block_new_entries_until_reconcile = not getattr(
                 self, "_reconcile_succeeded", False
             )
         else:
             self._block_new_entries_until_reconcile = False
             self._reconcile_retry_counter = 0
+            # reset failure tracking when reconciliation is healthy
+            self._reconcile_failure_count = 0
+            self._reconcile_blocking_logged = False
         # ──────────────────────────────────────────────────────────────────────
         if not self._risk_loaded:
             await self._load_risk_state()
@@ -1066,6 +1103,12 @@ class BaseAlgo(ABC):
 
         for symbol in self.get_symbols():
             await self._process_symbol(symbol, balance, is_draining=is_draining, global_snapshot=global_snapshot)
+            # Refresh global snapshot after each symbol so subsequent symbols
+            # see updated exposure/state (prevents multi-symbol race on global limits).
+            try:
+                global_snapshot = await self.db.get_global_risk_snapshot(self.user_id)
+            except Exception as e:
+                logger.warning(f"[{self.name}] ⚠️ Failed to refresh global_snapshot after {symbol}: {e}")
 
     async def _process_symbol(self, symbol: str, balance: float, is_draining: bool = False, global_snapshot: Optional[Dict] = None):
         slot_reserved = False
@@ -1332,16 +1375,43 @@ class BaseAlgo(ABC):
 
                 slot_reserved = False
         except Exception as e:
+            # Always attempt to release reserved slot if it was taken
             if slot_reserved and not isinstance(e, TradePersistenceError):
-                self.risk.open_trade_count = await self.db.release_trade_slot(self.user_id, self.market_type)
+                try:
+                    self.risk.open_trade_count = await self.db.release_trade_slot(self.user_id, self.market_type)
+                except Exception:
+                    logger.exception("Failed to release trade slot in error path")
+
             # Release exposure reservation if present
             if exposure_reservation_id:
                 try:
                     await self.db.release_global_exposure_reservation(exposure_reservation_id)
                 except Exception:
                     logger.exception("Failed to release exposure reservation in error path")
+
             if hasattr(self, "_discard_staged_open"):
-                self._discard_staged_open(symbol)
+                try:
+                    self._discard_staged_open(symbol)
+                except Exception:
+                    logger.exception("_discard_staged_open failed in error path")
+
+            # Escalate fatal execution errors so the outer run loop can mark the bot as errored.
+            if isinstance(e, FatalExecutionError):
+                logger.critical(f"[{self.name}] 💀 Fatal error for {symbol}: {e}")
+                raise
+
+            # Escalate exchange authentication failures to activate kill switch and stop the bot
+            try:
+                if isinstance(e, ccxt.AuthenticationError):
+                    try:
+                        await self._activate_kill_switch(f"Exchange auth failed: {e}")
+                    except Exception:
+                        logger.exception("Failed to activate kill switch for auth error")
+                    raise
+            except Exception:
+                # If ccxt isn't available or isinstance check failed, fall through to generic handling
+                pass
+
             logger.error(f"[{self.name}] ❌ Symbol {symbol} error: {e}", exc_info=True)
 
     async def _find_open_trade(self, symbol: str) -> Tuple:

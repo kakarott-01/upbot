@@ -384,10 +384,42 @@ class CloseAllEngine:
                     )
                     continue
 
-                # Order is no longer in open orders.
-                # F5 FIX: fetch actual status instead of assuming filled.
+                # Order is no longer present in the per-symbol open orders list.
+                # Try a couple fallbacks before treating the fill as unconfirmed:
+                # 1) fetch_open_orders(None) to check across market types (some connectors
+                #    are created with a defaultType that may not match the original order)
+                # 2) fetch_order(order_id, symbol) then fetch_order(order_id, None)
                 try:
-                    order_info  = await connector.fetch_order(order_id, symbol)
+                    # Fallback: check open orders without restricting by symbol
+                    try:
+                        all_orders = await connector.fetch_open_orders(None)
+                        all_open_ids = {str(o.get("id")) for o in all_orders}
+                        if str(order_id) in all_open_ids:
+                            # Still open somewhere — keep polling
+                            logger.debug(f"[CloseAll] Order {order_id} found in global open_orders")
+                            continue
+                    except Exception:
+                        # Non-fatal: fall through to fetch_order attempts
+                        pass
+
+                    order_info = None
+                    fetch_err = None
+                    try:
+                        order_info = await connector.fetch_order(order_id, symbol)
+                    except Exception as fe1:
+                        logger.debug(f"[CloseAll] fetch_order(order_id, symbol) failed: {fe1}")
+                        try:
+                            order_info = await connector.fetch_order(order_id, None)
+                        except Exception as fe2:
+                            fetch_err = fe2
+
+                    if order_info is None:
+                        logger.warning(
+                            f"[CloseAll] fetch_order failed for {order_id}: {fetch_err}. "
+                            "Treating as failed confirmation and retrying."
+                        )
+                        return 0.0, 0.0, "failed", f"fill unconfirmed (fetch_order failed: {fetch_err})"
+
                     exch_status = str(order_info.get("status", "unknown")).lower()
                     filled_qty  = float(order_info.get("filled", 0) or 0)
                     avg_price   = float(order_info.get("average") or order_info.get("price") or 0)

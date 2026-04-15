@@ -240,6 +240,32 @@ class Database:
                 api_secret_ct = row["api_secret_enc"]
                 api_key = decrypt_field(api_key_ct)
                 api_secret = decrypt_field(api_secret_ct)
+
+                # If a ciphertext value exists but decryption returned None,
+                # treat as a critical error (possible corrupted ciphertext or wrong ENCRYPTION_KEY).
+                # Surface to the user by setting bot error state and raising.
+                if api_key_ct and api_key is None:
+                    msg = (
+                        f"Failed to decrypt api_key for user={user_id} market={row['market_type']} "
+                        "— possible corrupted ciphertext or incorrect ENCRYPTION_KEY"
+                    )
+                    try:
+                        await self.set_bot_error_state(user_id, msg)
+                    except Exception:
+                        logger.exception("Failed to set bot error state for decryption failure")
+                    raise RuntimeError(msg)
+
+                if api_secret_ct and api_secret is None:
+                    msg = (
+                        f"Failed to decrypt api_secret for user={user_id} market={row['market_type']} "
+                        "— possible corrupted ciphertext or incorrect ENCRYPTION_KEY"
+                    )
+                    try:
+                        await self.set_bot_error_state(user_id, msg)
+                    except Exception:
+                        logger.exception("Failed to set bot error state for decryption failure")
+                    raise RuntimeError(msg)
+
                 if not api_key or not api_secret:
                     logger.warning(f"⚠️  Skipping market={row['market_type']}: decryption returned empty")
                     continue
@@ -729,8 +755,10 @@ class Database:
         pool = await self.pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
+                # Use Postgres' two-int advisory lock variant to reduce collision
+                # risk vs truncating an MD5 to 64 bits.
                 lock_acquired = await conn.fetchval(
-                    "SELECT pg_try_advisory_xact_lock(('x' || md5($1 || $2))::bit(64)::bigint)",
+                    "SELECT pg_try_advisory_xact_lock(hashtext($1), hashtext($2))",
                     user_id, market_type,
                 )
                 if not lock_acquired:
@@ -830,8 +858,9 @@ class Database:
         pool = await self.pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
+                # Acquire the composite advisory lock for the release path as well.
                 await conn.execute(
-                    "SELECT pg_advisory_xact_lock(('x' || md5($1 || $2))::bit(64)::bigint)",
+                    "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
                     user_id, market_type,
                 )
                 open_rows = await conn.fetch(
@@ -1159,7 +1188,8 @@ class Database:
                 is_paper, exchange_order_id, stop_loss_order_id, bot_session_ref, metadata, opened_at)
                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,0,$6,'open',$11,$12,$13,false,$14,$15,$16,$17,$18)
                ON CONFLICT (user_id, market_type, symbol, position_scope_key)
-               WHERE status='open' DO NOTHING
+               WHERE status='open' DO UPDATE
+               SET stop_loss_order_id = COALESCE(EXCLUDED.stop_loss_order_id, stop_loss_order_id)
                RETURNING id""",
             user_id, exchange_name, market_type, symbol,
             side.lower(), str(recorded_quantity), str(price),

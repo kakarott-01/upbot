@@ -4,7 +4,7 @@ import { verifySignupToken }          from '@/lib/jwt'
 import { db }                         from '@/lib/db'
 import { accessCodes }                from '@/lib/schema'
 import { eq }                         from 'drizzle-orm'
-import { redis }                      from '@/lib/redis'
+import { redis, verifyOtp }          from '@/lib/redis'
 import { signSession }                from '@/lib/signed-cookie'  // FIX: signed cookie
 import {
   checkOtpVerifyLimit,
@@ -32,10 +32,12 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // ── Verify OTP from Redis ─────────────────────────────────────────────────
-    let raw: unknown
+    // ── Verify OTP using helper ─────────────────────────────────────────────────
     try {
-      raw = await redis.get(`login_otp:${normalizedEmail}`)
+      const ok = await verifyOtp(normalizedEmail, otp)
+      if (!ok) {
+        return NextResponse.json({ error: 'Invalid or expired code' }, { status: 401 })
+      }
     } catch (redisError) {
       console.error('verify-otp redis error:', redisError)
       return NextResponse.json(
@@ -44,21 +46,11 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    if (raw === null || raw === undefined) {
-      return NextResponse.json({ error: 'Invalid or expired code' }, { status: 401 })
+    try {
+      await resetOtpVerifyLimit(limitKey)
+    } catch (e) {
+      // Non-fatal: continue
     }
-
-    const stored   = String(raw).trim()
-    const provided = String(otp).trim()
-
-    if (stored !== provided) {
-      return NextResponse.json({ error: 'Invalid or expired code' }, { status: 401 })
-    }
-
-    await Promise.all([
-      redis.del(`login_otp:${normalizedEmail}`),
-      resetOtpVerifyLimit(limitKey),
-    ])
 
     // Find existing user
     const existing = await sql`

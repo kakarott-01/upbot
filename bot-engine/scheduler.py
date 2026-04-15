@@ -579,18 +579,27 @@ class BotScheduler:
                                 return
                             if running_ctx:
                                 running_ctx.drain_completing = True
-                            await _scheduler._stop_jobs(_uid)
                             try:
-                                await _scheduler._db.force_set_status(_uid, "stopped")
-                            except Exception as e:
-                                logger.error(
-                                    f"❌ Failed to update DB stop status "
-                                    f"for user={_uid[:8]}…: {e}"
+                                await _scheduler._stop_jobs(_uid)
+                                try:
+                                    await _scheduler._db.force_set_status(_uid, "stopped")
+                                except Exception as e:
+                                    logger.error(
+                                        f"❌ Failed to update DB stop status "
+                                        f"for user={_uid[:8]}…: {e}"
+                                    )
+                                asyncio.create_task(
+                                    _scheduler._complete_stop_callback(_uid),
+                                    name=f"complete_stop_cb_{_uid}",
                                 )
-                            asyncio.create_task(
-                                _scheduler._complete_stop_callback(_uid),
-                                name=f"complete_stop_cb_{_uid}",
-                            )
+                            except Exception as stop_exc:
+                                logger.error(
+                                    f"❌ _stop_jobs failed during drain completion for user={_uid[:8]}: {stop_exc}",
+                                    exc_info=True,
+                                )
+                                # Reset the drain flag so future cycles can retry stopping
+                                if running_ctx:
+                                    running_ctx.drain_completing = False
                             clear_ohlcv_cache()
                 except Exception as e:
                     logger.error(f"❌ Drain completion check error: {e}")

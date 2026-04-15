@@ -32,18 +32,19 @@ export async function clearAttempts(ip: string): Promise<void> {
 }
 
 // ─── OTP Storage ──────────────────────────────────────────────────────────────
-const OTP_EXPIRY = 5 * 60  // 5 minutes
+// TTL for login OTPs. Can be configured via OTP_EXPIRY_SEC env var (seconds).
+const OTP_EXPIRY = Number(process.env.OTP_EXPIRY_SEC) || 15 * 60
 
 export async function storeOtp(email: string, otp: string): Promise<void> {
-  await redis.set(`otp:${email}`, otp, { ex: OTP_EXPIRY })
+  await redis.set(`login_otp:${email}`, otp, { ex: OTP_EXPIRY })
 }
 
 export async function verifyOtp(email: string, otp: string): Promise<boolean> {
-  const raw = await redis.get(`otp:${email}`)
+  const raw = await redis.get(`login_otp:${email}`)
   if (raw == null) return false
   const stored = String(raw).trim()
   if (stored !== String(otp).trim()) return false
-  await redis.del(`otp:${email}`) // burn after use
+  await redis.del(`login_otp:${email}`) // burn after use
   return true
 }
 

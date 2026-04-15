@@ -81,6 +81,7 @@ class Watchdog:
             return
 
         now = datetime.utcnow()
+        # Default timeout used for bots that have not yet produced a heartbeat.
         timeout = timedelta(seconds=HEARTBEAT_TIMEOUT_SECONDS)
         # FIX 2: wider grace window for bots whose first cycle hasn't fired yet
         grace = timedelta(seconds=HEARTBEAT_TIMEOUT_SECONDS * _NEW_BOT_GRACE_MULTIPLIER)
@@ -94,7 +95,25 @@ class Watchdog:
                 if elapsed < grace:
                     continue
                 # Grace expired with no heartbeat at all → treat as dead
-            elif (now - ctx.last_heartbeat) < timeout:
+            else:
+                # After we've seen at least one heartbeat from this bot, compute
+                # a dynamic timeout based on the configured scheduler interval
+                # for the markets this bot is running. Use 2× the max configured
+                # interval so slow cycles have headroom.
+                try:
+                    from scheduler import MARKET_INTERVAL as _MARKET_INTERVAL
+                except Exception:
+                    # Fallback to default mapping in case importing fails
+                    _MARKET_INTERVAL = {"indian": 60, "crypto": 180, "commodities": 120, "global": 120}
+
+                try:
+                    intervals = [_MARKET_INTERVAL.get(m, 60) for m in ctx.markets] if ctx.markets else [60]
+                    dynamic_timeout = max(intervals) * 2
+                    timeout = timedelta(seconds=dynamic_timeout)
+                except Exception:
+                    timeout = timedelta(seconds=HEARTBEAT_TIMEOUT_SECONDS)
+
+                if (now - ctx.last_heartbeat) < timeout:
                 # Active heartbeat within the timeout window
                 healthy_for = (now - ctx.last_restart_at).total_seconds()
                 if healthy_for >= HEALTHY_SUSTAIN_SECONDS:
