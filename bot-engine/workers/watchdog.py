@@ -114,17 +114,17 @@ class Watchdog:
                     timeout = timedelta(seconds=HEARTBEAT_TIMEOUT_SECONDS)
 
                 if (now - ctx.last_heartbeat) < timeout:
-                # Active heartbeat within the timeout window
-                healthy_for = (now - ctx.last_restart_at).total_seconds()
-                if healthy_for >= HEALTHY_SUSTAIN_SECONDS:
-                    self._restart_counts[user_id] = 0
-                logger.debug(
-                    "🐕 %s… heartbeat OK (%ds ago, healthy_for=%ds)",
-                    user_id[:8],
-                    int((now - ctx.last_heartbeat).total_seconds()),
-                    int(healthy_for),
-                )
-                continue
+                    # Active heartbeat within the timeout window
+                    healthy_for = (now - ctx.last_restart_at).total_seconds()
+                    if healthy_for >= HEALTHY_SUSTAIN_SECONDS:
+                        self._restart_counts[user_id] = 0
+                    logger.debug(
+                        "🐕 %s… heartbeat OK (%ds ago, healthy_for=%ds)",
+                        user_id[:8],
+                        int((now - ctx.last_heartbeat).total_seconds()),
+                        int(healthy_for),
+                    )
+                    continue
 
             current_count = self._restart_counts.get(user_id, 0)
 
