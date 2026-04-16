@@ -297,3 +297,40 @@ async def bot_status(user_id: str):
         raise HTTPException(500, "Scheduler not initialized")
     return _scheduler.get_status(user_id)
 
+## ADD THIS TO bot-engine/main.py
+## Place AFTER the existing @app.get("/bot/status/{user_id}") endpoint
+
+@app.get("/bot/balance/{user_id}", dependencies=[Depends(_verify)])
+async def get_user_balance(user_id: str):
+    """
+    Return live exchange balance per active market.
+    Called by Next.js /api/exchange/balance to show real balance on Performance page.
+    """
+    if not _scheduler:
+        raise HTTPException(500, "Scheduler not initialized")
+
+    ctx = _scheduler.active_bots.get(user_id)
+    if not ctx:
+        return {"markets": {}, "running": False}
+
+    # Default quote currency per market
+    CURRENCY = {
+        "crypto":      "USDT",
+        "indian":      "INR",
+        "commodities": "INR",
+        "global":      "USD",
+    }
+
+    async def _fetch_one(market: str, connector) -> tuple:
+        currency = CURRENCY.get(market, "USDT")
+        try:
+            bal = await connector.fetch_available_margin(currency)
+            return market, {"balance": round(float(bal), 4), "currency": currency}
+        except Exception as exc:
+            logger.warning("[balance] %s (%s): %s", market, currency, exc)
+            return market, {"balance": None, "currency": currency}
+
+    tasks = [_fetch_one(m, c) for m, c in ctx.connectors.items()]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+
+    return {"markets": dict(results), "running": True}

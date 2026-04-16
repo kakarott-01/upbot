@@ -8,15 +8,16 @@ import { apiFetch } from '@/lib/api-client'
 import {
   TrendingUp, TrendingDown, Target, Activity,
   Award, AlertTriangle, BarChart2, Banknote, Wallet,
+  Zap, RefreshCw,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 import {
   getMarketCurrency,
   formatAmount,
   formatPnlAmount,
-  isMixedCurrencySet,
   type MarketCurrency,
 } from '@/lib/currency'
+import type { LiveBalanceData } from '@/app/api/exchange/balance/route'
 
 const PerformanceCharts = dynamic(
   () => import('@/components/charts/performance-charts'),
@@ -63,16 +64,19 @@ function SkeletonCard() {
 }
 
 function BalanceCard({
-  label, value, sub, color, icon: Icon,
+  label, value, sub, color, icon: Icon, badge,
 }: {
-  label: string; value: string; sub: string; color: string; icon: ElementType
+  label: string; value: string; sub: string; color: string; icon: ElementType; badge?: React.ReactNode
 }) {
   return (
     <div className="card flex flex-col gap-2 min-w-0">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-gray-500 uppercase tracking-widest">{label}</span>
-        <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-gray-800">
-          <Icon className={`w-4 h-4 ${color}`} />
+        <div className="flex items-center gap-1.5">
+          {badge}
+          <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-gray-800">
+            <Icon className={`w-4 h-4 ${color}`} />
+          </div>
         </div>
       </div>
       <p className={`text-2xl font-bold tracking-tight ${color}`}>{value}</p>
@@ -103,24 +107,35 @@ function WrBadge({ wins, total }: { wins: number; total: number }) {
   )
 }
 
+// ── Live Badge ─────────────────────────────────────────────────────────────────
+
+function LiveBadge() {
+  return (
+    <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+      <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />
+      LIVE
+    </span>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 const MARKETS  = ['all', 'indian', 'crypto', 'commodities', 'global'] as const
-const MODES    = ['all', 'paper', 'live'] as const
+const MODES    = ['paper', 'live'] as const
 type MarketFilter = typeof MARKETS[number]
 type ModeFilter   = typeof MODES[number]
 
 export default function PerformancePage() {
-  const [mode,   setMode]   = useState<ModeFilter>('all')
+  const [mode,   setMode]   = useState<ModeFilter>('paper')
   const [market, setMarket] = useState<MarketFilter>('all')
 
   const params = new URLSearchParams()
-  if (mode   !== 'all') params.set('mode', mode)
+  params.set('mode', mode)
   if (market !== 'all') params.set('market', market)
 
   const qs       = params.toString()
   const perfPath = qs ? `/api/performance?${qs}` : '/api/performance'
-  const filters  = (mode !== 'all' || market !== 'all') ? { mode, market } : undefined
+  const filters  = market !== 'all' ? { mode, market } : { mode }
 
   const { data, isLoading } = useQuery<PerformanceResponse>({
     queryKey: QUERY_KEYS.PERFORMANCE(filters),
@@ -128,7 +143,23 @@ export default function PerformancePage() {
     staleTime: 30_000,
   })
 
-  // Currency for this view (INR for indian/commodities, USDT for crypto, USD for global)
+  // ── Live exchange balance (only when mode=live) ──────────────────────────
+  const { data: liveBalanceData, isLoading: liveBalanceLoading, refetch: refetchBalance } = useQuery<LiveBalanceData>({
+    queryKey: ['exchange-live-balance'],
+    queryFn:  () => apiFetch<LiveBalanceData>('/api/exchange/balance'),
+    enabled:  mode === 'live',
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  })
+
+  // Per-market live balance when a specific market is selected
+  const liveMktBalance = (mode === 'live' && market !== 'all')
+    ? (liveBalanceData?.markets?.[market]?.balance ?? null)
+    : null
+  const liveBalanceAvailable = liveMktBalance !== null && liveBalanceData?.running === true
+  const liveBalanceCurrency   = liveBalanceData?.markets?.[market]?.currency ?? null
+
+  // Currency for this view
   const displayCurrency: MarketCurrency =
     market !== 'all' ? getMarketCurrency(market) : 'INR'
   const isMixed = market === 'all'
@@ -146,6 +177,13 @@ export default function PerformancePage() {
   const balanceChangePct = principle > 0 ? ((currentBalance - principle) / principle) * 100 : 0
   const todayIso         = new Date().toISOString().slice(0, 10)
   const todayPnl         = dailyRows.find((r) => r.date === todayIso)?.pnl ?? 0
+
+  // Effective balance values: use live exchange balance when available
+  const effectivePrinciple      = liveBalanceAvailable ? null : principle
+  const effectiveCurrentBalance = liveBalanceAvailable ? liveMktBalance! : currentBalance
+  const effectiveBalanceChangePct = (liveBalanceAvailable || principle === 0)
+    ? null
+    : balanceChangePct
 
   const metrics = s ? [
     {
@@ -211,19 +249,27 @@ export default function PerformancePage() {
       color: s.liveCount > 0 ? 'text-red-400' : 'text-gray-500',
       icon:  AlertTriangle,
     },
-    {
+    // Principle Capital — hidden when live balance is available (exchange IS the principle)
+    ...(!liveBalanceAvailable ? [{
       label: 'Principle Capital',
       value: formatAmount(principle, displayCurrency),
-      sub:   isMixed ? 'Crypto: USDT · Indian: INR' : 'Starting capital',
+      sub: isMixed ? 'Crypto: USDT · Indian: INR' : 'Starting capital',
       color: 'text-gray-200',
       icon:  Banknote,
-    },
+    }] : []),
     {
-      label: 'Current Balance',
-      value: formatAmount(currentBalance, displayCurrency),
-      sub:   `${balanceChangePct >= 0 ? '+' : ''}${balanceChangePct.toFixed(2)}% · ${formatPnlAmount(todayPnl, displayCurrency)} today`,
-      color: currentBalance >= principle ? 'text-emerald-400' : 'text-red-400',
+      label: liveBalanceAvailable ? 'Exchange Balance' : 'Current Balance',
+      value: formatAmount(effectiveCurrentBalance, displayCurrency),
+      sub: liveBalanceAvailable
+        ? `Live ${market} · ${liveBalanceCurrency ?? displayCurrency} available`
+        : effectiveBalanceChangePct !== null
+          ? `${effectiveBalanceChangePct >= 0 ? '+' : ''}${effectiveBalanceChangePct.toFixed(2)}% · ${formatPnlAmount(todayPnl, displayCurrency)} today`
+          : `${formatPnlAmount(todayPnl, displayCurrency)} today`,
+      color: liveBalanceAvailable
+        ? 'text-emerald-400'
+        : effectiveCurrentBalance >= principle ? 'text-emerald-400' : 'text-red-400',
       icon:  Wallet,
+      badge: liveBalanceAvailable ? <LiveBadge /> : undefined,
     },
   ] : []
 
@@ -240,6 +286,18 @@ export default function PerformancePage() {
           )}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
+          {/* Mode refresh button for live balance */}
+          {mode === 'live' && market !== 'all' && (
+            <button
+              onClick={() => refetchBalance()}
+              disabled={liveBalanceLoading}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-400 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition-colors disabled:opacity-40"
+              title="Refresh exchange balance"
+            >
+              <RefreshCw className={`w-3 h-3 ${liveBalanceLoading ? 'animate-spin' : ''}`} />
+              Refresh balance
+            </button>
+          )}
           <div className="flex gap-1.5">
             {MODES.map((value) => (
               <button
@@ -273,17 +331,52 @@ export default function PerformancePage() {
         </div>
       </div>
 
+      {/* Live mode info banner */}
+      {mode === 'live' && market !== 'all' && (
+        <div className={`rounded-2xl border px-4 py-3 flex items-start gap-3 ${
+          liveBalanceAvailable
+            ? 'bg-emerald-500/5 border-emerald-500/20'
+            : liveBalanceLoading
+              ? 'bg-gray-800/40 border-gray-700'
+              : 'bg-amber-500/5 border-amber-500/20'
+        }`}>
+          {liveBalanceAvailable ? (
+            <Zap className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+          ) : (
+            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+          )}
+          <div>
+            {liveBalanceAvailable ? (
+              <p className="text-sm text-emerald-300 font-medium">
+                Exchange balance fetched live from {market} connector
+              </p>
+            ) : liveBalanceLoading ? (
+              <p className="text-sm text-gray-400">Fetching exchange balance…</p>
+            ) : (
+              <p className="text-sm text-amber-300">
+                Bot is not running — showing calculated balance (principle + realized P&L).
+                Start the bot to see live exchange balance.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {isLoading
-          ? Array.from({ length: 11 }).map((_, i) => <SkeletonCard key={i} />)
+          ? Array.from({ length: 10 }).map((_, i) => <SkeletonCard key={i} />)
           : metrics.map((metric) => {
               const Icon = metric.icon
+              const badge = (metric as any).badge
               return (
                 <div key={metric.label} className="stat-card">
                   <div className="flex items-center justify-between mb-1">
                     <span className="stat-label">{metric.label}</span>
-                    <Icon className="w-3.5 h-3.5 text-gray-700" />
+                    <div className="flex items-center gap-1.5">
+                      {badge}
+                      <Icon className="w-3.5 h-3.5 text-gray-700" />
+                    </div>
                   </div>
                   <span className={`text-xl font-semibold ${metric.color}`}>{metric.value}</span>
                   <p className="stat-sub">{metric.sub}</p>
