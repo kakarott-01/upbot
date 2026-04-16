@@ -4,59 +4,53 @@ import { useState, type ElementType } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { QUERY_KEYS } from '@/lib/query-keys'
 import dynamic from 'next/dynamic'
-const PerformanceCharts = dynamic(() => import('@/components/charts/performance-charts'), { ssr: false })
 import { apiFetch } from '@/lib/api-client'
 import {
   TrendingUp, TrendingDown, Target, Activity,
   Award, AlertTriangle, BarChart2, Banknote, Wallet,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
-import { formatINR, formatPnl } from '@/lib/utils'
+import {
+  getMarketCurrency,
+  formatAmount,
+  formatPnlAmount,
+  isMixedCurrencySet,
+  type MarketCurrency,
+} from '@/lib/currency'
+
+const PerformanceCharts = dynamic(
+  () => import('@/components/charts/performance-charts'),
+  { ssr: false },
+)
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 type DailyRow = {
-  date: string
-  pnl: number
-  fees: number
+  date:   string
+  pnl:    number
+  fees:   number
   trades: number
-  wins: number
+  wins:   number
   losses: number
-}
-
-type DailyData = {
-  principle: number
-  currentBalance: number
-  totalPnl: number
-  totalFees: number
-  totalTrades: number
-  todayPnl: number
-  todayTrades: number
-  daily: DailyRow[]
 }
 
 type PerformanceResponse = {
   summary: {
-    total: number
-    open: number
-    closed: number
-    winners: number
-    losers: number
-    totalPnl: number
-    totalFees: number
-    avgWin: number
-    avgLoss: number
-    bestTrade: number
-    worstTrade: number
-    winRate: number
-    riskReward: number
-    paperCount: number
-    liveCount: number
+    total: number; open: number; closed: number; winners: number; losers: number
+    totalPnl: number; totalFees: number; avgWin: number; avgLoss: number
+    bestTrade: number; worstTrade: number; winRate: number; riskReward: number
+    paperCount: number; liveCount: number
   }
-  dailyPnl: DailyRow[]
-  byMarket: Array<{ market: string; total: number; closed: number; winners: number; pnl: number; fees: number }>
-  cumPnl: Array<{ date: string; pnl: number }>
+  dailyPnl:       DailyRow[]
+  byMarket:       Array<{ market: string; total: number; closed: number; winners: number; pnl: number; fees: number }>
+  cumPnl:         Array<{ date: string; pnl: number }>
+  principle?:     number
+  currentBalance?:number
+  totalFees?:     number
+  totalTrades?:   number
 }
 
-/* Charts moved to dynamically loaded component to reduce initial bundle (see components/charts/performance-charts.tsx) */
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function SkeletonCard() {
   return (
@@ -69,17 +63,9 @@ function SkeletonCard() {
 }
 
 function BalanceCard({
-  label,
-  value,
-  sub,
-  color,
-  icon: Icon,
+  label, value, sub, color, icon: Icon,
 }: {
-  label: string
-  value: string
-  sub: string
-  color: string
-  icon: ElementType
+  label: string; value: string; sub: string; color: string; icon: ElementType
 }) {
   return (
     <div className="card flex flex-col gap-2 min-w-0">
@@ -117,132 +103,145 @@ function WrBadge({ wins, total }: { wins: number; total: number }) {
   )
 }
 
+// ── Page ──────────────────────────────────────────────────────────────────────
+
+const MARKETS  = ['all', 'indian', 'crypto', 'commodities', 'global'] as const
+const MODES    = ['all', 'paper', 'live'] as const
+type MarketFilter = typeof MARKETS[number]
+type ModeFilter   = typeof MODES[number]
+
 export default function PerformancePage() {
-  const [mode, setMode] = useState<'all' | 'paper' | 'live'>('all')
-  const [market, setMarket] = useState<'all' | 'indian' | 'crypto' | 'commodities' | 'global'>('all')
+  const [mode,   setMode]   = useState<ModeFilter>('all')
+  const [market, setMarket] = useState<MarketFilter>('all')
 
   const params = new URLSearchParams()
-  if (mode !== 'all') params.set('mode', mode)
+  if (mode   !== 'all') params.set('mode', mode)
   if (market !== 'all') params.set('market', market)
 
-  const hasFilters = mode !== 'all' || market !== 'all'
-  const filters = hasFilters ? { mode, market } : undefined
-  const qs = params.toString()
+  const qs       = params.toString()
   const perfPath = qs ? `/api/performance?${qs}` : '/api/performance'
+  const filters  = (mode !== 'all' || market !== 'all') ? { mode, market } : undefined
 
-  const { data, isLoading } = useQuery<PerformanceResponse & { principle?: number; currentBalance?: number; totalFees?: number; totalTrades?: number }>( {
+  const { data, isLoading } = useQuery<PerformanceResponse>({
     queryKey: QUERY_KEYS.PERFORMANCE(filters),
-    queryFn: () => apiFetch<PerformanceResponse>(perfPath),
+    queryFn:  () => apiFetch<PerformanceResponse>(perfPath),
     staleTime: 30_000,
   })
 
-  const s = data?.summary
-  const daily = data?.dailyPnl ?? []
-  const byMarket = data?.byMarket ?? []
-  const cumPnl = data?.cumPnl ?? []
+  // Currency for this view (INR for indian/commodities, USDT for crypto, USD for global)
+  const displayCurrency: MarketCurrency =
+    market !== 'all' ? getMarketCurrency(market) : 'INR'
+  const isMixed = market === 'all'
 
-  const principle = (data as any)?.principle ?? 0
-  const currentBalance = (data as any)?.currentBalance ?? 0
+  const s            = data?.summary
+  const dailyRows    = data?.dailyPnl ?? []
+  const byMarket     = data?.byMarket ?? []
+  const cumPnl       = data?.cumPnl ?? []
+  const principle    = data?.principle    ?? 0
+  const currentBalance = data?.currentBalance ?? 0
+  const totalFees    = data?.totalFees    ?? 0
+  const totalTrades  = data?.totalTrades  ?? 0
+  const totalPnl     = s?.totalPnl        ?? 0
+
   const balanceChangePct = principle > 0 ? ((currentBalance - principle) / principle) * 100 : 0
-  const dailyRows = data?.dailyPnl ?? []
-  const totalFees = (data as any)?.totalFees ?? 0
-  const totalTrades = (data as any)?.totalTrades ?? 0
-  const totalPnl = data?.summary?.totalPnl ?? 0
-  const isPositive = (cumPnl[cumPnl.length - 1]?.pnl ?? 0) >= 0
-
-  // derive today's numbers from the daily series returned by the API
-  const todayIso = new Date().toISOString().slice(0, 10)
-  const todayPnl = dailyRows.find(r => r.date === todayIso)?.pnl ?? 0
+  const todayIso         = new Date().toISOString().slice(0, 10)
+  const todayPnl         = dailyRows.find((r) => r.date === todayIso)?.pnl ?? 0
 
   const metrics = s ? [
     {
       label: 'Net P&L',
-      value: formatPnl(s.totalPnl),
-      sub: `${s.closed} closed trades`,
+      value: formatPnlAmount(s.totalPnl, displayCurrency),
+      sub:   isMixed ? '⚠ Mixed currencies — filter by market' : `${s.closed} closed trades`,
       color: s.totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400',
-      icon: s.totalPnl >= 0 ? TrendingUp : TrendingDown,
+      icon:  s.totalPnl >= 0 ? TrendingUp : TrendingDown,
     },
     {
       label: 'Fees Paid',
-      value: formatINR(s.totalFees),
-      sub: 'Entry + exit costs',
+      value: formatAmount(s.totalFees, displayCurrency),
+      sub:   'Entry + exit costs',
       color: 'text-amber-400',
-      icon: AlertTriangle,
+      icon:  AlertTriangle,
     },
     {
       label: 'Win Rate',
       value: `${s.winRate.toFixed(1)}%`,
-      sub: `${s.winners}W / ${s.losers}L`,
+      sub:   `${s.winners}W / ${s.losers}L`,
       color: s.winRate >= 50 ? 'text-emerald-400' : 'text-red-400',
-      icon: Target,
+      icon:  Target,
     },
     {
       label: 'Risk : Reward',
       value: `1 : ${s.riskReward.toFixed(2)}`,
-      sub: s.riskReward >= 1.5 ? 'Good ratio' : 'Below target',
+      sub:   s.riskReward >= 1.5 ? 'Good ratio' : 'Below target',
       color: s.riskReward >= 1.5 ? 'text-emerald-400' : 'text-amber-400',
-      icon: Activity,
+      icon:  Activity,
     },
     {
       label: 'Avg Win',
-      value: formatINR(s.avgWin),
-      sub: `Best: ${formatINR(s.bestTrade)}`,
+      value: formatAmount(s.avgWin, displayCurrency),
+      sub:   `Best: ${formatAmount(s.bestTrade, displayCurrency)}`,
       color: 'text-emerald-400',
-      icon: TrendingUp,
+      icon:  TrendingUp,
     },
     {
       label: 'Avg Loss',
-      value: formatINR(Math.abs(s.avgLoss)),
-      sub: `Worst: ${formatINR(Math.abs(s.worstTrade))}`,
+      value: formatAmount(Math.abs(s.avgLoss), displayCurrency),
+      sub:   `Worst: ${formatAmount(Math.abs(s.worstTrade), displayCurrency)}`,
       color: 'text-red-400',
-      icon: TrendingDown,
+      icon:  TrendingDown,
     },
     {
       label: 'Total Trades',
       value: s.total,
-      sub: `${s.open} open · ${s.closed} closed`,
+      sub:   `${s.open} open · ${s.closed} closed`,
       color: 'text-gray-200',
-      icon: BarChart2,
+      icon:  BarChart2,
     },
     {
       label: 'Paper Trades',
       value: s.paperCount,
-      sub: 'Simulated',
+      sub:   'Simulated',
       color: 'text-amber-400',
-      icon: Award,
+      icon:  Award,
     },
     {
       label: 'Live Trades',
       value: s.liveCount,
-      sub: 'Real money',
+      sub:   'Real money',
       color: s.liveCount > 0 ? 'text-red-400' : 'text-gray-500',
-      icon: AlertTriangle,
+      icon:  AlertTriangle,
     },
     {
       label: 'Principle Capital',
-      value: formatINR(principle),
-      sub: isLoading ? 'Loading balance baseline...' : 'Starting capital for the current filter',
+      value: formatAmount(principle, displayCurrency),
+      sub:   isMixed ? 'Crypto: USDT · Indian: INR' : 'Starting capital',
       color: 'text-gray-200',
-      icon: Banknote,
+      icon:  Banknote,
     },
     {
       label: 'Current Balance',
-      value: formatINR(currentBalance),
-      sub: isLoading
-        ? 'Loading current balance...'
-        : `${balanceChangePct >= 0 ? '+' : ''}${balanceChangePct.toFixed(2)}% from principle · ${formatPnl(todayPnl)} today`,
+      value: formatAmount(currentBalance, displayCurrency),
+      sub:   `${balanceChangePct >= 0 ? '+' : ''}${balanceChangePct.toFixed(2)}% · ${formatPnlAmount(todayPnl, displayCurrency)} today`,
       color: currentBalance >= principle ? 'text-emerald-400' : 'text-red-400',
-      icon: Wallet,
+      icon:  Wallet,
     },
   ] : []
 
   return (
     <div className="space-y-5 max-w-5xl mx-auto">
+      {/* Header + filters */}
       <div className="flex items-start justify-between flex-wrap gap-3">
-        <h1 className="text-xl font-semibold text-gray-100">Performance</h1>
+        <div>
+          <h1 className="text-xl font-semibold text-gray-100">Performance</h1>
+          {isMixed && !isLoading && (
+            <p className="text-xs text-amber-500/80 mt-1">
+              Showing all markets — crypto in USDT, Indian/Commodities in INR, Global in USD. Filter by market for comparable values.
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-3 flex-wrap">
           <div className="flex gap-1.5">
-            {(['all', 'paper', 'live'] as const).map((value) => (
+            {MODES.map((value) => (
               <button
                 key={value}
                 onClick={() => setMode(value)}
@@ -257,7 +256,7 @@ export default function PerformancePage() {
             ))}
           </div>
           <div className="flex gap-1.5">
-            {(['all', 'indian', 'crypto', 'commodities', 'global'] as const).map((value) => (
+            {MARKETS.map((value) => (
               <button
                 key={value}
                 onClick={() => setMarket(value)}
@@ -274,6 +273,7 @@ export default function PerformancePage() {
         </div>
       </div>
 
+      {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {isLoading
           ? Array.from({ length: 11 }).map((_, i) => <SkeletonCard key={i} />)
@@ -292,13 +292,22 @@ export default function PerformancePage() {
             })}
       </div>
 
-      <PerformanceCharts isLoading={isLoading} cumPnl={cumPnl} daily={daily} byMarket={byMarket} />
+      {/* Charts — pass marketFilter so they show correct currency */}
+      <PerformanceCharts
+        isLoading={isLoading}
+        cumPnl={cumPnl}
+        daily={dailyRows}
+        byMarket={byMarket}
+        marketFilter={market}
+      />
 
+      {/* Daily breakdown table */}
       <div className="space-y-4">
         <div>
           <h2 className="text-sm font-medium text-gray-300">Daily Balance</h2>
           <p className="mt-1 text-xs text-gray-500">
             Day-by-day outcomes for the selected market and mode.
+            {!isMixed && ` Values in ${displayCurrency === 'INR' ? '₹ INR' : displayCurrency === 'USDT' ? '$ USDT' : '$ USD'}.`}
           </p>
         </div>
 
@@ -337,11 +346,11 @@ export default function PerformancePage() {
                       </td>
                       <td className="py-3 px-3">
                         <span className={`text-xs font-semibold font-mono ${row.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                          {formatPnl(row.pnl)}
+                          {formatPnlAmount(row.pnl, displayCurrency)}
                         </span>
                       </td>
                       <td className="py-3 px-3 text-xs text-gray-500 font-mono">
-                        {formatINR(row.fees)}
+                        {formatAmount(row.fees, displayCurrency)}
                       </td>
                       <td className="py-3 px-3">
                         <span className="text-xs text-gray-300">{row.trades}</span>
@@ -364,19 +373,21 @@ export default function PerformancePage() {
               <span className="text-xs text-gray-500">{dailyRows.length} trading days shown</span>
               <div className="flex items-center gap-6 text-xs">
                 <span className="text-gray-600">
-                  Total fees: <span className="text-gray-400 font-mono">{formatINR(totalFees)}</span>
+                  Total fees:{' '}
+                  <span className="text-gray-400 font-mono">
+                    {formatAmount(totalFees, displayCurrency)}
+                  </span>
                 </span>
                 <span className="text-gray-600">
                   Total trades: <span className="text-gray-400">{totalTrades}</span>
                 </span>
                 <span className={`font-semibold font-mono ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {formatPnl(totalPnl)}
+                  {formatPnlAmount(totalPnl, displayCurrency)}
                 </span>
               </div>
             </div>
           )}
         </div>
-
       </div>
     </div>
   )

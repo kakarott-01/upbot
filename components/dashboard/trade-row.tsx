@@ -2,7 +2,7 @@
 
 import React from 'react'
 import type { Trade } from '@/components/dashboard/trade-table'
-import { formatINR, formatPnl } from '@/lib/utils'
+import { getMarketCurrency, formatAmount, formatPnlAmount } from '@/lib/currency'
 import { format } from 'date-fns'
 import { ArrowUpRight, ArrowDownRight, Trash2, CheckSquare, Square } from 'lucide-react'
 
@@ -16,11 +16,20 @@ interface Props {
   showMode?: boolean
 }
 
-function TradeRow({ trade, showCheckbox = false, isChecked = false, onToggle, onDelete, isBusy = false, showMode = false }: Props) {
-  const pnl = Number(trade.netPnl ?? trade.pnl ?? 0)
-  const isProfit = pnl > 0
-  const amountUsed = Number(trade.quantity ?? 0) * Number(trade.entryPrice ?? 0)
-  const feeAmount = Number(trade.feeAmount ?? 0)
+function TradeRow({
+  trade,
+  showCheckbox = false,
+  isChecked = false,
+  onToggle,
+  onDelete,
+  isBusy = false,
+  showMode = false,
+}: Props) {
+  const currency    = getMarketCurrency(trade.marketType, trade.symbol)
+  const pnl         = Number(trade.netPnl ?? trade.pnl ?? 0)
+  const isProfit    = pnl > 0
+  const amountUsed  = Number(trade.quantity ?? 0) * Number(trade.entryPrice ?? 0)
+  const feeAmount   = Number(trade.feeAmount ?? 0)
 
   return (
     <tr className={`hover:bg-gray-800/30 transition-colors group ${showCheckbox && isChecked ? 'bg-brand-500/5' : ''}`}>
@@ -32,11 +41,13 @@ function TradeRow({ trade, showCheckbox = false, isChecked = false, onToggle, on
         </td>
       ) : null}
 
+      {/* Symbol */}
       <td className={`py-2.5 px-2 ${showCheckbox ? '' : 'pl-4'} font-mono text-xs text-gray-300 font-medium`}>
         {trade.symbol}
         {trade.isPaper && <span className="ml-1.5 text-xs text-amber-600">[P]</span>}
       </td>
 
+      {/* Side */}
       <td className="py-2.5 px-2">
         <div className={`flex items-center gap-1 text-xs font-medium ${trade.side === 'buy' ? 'text-emerald-400' : 'text-red-400'}`}>
           {trade.side === 'buy' ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
@@ -44,58 +55,74 @@ function TradeRow({ trade, showCheckbox = false, isChecked = false, onToggle, on
         </div>
       </td>
 
+      {/* Market */}
       <td className="py-2.5 px-2">
         <span className="badge-gray capitalize">{trade.marketType}</span>
       </td>
 
+      {/* Entry price */}
       <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
-        {formatINR(Number(trade.entryPrice))}
+        {formatAmount(Number(trade.entryPrice), currency)}
       </td>
 
+      {/* Amount / qty */}
       <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
-        <div>{formatINR(amountUsed)}</div>
+        <div>{formatAmount(amountUsed, currency)}</div>
         <div className="text-[11px] text-gray-600">qty {Number(trade.quantity ?? 0).toFixed(4)}</div>
       </td>
 
+      {/* Exit price */}
       <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
-        {trade.exitPrice ? formatINR(Number(trade.exitPrice)) : '—'}
+        {trade.exitPrice ? formatAmount(Number(trade.exitPrice), currency) : '—'}
       </td>
 
+      {/* Net P&L */}
       <td className="py-2.5 px-2">
         {(trade.netPnl != null || trade.pnl != null) ? (
           <div>
             <span className={`text-xs font-semibold font-mono ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
-              {formatPnl(pnl)}
+              {formatPnlAmount(pnl, currency)}
             </span>
             {feeAmount > 0 && (
-              <div className="text-[11px] text-gray-600">fees {formatINR(feeAmount)}</div>
+              <div className="text-[11px] text-gray-600">
+                fees {formatAmount(feeAmount, currency)}
+              </div>
             )}
           </div>
         ) : <span className="text-gray-600 text-xs">—</span>}
       </td>
 
+      {/* Status */}
       <td className="py-2.5 px-2">
         <span className={`text-xs px-2 py-0.5 rounded-full border ${
-          trade.status === 'closed'    ? 'badge-gray' :
-          trade.status === 'open'      ? 'bg-brand-500/10 border-brand-500/20 text-brand-500' :
-          trade.status === 'failed'    ? 'bg-red-900/20 border-red-800/30 text-red-400' : 'badge-gray'
+          trade.status === 'closed'  ? 'badge-gray' :
+          trade.status === 'open'   ? 'bg-brand-500/10 border-brand-500/20 text-brand-500' :
+          trade.status === 'failed' ? 'bg-red-900/20 border-red-800/30 text-red-400' : 'badge-gray'
         }`}>{trade.status}</span>
       </td>
 
+      {/* Mode (optional column) */}
       {showMode ? (
         <td className="py-2.5 px-2">
-          {trade.isPaper ? <span className="text-xs text-amber-500">Paper</span> : <span className="text-xs text-red-400">Live</span>}
+          {trade.isPaper
+            ? <span className="text-xs text-amber-500">Paper</span>
+            : <span className="text-xs text-red-400">Live</span>}
         </td>
       ) : null}
 
+      {/* Date */}
       <td className="py-2.5 px-2 text-xs text-gray-600">
         {format(new Date(trade.openedAt), 'dd MMM HH:mm')}
       </td>
 
+      {/* Delete */}
       {onDelete ? (
         <td className="py-2.5 px-2 pr-4">
-          <button onClick={() => onDelete?.(trade.id)} disabled={isBusy}
-            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-900/20 disabled:opacity-40">
+          <button
+            onClick={() => onDelete?.(trade.id)}
+            disabled={isBusy}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-lg text-gray-600 hover:text-red-400 hover:bg-red-900/20 disabled:opacity-40"
+          >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
         </td>
