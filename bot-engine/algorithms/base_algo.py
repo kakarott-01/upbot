@@ -962,12 +962,31 @@ class BaseAlgo(ABC):
             logger.error(f"[{self.name}] ❌ Runtime reconciliation error: {e}", exc_info=True)
 
     async def run_cycle(self):
+        # CYCLE TIMEOUT FIX: ccxt fetch_ohlcv has no built-in timeout. If BingX
+        # is slow/unresponsive, the first cycle hangs forever, APScheduler skips
+        # every subsequent fire ("max instances reached"), the watchdog sees a
+        # stale heartbeat and restarts — creating an infinite restart loop where
+        # zero trades execute. Timeout at 75% of the market interval so the slot
+        # is always released before the next fire, and the watchdog always sees
+        # fresh heartbeats.
+        from scheduler import MARKET_INTERVAL as _MARKET_INTERVAL
+        _interval = _MARKET_INTERVAL.get(self.market_type, 60)
+        _timeout  = max(int(_interval * 0.75), 45)   # floor at 45s
+
         try:
-            await self._run_cycle_inner()
+            await asyncio.wait_for(self._run_cycle_inner(), timeout=_timeout)
+        except asyncio.TimeoutError:
+            logger.error(
+                f"[{self.name}] ⏰ run_cycle timed out after {_timeout}s "
+                f"(interval={_interval}s). Likely a slow/hanging ccxt call. "
+                "Skipping this cycle — next fire will proceed normally."
+            )
         except Exception as e:
             logger.error(f"[{self.name}] ❌ run_cycle crashed: {e}", exc_info=True)
             try:
-                await self.db.update_bot_status(self.user_id, "error", self._current_markets or [], error=str(e))
+                await self.db.update_bot_status(
+                    self.user_id, "error", self._current_markets or [], error=str(e)
+                )
             except Exception:
                 pass
 

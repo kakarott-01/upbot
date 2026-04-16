@@ -177,6 +177,10 @@ class ExchangeConnector:
             "secret":          self.api_secret,
             "enableRateLimit": True,
             "options":         self._options,
+            # REQUEST TIMEOUT FIX: without this ccxt makes blocking HTTP calls
+            # that can hang indefinitely on network issues, stalling the entire
+            # cycle and triggering the watchdog restart loop.
+            "timeout":         20000,   # 20 seconds per HTTP request (ccxt uses ms)
             **self.extra,
         })
         try:
