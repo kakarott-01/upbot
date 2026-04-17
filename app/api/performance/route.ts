@@ -82,7 +82,10 @@ export async function GET(req: NextRequest) {
     .from(trades)
     .where(and(...closedConditions))
 
-  const principle = Number(settings?.paperBalance ?? 10_000)
+  // Default paper balance varies by market currency: crypto/global use smaller units (100),
+  // Indian/commodities use larger units (10,000).
+  const defaultPaperBalance = (market === 'crypto' || market === 'global') ? 100 : 10_000
+  const principle = Number(settings?.paperBalance ?? defaultPaperBalance)
   const currentBalance = principle + (totals[0]?.totalPnl ?? 0)
   const totalFees = totals[0]?.totalFees ?? 0
 
