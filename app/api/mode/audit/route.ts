@@ -8,6 +8,7 @@ import { db } from '@/lib/db'
 import { modeAuditLogs } from '@/lib/schema'
 import { eq, desc } from 'drizzle-orm'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
+import { boundedIntParam } from '@/lib/api-params'
 
 export async function GET(req: NextRequest) {
   let session
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest) {
   }
 
   const { searchParams } = new URL(req.url)
-  const limit = Math.min(Number(searchParams.get('limit') ?? 20), 100)
+  const limit = boundedIntParam(searchParams.get('limit'), 20, { min: 1, max: 100 })
 
   const logs = await db.query.modeAuditLogs.findMany({
     where:   eq(modeAuditLogs.userId, session.id),

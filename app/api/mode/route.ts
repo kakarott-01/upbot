@@ -8,13 +8,14 @@
 import { NextRequest, NextResponse }           from 'next/server'
 import { auth }                                 from '@/lib/auth'
 import { db }                                   from '@/lib/db'
-import { marketConfigs, botStatuses, modeAuditLogs } from '@/lib/schema'
+import { marketConfigs, modeAuditLogs } from '@/lib/schema'
 import { eq, and }                              from 'drizzle-orm'
 import { z }                                    from 'zod'
 import { getClientIp }                          from '@/lib/utils'
 import { verifySecureToken }                    from '@/lib/secure-token'  // FIX
 import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
+import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
 
 const switchSchema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
@@ -41,14 +42,11 @@ export async function GET(req: NextRequest) {
     },
   })
 
-  const botStatus = await db.query.botStatuses.findFirst({
-    where: eq(botStatuses.userId, session.id),
-    columns: { status: true, activeMarkets: true },
-  })
+  const { snapshot } = await getBotStatusSnapshot(session.id)
 
   return NextResponse.json({
-    botRunning:    botStatus?.status === 'running',
-    activeMarkets: botStatus?.activeMarkets ?? [],
+    botRunning:    snapshot.status === 'running' || snapshot.status === 'stopping',
+    activeMarkets: snapshot.activeMarkets,
     markets:       configs,
   })
 }
@@ -71,7 +69,11 @@ export async function POST(req: NextRequest) {
   const { marketType, toMode } = parsed.data
 
   try {
-    await assertBotStoppedForSensitiveMutation(session.id, 'Stop the bot before changing trading mode.')
+    await assertBotStoppedForSensitiveMutation(
+      session.id,
+      `Stop the bot for ${marketType} before changing trading mode.`,
+      marketType,
+    )
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: (error as Error & { status?: number }).status ?? 409 })
   }

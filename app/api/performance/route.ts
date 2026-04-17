@@ -6,6 +6,9 @@ import { backtestRuns, trades, riskSettings } from '@/lib/schema'
 import { eq, and, sql, gte } from 'drizzle-orm'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
+const VALID_MARKETS = new Set(['indian', 'crypto', 'commodities', 'global', 'all'])
+const VALID_MODES = new Set(['paper', 'live', 'all'])
+
 export async function GET(req: NextRequest) {
   let session
   try {
@@ -17,6 +20,14 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const mode   = searchParams.get('mode')   // paper | live | all
   const market = searchParams.get('market') // indian | crypto | commodities | global | all
+
+  if (mode && !VALID_MODES.has(mode)) {
+    return NextResponse.json({ error: 'Invalid mode filter' }, { status: 400 })
+  }
+
+  if (market && !VALID_MARKETS.has(market)) {
+    return NextResponse.json({ error: 'Invalid market filter' }, { status: 400 })
+  }
 
   const conditions = [eq(trades.userId, session.id)]
   if (mode === 'paper') conditions.push(eq(trades.isPaper, true))

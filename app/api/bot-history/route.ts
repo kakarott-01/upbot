@@ -19,6 +19,7 @@ import { botStatuses, botSessions, trades } from '@/lib/schema'
 import { eq, desc, and, gte, lte, sql } from 'drizzle-orm'
 import { toUtcIsoString } from '@/lib/time'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
+import { boundedIntParam, dateParam } from '@/lib/api-params'
 
 // ── Inline cleanup: close stale 'running' sessions if bot is stopped ─────────
 
@@ -103,15 +104,25 @@ export async function GET(req: NextRequest) {
   const exchange = searchParams.get('exchange')
   const from     = searchParams.get('from')
   const to       = searchParams.get('to')
-  const page     = Math.max(1, Number(searchParams.get('page') ?? 1))
-  const limit    = Math.min(Number(searchParams.get('limit') ?? 20), 100)
+  const page     = boundedIntParam(searchParams.get('page'), 1)
+  const limit    = boundedIntParam(searchParams.get('limit'), 20, { min: 1, max: 100 })
   const offset   = (page - 1) * limit
+  const fromDate = dateParam(from)
+  const toDate   = dateParam(to)
+
+  if (from && !fromDate) {
+    return NextResponse.json({ error: 'Invalid from date filter' }, { status: 400 })
+  }
+
+  if (to && !toDate) {
+    return NextResponse.json({ error: 'Invalid to date filter' }, { status: 400 })
+  }
 
   const conditions = [eq(botSessions.userId, session.id)]
   if (mode === 'paper' || mode === 'live') conditions.push(eq(botSessions.mode, mode))
   if (exchange) conditions.push(eq(botSessions.exchange, exchange))
-  if (from)     conditions.push(gte(botSessions.startedAt, new Date(from)))
-  if (to)       conditions.push(lte(botSessions.startedAt, new Date(to)))
+  if (fromDate) conditions.push(gte(botSessions.startedAt, fromDate))
+  if (toDate)   conditions.push(lte(botSessions.startedAt, toDate))
 
   const [rows, countRows] = await Promise.all([
     db.query.botSessions.findMany({

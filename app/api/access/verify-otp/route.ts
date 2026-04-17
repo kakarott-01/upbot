@@ -16,7 +16,12 @@ const sql = neon(process.env.DATABASE_URL!)
 
 export async function POST(req: NextRequest) {
   try {
-    const { email, otp } = await req.json()
+    const body = await req.json().catch(() => null)
+    if (!body) {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    }
+
+    const { email, otp } = body
     if (!email || !otp) {
       return NextResponse.json({ error: 'Email and OTP required' }, { status: 400 })
     }

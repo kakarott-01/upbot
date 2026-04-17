@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     return guardErrorResponse(error)
   }
 
-  const body = await req.json()
+  const body = await req.json().catch(() => ({}))
   const parsed = saveSchema.safeParse(body)
 
   if (!parsed.success) {
@@ -35,7 +35,11 @@ export async function POST(req: NextRequest) {
   const { marketType, exchangeName, exchangeLabel, apiKey, apiSecret, extraFields } = parsed.data
 
   try {
-    await assertBotStoppedForSensitiveMutation(session.id, 'Stop the bot before editing API credentials or market wiring.')
+    await assertBotStoppedForSensitiveMutation(
+      session.id,
+      `Stop the bot for ${marketType} before editing API credentials or market wiring.`,
+      marketType,
+    )
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: (error as Error & { status?: number }).status ?? 409 })
   }

@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
     return guardErrorResponse(error)
   }
 
-  const body = await req.json()
+  const body = await req.json().catch(() => ({}))
   const parsed = schema.safeParse(body)
 
   if (!parsed.success) {

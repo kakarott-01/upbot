@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { QUERY_KEYS } from '@/lib/query-keys'
-import { Activity, BarChart3, ArrowUpRight, TrendingUp, TrendingDown, Layers } from 'lucide-react'
+import { BarChart3, ArrowUpRight, TrendingUp, TrendingDown, Layers } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { POLL_INTERVALS } from '@/lib/polling-config'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
@@ -97,33 +97,7 @@ function BotStatusCard({
   )
 }
 
-// ── Open Positions Card ───────────────────────────────────────────────────────
-function OpenPositionsCard({
-  openTradeCount, activeMarkets,
-}: {
-  openTradeCount: number; activeMarkets: string[]
-}) {
-  return (
-    <div className="card flex flex-col gap-2 min-w-0 hover:border-gray-700 transition-colors">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-gray-500 uppercase tracking-widest">Open Positions</span>
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-amber-400/10">
-          <Activity className="w-3.5 h-3.5 text-amber-400" />
-        </div>
-      </div>
-      <div>
-        <p className={`text-2xl font-bold tracking-tight ${openTradeCount > 0 ? 'text-amber-400' : 'text-gray-400'}`}>
-          {openTradeCount}
-        </p>
-        <p className="text-xs text-gray-600 mt-0.5">
-          {activeMarkets.length > 0
-            ? `Across ${activeMarkets.join(', ')}`
-            : 'No markets running'}
-        </p>
-      </div>
-    </div>
-  )
-}
+/* OpenPositionsCard removed — dashboard now shows open trades list instead */
 
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function DashboardPage() {
@@ -189,15 +163,7 @@ export default function DashboardPage() {
           icon={BarChart3}
         />
 
-        {botLoading && !botData ? (
-          <div className="card flex flex-col gap-2">
-            <div className="h-3 w-20 bg-gray-800 rounded animate-pulse" />
-            <div className="h-7 w-24 bg-gray-800 rounded animate-pulse mt-1" />
-            <div className="h-3 w-28 bg-gray-800 rounded animate-pulse" />
-          </div>
-        ) : (
-          <OpenPositionsCard openTradeCount={openTradeCount} activeMarkets={activeMarkets} />
-        )}
+        {/* Open Positions card removed per request */}
 
         {botLoading && !botData ? (
           <div className="card flex flex-col gap-2">

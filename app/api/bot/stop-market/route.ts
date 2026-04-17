@@ -79,26 +79,34 @@ async function _handleStopMarket(
     return NextResponse.json({ error: 'Bot is not running' }, { status: 409 })
   }
 
-  const requestedMarketStillActive = () =>
-    sql`coalesce(${botStatuses.activeMarkets}, '[]'::jsonb) @> ${JSON.stringify([marketType])}::jsonb`
-
   const now = new Date()
+
+  const activeSessionRows = await db.query.botSessions.findMany({
+    where: and(
+      eq(botSessions.userId, userId),
+      sql`${botSessions.status} IN ('running', 'stopping')`,
+    ),
+    columns: { market: true },
+  })
+
+  const activeMarkets = Array.from(new Set([
+    ...(((current.status === 'running' || current.status === 'stopping') ? current.activeMarkets : []) ?? []),
+    ...activeSessionRows.map((session) => session.market),
+  ]))
+
+  if (!activeMarkets.includes(marketType)) {
+    return NextResponse.json({ error: `${marketType} is not currently active` }, { status: 409 })
+  }
 
   const [claimed] = await db.update(botStatuses)
     .set({ updatedAt: now })
     .where(and(
       eq(botStatuses.userId, userId),
       sql`${botStatuses.status} <> 'stopped'`,
-      requestedMarketStillActive(),
     ))
-    .returning({ activeMarkets: botStatuses.activeMarkets })
+    .returning({ id: botStatuses.id })
 
   if (!claimed) {
-    return NextResponse.json({ error: `${marketType} is not currently active` }, { status: 409 })
-  }
-
-  const activeMarkets = (claimed.activeMarkets as string[] ?? [])
-  if (!activeMarkets.includes(marketType)) {
     return NextResponse.json({ error: `${marketType} is not currently active` }, { status: 409 })
   }
 
@@ -152,7 +160,7 @@ async function _handleStopMarket(
     where: and(
       eq(botSessions.userId, userId),
       eq(botSessions.market, marketType),
-      eq(botSessions.status, 'running'),
+      sql`${botSessions.status} IN ('running', 'stopping')`,
     ),
   })
 
@@ -178,7 +186,7 @@ async function _handleStopMarket(
 
       await db.update(botSessions)
         .set({
-          status:       sessionShouldDrain ? 'running' : 'stopped',
+          status:       sessionShouldDrain ? 'stopping' : 'stopped',
           endedAt:      sessionShouldDrain ? null : now,
           totalTrades:  row?.total  ?? 0,
           openTrades:   sessionShouldDrain ? (row?.open ?? 0) : 0,

@@ -15,6 +15,11 @@ import { db } from '@/lib/db'
 import { trades } from '@/lib/schema'
 import { eq, desc, and, gte, sql } from 'drizzle-orm'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
+import { boundedIntParam, dateParam } from '@/lib/api-params'
+
+const VALID_MARKETS = new Set(['indian', 'crypto', 'commodities', 'global', 'all'])
+const VALID_STATUSES = new Set(['pending', 'open', 'closed', 'cancelled', 'failed', 'all'])
+const VALID_MODES = new Set(['paper', 'live', 'all'])
 
 export async function GET(req: NextRequest) {
   let session
@@ -27,8 +32,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
 
   // ── Pagination ────────────────────────────────────────────────────────────
-  const page   = Math.max(1, Number(searchParams.get('page') ?? 1))
-  const limit  = Math.min(Number(searchParams.get('limit') ?? 50), 500)
+  const page   = boundedIntParam(searchParams.get('page'), 1)
+  const limit  = boundedIntParam(searchParams.get('limit'), 50, { min: 1, max: 500 })
   const offset = (page - 1) * limit
 
   // ── Filters ───────────────────────────────────────────────────────────────
@@ -37,11 +42,27 @@ export async function GET(req: NextRequest) {
   const mode   = searchParams.get('mode')
   const since  = searchParams.get('since')
 
+  if (market && !VALID_MARKETS.has(market)) {
+    return NextResponse.json({ error: 'Invalid market filter' }, { status: 400 })
+  }
+
+  if (status && !VALID_STATUSES.has(status)) {
+    return NextResponse.json({ error: 'Invalid status filter' }, { status: 400 })
+  }
+
+  if (mode && !VALID_MODES.has(mode)) {
+    return NextResponse.json({ error: 'Invalid mode filter' }, { status: 400 })
+  }
+
   const conditions = [eq(trades.userId, session.id)]
 
   if (market && market !== 'all') conditions.push(eq(trades.marketType, market as any))
   if (status && status !== 'all') conditions.push(eq(trades.status, status as any))
-  if (since)                      conditions.push(gte(trades.openedAt, new Date(since)))
+  const sinceDate = dateParam(since)
+  if (since && !sinceDate) {
+    return NextResponse.json({ error: 'Invalid since filter' }, { status: 400 })
+  }
+  if (sinceDate) conditions.push(gte(trades.openedAt, sinceDate))
   if (mode === 'paper') conditions.push(eq(trades.isPaper, true))
   if (mode === 'live')  conditions.push(eq(trades.isPaper, false))
 

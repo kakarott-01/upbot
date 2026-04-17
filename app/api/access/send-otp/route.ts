@@ -49,7 +49,12 @@ async function canSendOtp(key: string): Promise<{ ok: boolean; remaining: number
 
 export async function POST(req: NextRequest) {
   try {
-    const { email } = await req.json()
+    const body = await req.json().catch(() => null)
+    if (!body) {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+    }
+
+    const { email } = body
     if (!email || typeof email !== 'string') {
       return NextResponse.json({ error: 'Email required' }, { status: 400 })
     }
