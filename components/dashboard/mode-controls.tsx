@@ -11,6 +11,7 @@ import {
 import dynamic from 'next/dynamic'
 import { ToggleSwitch } from '@/components/ui/toggle-switch'
 import { apiFetch } from '@/lib/api-client'
+import { SectionErrorBoundary } from '@/components/ui/section-error-boundary'
 
 type TradingMode = 'paper' | 'live'
 
@@ -210,25 +211,31 @@ export function ModeControls() {
   return (
     <>
       {pending?.step === 'warning' && (
-        <ModeLiveWarningModal
-          marketType={pending.marketType}
-          onConfirm={handleWarningConfirmed}
-          onClose={() => setPending(null)}
-        />
+        <SectionErrorBoundary>
+          <ModeLiveWarningModal
+            marketType={pending.marketType}
+            onConfirm={handleWarningConfirmed}
+            onClose={() => setPending(null)}
+          />
+        </SectionErrorBoundary>
       )}
       {pending?.step === 'otp' && (
-        <ModeOtpModal
-          email={userEmail}
-          onVerified={handleOtpVerified}
-          onClose={() => setPending(null)}
-        />
+        <SectionErrorBoundary>
+          <ModeOtpModal
+            email={userEmail}
+            onVerified={handleOtpVerified}
+            onClose={() => setPending(null)}
+          />
+        </SectionErrorBoundary>
       )}
       {pending?.step === 'paper-confirm' && (
-        <ModePaperConfirmModal
-          marketType={pending.marketType}
-          onConfirm={handlePaperConfirmed}
-          onClose={() => setPending(null)}
-        />
+        <SectionErrorBoundary>
+          <ModePaperConfirmModal
+            marketType={pending.marketType}
+            onConfirm={handlePaperConfirmed}
+            onClose={() => setPending(null)}
+          />
+        </SectionErrorBoundary>
       )}
 
       <div className="card space-y-5">

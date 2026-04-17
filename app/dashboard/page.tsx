@@ -7,6 +7,7 @@ import dynamic from 'next/dynamic'
 import { POLL_INTERVALS } from '@/lib/polling-config'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 import { apiFetch } from '@/lib/api-client'
+import { SectionErrorBoundary } from '@/components/ui/section-error-boundary'
 
 const TradeTable  = dynamic(() => import('@/components/dashboard/trade-table').then(m => m.TradeTable))
 const BotControls = dynamic(() => import('@/components/dashboard/bot-controls').then(m => m.BotControls))
@@ -181,7 +182,9 @@ export default function DashboardPage() {
       </div>
 
       {/* Bot Controls — full width on its own row for clarity */}
-      <BotControls />
+      <SectionErrorBoundary>
+        <BotControls />
+      </SectionErrorBoundary>
 
       {/* Open Trades (active positions) */}
       <div className="card flex flex-col gap-3">
@@ -198,7 +201,9 @@ export default function DashboardPage() {
             <ArrowUpRight className="w-3.5 h-3.5" />
           </a>
         </div>
-        <TradeTable trades={openTrades as Trade[]} compact />
+        <SectionErrorBoundary>
+          <TradeTable trades={openTrades as Trade[]} compact />
+        </SectionErrorBoundary>
       </div>
 
     </div>

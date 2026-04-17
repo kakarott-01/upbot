@@ -5,6 +5,7 @@ const OtpModal = dynamic(() => import('@/components/modals/otp-modal'), { ssr: f
 import { CheckCircle, Loader2, Lock, KeyRound, ExternalLink, AlertTriangle, Pencil } from "lucide-react";
 import MaskedField from '@/components/dashboard/markets/MaskedField'
 import type { RevealedKeys } from '@/lib/hooks/use-exchange-otp'
+import { SectionErrorBoundary } from "@/components/ui/section-error-boundary";
 
 interface ConnectedCardProps {
   exch: { id: string; name: string; fields: string[]; docs: string };
@@ -29,12 +30,14 @@ export default function ConnectedCard({ exch, market, userEmail, botActiveForMar
   return (
     <>
       {showOtpModal && (
-        <OtpModal
-          email={userEmail}
-          revealParams={{ marketType: market.id, exchangeName: exch.id }}
-          onVerified={(data) => { setShowOtpModal(false); setRevealed(data ?? null); }}
-          onClose={() => setShowOtpModal(false)}
-        />
+        <SectionErrorBoundary>
+          <OtpModal
+            email={userEmail}
+            revealParams={{ marketType: market.id, exchangeName: exch.id }}
+            onVerified={(data) => { setShowOtpModal(false); setRevealed(data ?? null); }}
+            onClose={() => setShowOtpModal(false)}
+          />
+        </SectionErrorBoundary>
       )}
 
       <div className="bg-gray-800/40 rounded-xl border border-gray-700/50 overflow-hidden">

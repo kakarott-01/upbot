@@ -10,6 +10,7 @@ import { BOT_STATUS_QUERY_KEY, isValidBotSnapshot } from '@/lib/bot-status-clien
 import { QUERY_KEYS } from '@/lib/query-keys'
 import { useToastStore } from '@/lib/toast-store'
 import { TradesView, type Pagination, type Trade } from '@/components/dashboard/trades/trades-view'
+import { SectionErrorBoundary } from '@/components/ui/section-error-boundary'
 
 const ConfirmModal = dynamic(() => import('@/components/modals/confirm-modal').then((module) => module.ConfirmModal), { ssr: false })
 
@@ -144,12 +145,14 @@ export default function TradesPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-4">
       {confirm && (
-        <ConfirmModal
-          title={confirm.label}
-          message={confirm.message}
-          onConfirm={handleConfirmedDelete}
-          onClose={() => setConfirm(null)}
-        />
+        <SectionErrorBoundary>
+          <ConfirmModal
+            title={confirm.label}
+            message={confirm.message}
+            onConfirm={handleConfirmedDelete}
+            onClose={() => setConfirm(null)}
+          />
+        </SectionErrorBoundary>
       )}
       <TradesView
         market={market}

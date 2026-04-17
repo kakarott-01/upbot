@@ -11,6 +11,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useBotStatusQuery } from "@/lib/use-bot-status-query";
+import { SectionErrorBoundary } from "@/components/ui/section-error-boundary";
 
 interface SavedApi {
   id: string;
@@ -134,18 +135,20 @@ export default function MarketsPage() {
 
       {/* Edit OTP modal */}
       {editOtpModal && (
-        <OtpModal
-          email={userEmail}
-          revealParams={{ marketType: editOtpModal.marketId, exchangeName: editOtpModal.exchId }}
-          onVerified={(data) => {
-            const mid = editOtpModal!.marketId
-            const eid = editOtpModal!.exchId
-            setEditOtpModal(null)
-            setEditPrefill(data ?? null)
-            setEditingKey(`${mid}_${eid}`)
-          }}
-          onClose={() => setEditOtpModal(null)}
-        />
+        <SectionErrorBoundary>
+          <OtpModal
+            email={userEmail}
+            revealParams={{ marketType: editOtpModal.marketId, exchangeName: editOtpModal.exchId }}
+            onVerified={(data) => {
+              const mid = editOtpModal!.marketId
+              const eid = editOtpModal!.exchId
+              setEditOtpModal(null)
+              setEditPrefill(data ?? null)
+              setEditingKey(`${mid}_${eid}`)
+            }}
+            onClose={() => setEditOtpModal(null)}
+          />
+        </SectionErrorBoundary>
       )}
 
       {/* Market accordions */}
@@ -190,31 +193,31 @@ export default function MarketsPage() {
                   const saved  = isSaved(market.id, exch.id) ?? false;
 
                   return (
-                    <ExchangeRow
-                      key={rowKey}
-                      exch={exch}
-                      market={market}
-                      saved={saved}
-                      userEmail={userEmail}
-                      botActiveForMarket={botActiveHere}
-                      editingKey={editingKey}
-                      editPrefill={editPrefill}
-                      onEdit={() => setEditingKey(rowKey)}
-                      onSaved={() => {
-                        setEditingKey(null);
-                        setEditPrefill(null);
-                                        qc.invalidateQueries({ queryKey: QUERY_KEYS.EXCHANGE_APIS });
-                      }}
-                      onCancelEdit={() => {
-                        setEditingKey(null);
-                        setEditPrefill(null);
-                      }}
-                      onEditOtpModal={() => {
-                        // Block edit only if the bot is active for this market
-                        if (botActiveHere) return;
-                        setEditOtpModal({ marketId: market.id, exchId: exch.id });
-                      }}
-                    />
+                    <SectionErrorBoundary key={rowKey}>
+                      <ExchangeRow
+                        exch={exch}
+                        market={market}
+                        saved={saved}
+                        userEmail={userEmail}
+                        botActiveForMarket={botActiveHere}
+                        editingKey={editingKey}
+                        editPrefill={editPrefill}
+                        onEdit={() => setEditingKey(rowKey)}
+                        onSaved={() => {
+                          setEditingKey(null);
+                          setEditPrefill(null);
+                          qc.invalidateQueries({ queryKey: QUERY_KEYS.EXCHANGE_APIS });
+                        }}
+                        onCancelEdit={() => {
+                          setEditingKey(null);
+                          setEditPrefill(null);
+                        }}
+                        onEditOtpModal={() => {
+                          if (botActiveHere) return;
+                          setEditOtpModal({ marketId: market.id, exchId: exch.id });
+                        }}
+                      />
+                    </SectionErrorBoundary>
                   );
                 })}
               </div>

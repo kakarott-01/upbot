@@ -141,11 +141,11 @@ export default function LoginPage() {
   // Use Tailwind classes instead of inline style objects
 
   return (
-    <div className="min-h-screen bg-[#030712] flex items-center justify-center p-4 font-sans">
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4 font-sans">
       <div className="w-full max-w-[440px]">
         {/* Logo */}
         <div className="flex items-center justify-center gap-2.5 mb-8">
-          <div className="w-10 h-10 rounded-lg bg-[#1D9E75] flex items-center justify-center">
+          <div className="w-10 h-10 rounded-lg bg-brand-500 flex items-center justify-center">
             <svg width="20" height="20" fill="none" stroke="white" strokeWidth={2.5} viewBox="0 0 24 24">
               <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
               <polyline points="16 7 22 7 22 13"/>
@@ -153,20 +153,20 @@ export default function LoginPage() {
           </div>
           <span className="text-[22px] font-semibold text-gray-100">UpBot</span>
         </div>
-        <div className="bg-[#111827] border border-[#1f2937] rounded-xl p-7">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-7">
           {tab === 'signup' && accessVerified && (
-            <div className="flex items-center gap-2 bg-[#1d9e7530] border border-[#1d9e7530] rounded-lg px-3 py-2 mb-5">
-              <svg width="16" height="16" fill="none" stroke="#1D9E75" strokeWidth={2.5} viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
-              <span className="text-sm text-[#1D9E75] font-medium">Access code verified — you can sign up now</span>
+            <div className="flex items-center gap-2 bg-brand-500/20 border border-brand-500/20 rounded-lg px-3 py-2 mb-5">
+              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24" className="text-brand-500"><polyline points="20 6 9 17 4 12"/></svg>
+              <span className="text-sm text-brand-500 font-medium">Access code verified — you can sign up now</span>
             </div>
           )}
 
           {/* Step: choose */}
           {step === 'choose' && (
             <>
-              <div className="flex bg-[#1f2937] rounded-lg p-1 mb-5">
+              <div className="flex bg-gray-800 rounded-lg p-1 mb-5">
                 {(['signin','signup'] as const).map(t => (
-                  <button key={t} onClick={() => setTab(t)} className={`flex-1 px-3 py-2 rounded-md text-sm font-medium ${tab===t ? 'bg-[#374151] text-gray-100' : 'text-gray-500'}`}>
+                  <button key={t} onClick={() => setTab(t)} className={`flex-1 px-3 py-2 rounded-md text-sm font-medium ${tab===t ? 'bg-gray-700 text-gray-100' : 'text-gray-500'}`}>
                     {t === 'signin' ? 'Sign in' : 'Create account'}
                   </button>
                 ))}
@@ -183,7 +183,7 @@ export default function LoginPage() {
 
               {tab === 'signin' && (
                 <>
-                  <button onClick={handleGoogleLogin} disabled={loading} className="w-full py-2.5 mb-3 border border-[#374151] rounded-lg text-[#d1d5db] text-sm font-medium flex items-center justify-center gap-2">
+                  <button onClick={handleGoogleLogin} disabled={loading} className="w-full py-2.5 mb-3 border border-gray-700 rounded-lg text-gray-300 text-sm font-medium flex items-center justify-center gap-2">
                     <svg width="18" height="18" viewBox="0 0 24 24">
                       <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
                       <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
@@ -194,14 +194,14 @@ export default function LoginPage() {
                   </button>
 
                   <div className="flex items-center gap-3 my-4">
-                    <div className="flex-1 h-px bg-[#1f2937]"/><span className="text-xs text-gray-500">or use email</span><div className="flex-1 h-px bg-[#1f2937]"/>
+                    <div className="flex-1 h-px bg-gray-800"/><span className="text-xs text-gray-500">or use email</span><div className="flex-1 h-px bg-gray-800"/>
                   </div>
                 </>
               )}
 
               {tab === 'signup' && (
                 <div className="flex items-center gap-3 my-4">
-                  <div className="flex-1 h-px bg-[#1f2937]"/><span className="text-xs text-gray-500">Access code + email</span><div className="flex-1 h-px bg-[#1f2937]"/>
+                  <div className="flex-1 h-px bg-gray-800"/><span className="text-xs text-gray-500">Access code + email</span><div className="flex-1 h-px bg-gray-800"/>
                 </div>
               )}
 
@@ -210,11 +210,11 @@ export default function LoginPage() {
                   <>
                     <label className="block text-xs text-gray-400 font-medium mb-1">Access code</label>
                     <div className="flex gap-2 mb-3">
-                      <input className="flex-1 px-3 py-2 bg-[#1f2937] border border-[#374151] rounded-lg text-gray-100 outline-none" type="text" placeholder="XXXX-XXXX-XXXX"
+                      <input className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-100 outline-none" type="text" placeholder="XXXX-XXXX-XXXX"
                         value={accessCode} onChange={e => setAccessCode(e.target.value)} />
                       <button type="button" onClick={handleVerifyAccessCode}
                         disabled={loading || !accessCode}
-                        className="px-3 py-2 rounded-lg bg-[#1D9E75] text-white" >
+                        className="px-3 py-2 rounded-lg bg-brand-500 text-white" >
                         Verify
                       </button>
                     </div>
@@ -223,10 +223,10 @@ export default function LoginPage() {
                 )}
 
                 <label className="block text-xs text-gray-400 font-medium mb-1">Email address</label>
-                <input className="w-full px-3 py-2 mb-3 bg-[#1f2937] border border-[#374151] rounded-lg text-gray-100 outline-none" type="email" placeholder="you@example.com"
+                <input className="w-full px-3 py-2 mb-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-100 outline-none" type="email" placeholder="you@example.com"
                   value={email} onChange={e => setEmail(e.target.value)} required />
                 {error && <p className="text-sm text-red-400 mb-3">{error}</p>}
-                <button type="submit" className={`w-full py-3 rounded-xl text-sm font-semibold ${loading || !email ? 'bg-[#374151] text-gray-400' : 'bg-[#1D9E75] text-white'}`} disabled={loading || !email || (tab === 'signup' && !accessVerified)}>
+                <button type="submit" className={`w-full py-3 rounded-xl text-sm font-semibold ${loading || !email ? 'bg-gray-700 text-gray-400' : 'bg-brand-500 text-white'}`} disabled={loading || !email || (tab === 'signup' && !accessVerified)}>
                   {loading ? 'Sending…' : '✉ Send OTP code'}
                 </button>
               </form>
@@ -244,7 +244,7 @@ export default function LoginPage() {
               <div className="flex gap-2 justify-center mb-5">
                 {otp.map((digit, i) => (
                   <input key={i} id={`otp-${i}`}
-                    className="w-12 h-12 bg-[#1f2937] border border-[#374151] rounded-lg text-center text-2xl font-semibold text-gray-100 outline-none box-border"
+                    className="w-12 h-12 bg-gray-800 border border-gray-700 rounded-lg text-center text-2xl font-semibold text-gray-100 outline-none box-border"
                     value={digit} onChange={e => handleOtpChange(e.target.value, i)}
                     onKeyDown={e => handleOtpKeyDown(e, i)} maxLength={1} inputMode="numeric" autoFocus={i===0}
                   />
@@ -252,7 +252,7 @@ export default function LoginPage() {
               </div>
               {error && <p className="text-sm text-red-400 text-center mb-3">{error}</p>}
               <button onClick={handleVerifyOtp} disabled={otp.join('').length !== 6 || loading}
-                className={`w-full py-3 rounded-xl text-sm font-semibold ${otp.join('').length !== 6 || loading ? 'bg-[#374151] text-gray-400' : 'bg-[#1D9E75] text-white'}`}>
+                className={`w-full py-3 rounded-xl text-sm font-semibold ${otp.join('').length !== 6 || loading ? 'bg-gray-700 text-gray-400' : 'bg-brand-500 text-white'}`}>
                 {loading ? 'Verifying…' : '→ Verify & Sign In'}
               </button>
               <button onClick={() => { setStep('choose'); setOtp(['','','','','','']); setError('') }}
@@ -270,8 +270,8 @@ export default function LoginPage() {
           {/* Step: done */}
           {step === 'done' && (
             <div className="text-center py-5">
-              <div className="w-14 h-14 rounded-full bg-[#1d9e7530] flex items-center justify-center mx-auto mb-4">
-                <svg width="28" height="28" fill="none" stroke="#1D9E75" strokeWidth={2.5} viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+              <div className="w-14 h-14 rounded-full bg-brand-500/20 flex items-center justify-center mx-auto mb-4">
+                <svg width="28" height="28" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24" className="text-brand-500"><polyline points="20 6 9 17 4 12"/></svg>
               </div>
               <h2 className="text-[20px] font-semibold text-gray-100 mb-1">You are in!</h2>
               <p className="text-sm text-gray-400">Redirecting to dashboard…</p>

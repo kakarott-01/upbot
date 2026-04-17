@@ -8,6 +8,7 @@ import { QUERY_KEYS } from '@/lib/query-keys'
 import { apiFetch } from '@/lib/api-client'
 import { BOT_STATUS_QUERY_KEY, type BotStatusSnapshot } from '@/lib/bot-status-client'
 import { POLL_INTERVALS } from '@/lib/polling-config'
+import { SectionErrorBoundary } from '@/components/ui/section-error-boundary'
 
 const StopAllModal    = dynamic(() => import('@/components/modals/stop-all-modal'),    { ssr: false })
 const StartMarketModal = dynamic(() => import('@/components/modals/start-market-modal'), { ssr: false })
@@ -113,43 +114,49 @@ export const BotControlsModals = forwardRef<BotControlsModalsRef, Props>(
     return (
       <>
         {startModal && (
-          <StartMarketModal
-            market={MARKETS.find((m) => m.id === startModal.market)?.label ?? startModal.market}
-            isLive={isMarketLive(startModal.market)}
-            strategyKeys={marketStrategyKeys(startModal.market)}
-            warnings={marketWarnings(startModal.market)}
-            onConfirm={() => { confirmStart(startModal.market); setStartModal(null) }}
-            onClose={() => setStartModal(null)}
-          />
+          <SectionErrorBoundary>
+            <StartMarketModal
+              market={MARKETS.find((m) => m.id === startModal.market)?.label ?? startModal.market}
+              isLive={isMarketLive(startModal.market)}
+              strategyKeys={marketStrategyKeys(startModal.market)}
+              warnings={marketWarnings(startModal.market)}
+              onConfirm={() => { confirmStart(startModal.market); setStartModal(null) }}
+              onClose={() => setStartModal(null)}
+            />
+          </SectionErrorBoundary>
         )}
 
         {stopModal && (
-          <MarketStopModal
-            market={MARKETS.find((m) => m.id === stopModal.market)?.label ?? stopModal.market}
-            isLive={isMarketLive(stopModal.market)}
-            openTradeCount={stopModal.openTrades}
-            onDrain={() => {
-              confirmMarketStop(stopModal.market, 'graceful')
-              setStopModal(null)
-            }}
-            onCloseAll={() => {
-              confirmMarketStop(stopModal.market, 'close_all')
-              setStopModal(null)
-            }}
-            onClose={() => setStopModal(null)}
-          />
+          <SectionErrorBoundary>
+            <MarketStopModal
+              market={MARKETS.find((m) => m.id === stopModal.market)?.label ?? stopModal.market}
+              isLive={isMarketLive(stopModal.market)}
+              openTradeCount={stopModal.openTrades}
+              onDrain={() => {
+                confirmMarketStop(stopModal.market, 'graceful')
+                setStopModal(null)
+              }}
+              onCloseAll={() => {
+                confirmMarketStop(stopModal.market, 'close_all')
+                setStopModal(null)
+              }}
+              onClose={() => setStopModal(null)}
+            />
+          </SectionErrorBoundary>
         )}
 
         {showStopAllModal && (
-          <StopAllModal
-            openTradeCount={botData?.openTradeCount ?? 0}
-            hasLiveMarkets={(modeData?.markets ?? []).some(
-              (m: any) => m.mode === 'live' && (botData?.activeMarkets ?? []).includes(m.marketType)
-            )}
-            onClose={() => setShowStopAllModal(false)}
-            onCloseAll={() => { handleStopAll('close_all'); setShowStopAllModal(false) }}
-            onGraceful={() => { handleStopAll('graceful'); setShowStopAllModal(false) }}
-          />
+          <SectionErrorBoundary>
+            <StopAllModal
+              openTradeCount={botData?.openTradeCount ?? 0}
+              hasLiveMarkets={(modeData?.markets ?? []).some(
+                (m: any) => m.mode === 'live' && (botData?.activeMarkets ?? []).includes(m.marketType)
+              )}
+              onClose={() => setShowStopAllModal(false)}
+              onCloseAll={() => { handleStopAll('close_all'); setShowStopAllModal(false) }}
+              onGraceful={() => { handleStopAll('graceful'); setShowStopAllModal(false) }}
+            />
+          </SectionErrorBoundary>
         )}
       </>
     )

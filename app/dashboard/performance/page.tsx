@@ -19,6 +19,7 @@ import {
 } from '@/lib/currency'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 import type { LiveBalanceData } from '@/app/api/exchange/balance/route'
+import { SectionErrorBoundary } from '@/components/ui/section-error-boundary'
 
 const PerformanceCharts = dynamic(
   () => import('@/components/charts/performance-charts'),
@@ -104,28 +105,28 @@ type ModeFilter   = typeof MODES[number]
 export default function PerformancePage() {
   const { data: botData } = useBotStatusQuery()
 
-  // Default market: active market if bot is running, otherwise crypto
-  const [market, setMarket] = useState<MarketFilter>('crypto')
+  const [market, setMarket] = useState<MarketFilter | null>(null)
   const [mode,   setMode]   = useState<ModeFilter>('paper')
-  const [marketInitialized, setMarketInitialized] = useState(false)
 
-  // Once bot status loads, switch to the active market (only on first load)
   useEffect(() => {
-    if (!marketInitialized && botData?.activeMarkets?.[0]) {
-      const activeMarket = botData.activeMarkets[0] as MarketFilter
-      if (MARKETS.includes(activeMarket)) {
-        setMarket(activeMarket)
-        setMarketInitialized(true)
-      }
+    if (market !== null) return
+    const activeMarket = botData?.activeMarkets?.find((item) => MARKETS.includes(item as MarketFilter)) as MarketFilter | undefined
+    if (activeMarket) {
+      setMarket(activeMarket)
+    } else if (botData) {
+      setMarket('indian')
     }
-  }, [botData, marketInitialized])
+  }, [botData, market])
 
-  const params = new URLSearchParams({ mode, market })
+  const selectedMarket = market ?? 'indian'
+
+  const params = new URLSearchParams({ mode, market: selectedMarket })
   const perfPath = `/api/performance?${params.toString()}`
 
   const { data, isLoading } = useQuery<PerformanceResponse>({
-    queryKey: QUERY_KEYS.PERFORMANCE({ mode, market }),
+    queryKey: QUERY_KEYS.PERFORMANCE({ mode, market: selectedMarket }),
     queryFn:  () => apiFetch<PerformanceResponse>(perfPath),
+    enabled: market !== null,
     staleTime: 30_000,
   })
 
@@ -143,12 +144,12 @@ export default function PerformancePage() {
   })
 
   const liveMktBalance = mode === 'live'
-    ? (liveBalanceData?.markets?.[market]?.balance ?? null)
+    ? (liveBalanceData?.markets?.[selectedMarket]?.balance ?? null)
     : null
   const liveBalanceAvailable = liveMktBalance !== null && liveBalanceData?.running === true
-  const liveBalanceCurrency   = liveBalanceData?.markets?.[market]?.currency ?? null
+  const liveBalanceCurrency   = liveBalanceData?.markets?.[selectedMarket]?.currency ?? null
 
-  const displayCurrency: MarketCurrency = getMarketCurrency(market)
+  const displayCurrency: MarketCurrency = getMarketCurrency(selectedMarket)
 
   const s            = data?.summary
   const dailyRows    = data?.dailyPnl ?? []
@@ -159,6 +160,7 @@ export default function PerformancePage() {
   const totalFees    = data?.totalFees    ?? 0
   const totalTrades  = data?.totalTrades  ?? 0
   const totalPnl     = s?.totalPnl ?? 0
+  const pageLoading = market === null || isLoading
 
   const balanceChangePct = principle > 0 ? ((currentBalance - principle) / principle) * 100 : 0
   const todayIso = new Date().toISOString().slice(0, 10)
@@ -230,7 +232,7 @@ export default function PerformancePage() {
       label: liveBalanceAvailable ? 'Exchange Balance' : 'Current Balance',
       value: formatAmount(effectiveCurrentBalance, displayCurrency),
       sub:   liveBalanceAvailable
-        ? `Live ${market} · ${liveBalanceCurrency ?? displayCurrency} available`
+        ? `Live ${selectedMarket} · ${liveBalanceCurrency ?? displayCurrency} available`
         : effectiveBalanceChangePct !== null
           ? `${effectiveBalanceChangePct >= 0 ? '+' : ''}${effectiveBalanceChangePct.toFixed(2)}% · ${formatPnlAmount(todayPnl, displayCurrency)} today`
           : `${formatPnlAmount(todayPnl, displayCurrency)} today`,
@@ -256,7 +258,7 @@ export default function PerformancePage() {
         <div>
           <h1 className="text-xl font-semibold text-gray-100">Performance</h1>
           <p className="text-xs text-gray-500 mt-1">
-            {MARKET_LABELS[market]} · {mode === 'paper' ? '🟡 Paper' : '🔴 Live'}
+            {market === null ? 'Loading market...' : `${MARKET_LABELS[selectedMarket]} · ${mode === 'paper' ? '🟡 Paper' : '🔴 Live'}`}
           </p>
         </div>
 
@@ -297,7 +299,7 @@ export default function PerformancePage() {
                 key={m}
                 onClick={() => setMarket(m)}
                 className={`px-3 py-1.5 text-xs rounded-lg border capitalize transition-colors ${
-                  market === m
+                  selectedMarket === m
                     ? 'bg-brand-500/15 border-brand-500/30 text-brand-500'
                     : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
                 }`}
@@ -324,7 +326,7 @@ export default function PerformancePage() {
           }
           <p className={`text-sm ${liveBalanceAvailable ? 'text-emerald-300' : 'text-amber-300'}`}>
             {liveBalanceAvailable
-              ? `Exchange balance fetched live from ${market} connector`
+              ? `Exchange balance fetched live from ${selectedMarket} connector`
               : liveBalanceLoading
                 ? 'Fetching exchange balance…'
                 : 'Bot is not running — showing calculated balance. Start the bot to see live exchange balance.'
@@ -335,7 +337,7 @@ export default function PerformancePage() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {isLoading
+        {pageLoading
           ? Array.from({ length: 8 }).map((_, i) => <SkeletonCard key={i} />)
           : metrics.map((metric) => {
               const Icon = metric.icon
@@ -357,20 +359,22 @@ export default function PerformancePage() {
       </div>
 
       {/* Charts */}
-      <PerformanceCharts
-        isLoading={isLoading}
-        cumPnl={cumPnl}
-        daily={dailyRows}
-        byMarket={byMarket}
-        marketFilter={market}
-      />
+      <SectionErrorBoundary>
+        <PerformanceCharts
+          isLoading={pageLoading}
+          cumPnl={cumPnl}
+          daily={dailyRows}
+          byMarket={byMarket}
+          marketFilter={selectedMarket}
+        />
+      </SectionErrorBoundary>
 
       {/* Daily breakdown table */}
       <div className="space-y-4">
         <div>
           <h2 className="text-sm font-medium text-gray-300">Daily Balance</h2>
           <p className="mt-1 text-xs text-gray-500">
-            Day-by-day outcomes for {MARKET_LABELS[market]} · {mode} mode.
+            Day-by-day outcomes for {MARKET_LABELS[selectedMarket]} · {mode} mode.
             Values in {displayCurrency === 'INR' ? '₹ INR' : displayCurrency === 'USDT' ? '$ USDT' : '$ USD'}.
           </p>
         </div>
@@ -394,12 +398,12 @@ export default function PerformancePage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/50">
-                {isLoading ? (
+                {pageLoading ? (
                   Array.from({ length: 7 }).map((_, i) => <SkeletonRow key={i} />)
                 ) : dailyRows.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="text-center py-14 text-sm text-gray-600">
-                      No closed trades found for {MARKET_LABELS[market]} in {mode} mode
+                      No closed trades found for {MARKET_LABELS[selectedMarket]} in {mode} mode
                     </td>
                   </tr>
                 ) : (
@@ -432,7 +436,7 @@ export default function PerformancePage() {
             </table>
           </div>
 
-          {dailyRows.length > 0 && !isLoading && (
+          {dailyRows.length > 0 && !pageLoading && (
             <div className="flex items-center justify-between px-5 py-3 border-t border-gray-800 bg-gray-900/40">
               <span className="text-xs text-gray-500">{dailyRows.length} trading days shown</span>
               <div className="flex items-center gap-6 text-xs">

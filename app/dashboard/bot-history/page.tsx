@@ -13,6 +13,7 @@ import { format} from 'date-fns'
 import dynamic from 'next/dynamic'
 import { useToastStore } from '@/lib/toast-store'
 import { formatElapsedDuration, getSessionDurationMs } from '@/lib/time'
+import { SectionErrorBoundary } from '@/components/ui/section-error-boundary'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface BotSession {
@@ -285,11 +286,13 @@ export default function BotHistoryPage() {
     <div className="space-y-5 max-w-7xl mx-auto">
       {/* Delete Modal */}
       {toDelete && (
-        <DeleteSessionModal
-          session={toDelete}
-          onConfirm={() => deleteMut.mutate(toDelete.id)}
-          onClose={() => setToDelete(null)}
-        />
+        <SectionErrorBoundary>
+          <DeleteSessionModal
+            session={toDelete}
+            onConfirm={() => deleteMut.mutate(toDelete.id)}
+            onClose={() => setToDelete(null)}
+          />
+        </SectionErrorBoundary>
       )}
 
       {/* Header */}

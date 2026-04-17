@@ -1,6 +1,6 @@
 "use client";
 
-import type { MutableRefObject, RefObject } from "react";
+import type { RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { BOT_STATUS_QUERY_KEY, isValidBotSnapshot, type BotStatusSnapshot } from "@/lib/bot-status-client";
 import { QUERY_KEYS } from "@/lib/query-keys";
@@ -18,7 +18,6 @@ type StopMarketResponse = {
 
 type Args = {
   modalsRef: RefObject<BotControlsModalsRef | null>;
-  isFiringRef: MutableRefObject<boolean>;
   unlockAction: (id: string) => void;
   pushToast: (toast: Omit<ToastItem, "id">) => void;
 };
@@ -47,7 +46,7 @@ function fallbackSnapshot(status: "running" | "stopping", stopMode: "graceful" |
   };
 }
 
-export function useBotControlMutations({ modalsRef, isFiringRef, unlockAction, pushToast }: Args) {
+export function useBotControlMutations({ modalsRef, unlockAction, pushToast }: Args) {
   const qc = useQueryClient();
 
   const syncMutation = useMutation({
@@ -82,7 +81,6 @@ export function useBotControlMutations({ modalsRef, isFiringRef, unlockAction, p
       if (context?.previous && isValidBotSnapshot(context.previous)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previous);
     },
     onSettled: async (_data, _err, vars: { markets: string[] } | undefined) => {
-      isFiringRef.current = false;
       vars?.markets.forEach((market) => unlockAction(`start-market:${market}`));
       await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY });
       qc.invalidateQueries({ queryKey: QUERY_KEYS.BOT_HISTORY() });
@@ -117,7 +115,6 @@ export function useBotControlMutations({ modalsRef, isFiringRef, unlockAction, p
       });
     },
     onSettled: async (_data, _err, mode: "close_all" | "graceful" | undefined) => {
-      isFiringRef.current = false;
       modalsRef.current?.closeAll?.();
       if (mode) unlockAction(`stop-all:${mode}`);
       await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY });
@@ -157,7 +154,6 @@ export function useBotControlMutations({ modalsRef, isFiringRef, unlockAction, p
     onSettled: async (_data, _err, vars: { marketType: MarketId } | undefined) => {
       if (vars) unlockAction(`stop-market:${vars.marketType}`);
       modalsRef.current?.closeStopModal?.();
-      isFiringRef.current = false;
       await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY });
       qc.invalidateQueries({ queryKey: QUERY_KEYS.BOT_HISTORY() });
     },

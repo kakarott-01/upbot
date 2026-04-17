@@ -8,6 +8,7 @@ import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 import { formatElapsedDuration, getSessionDurationMs } from '@/lib/time'
 import { apiFetch } from '@/lib/api-client'
 import { QUERY_KEYS } from '@/lib/query-keys'
+import { useSessionEventStore } from '@/lib/session-events'
 
 interface TopBarProps {
   user?: {
@@ -21,7 +22,8 @@ export function TopBar({ user }: TopBarProps) {
   const [menuOpen,      setMenuOpen]      = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [isSigningOut,  setIsSigningOut]  = useState(false)
-  const [sessionExpired, setSessionExpired] = useState(false)
+  const sessionExpired = useSessionEventStore((s) => s.sessionExpired)
+  const dismissSessionExpired = useSessionEventStore((s) => s.dismissSessionExpired)
 
   // FIX: Live clock — ticks every second so the elapsed timer updates smoothly
   const [now, setNow] = useState(Date.now())
@@ -29,21 +31,6 @@ export function TopBar({ user }: TopBarProps) {
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
   }, [])
-
-  useEffect(() => {
-    try {
-      const v = window.localStorage.getItem('sessionExpired')
-      if (v === '1') {
-        setSessionExpired(true)
-        window.localStorage.removeItem('sessionExpired')
-      }
-    } catch (_) {}
-  }, [])
-
-  function dismissSessionExpired() {
-    setSessionExpired(false)
-    try { window.localStorage.removeItem('sessionExpired') } catch (_) {}
-  }
 
   const { data: botData, isLoading: botLoading } = useBotStatusQuery()
 

@@ -3,23 +3,17 @@ import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-qu
 import { useState } from 'react'
 import { ToastViewport } from '@/components/ui/toast-viewport'
 import { useToastStore } from '@/lib/toast-store'
-import { QUERY_KEYS } from '@/lib/query-keys'
+import { isFinancialQueryKey } from '@/lib/query-keys'
 import { POLL_INTERVALS } from '@/lib/polling-config'
-
-// Financial queries that must NOT use stale placeholder data
-const FINANCIAL_QUERY_KEYS = new Set([
-  // Use the canonical keys from QUERY_KEYS so changes remain centralized
-  QUERY_KEYS.TRADES_SUMMARY[0],
-  QUERY_KEYS.PERFORMANCE().at(0)!,
-  QUERY_KEYS.DAILY_PNL().at(0)!,
-  QUERY_KEYS.TRADES().at(0)!,
-])
+import { useSessionEventStore } from '@/lib/session-events'
 
 // Track if we've already shown the session expired toast to prevent spam
 let sessionExpiredToastShown = false
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const pushToast = useToastStore((s) => s.push)
+  const notifySessionExpired = useSessionEventStore((s) => s.notifySessionExpired)
+  const notifyAccessDenied = useSessionEventStore((s) => s.notifyAccessDenied)
 
   const [queryClient] = useState(() => new QueryClient({
     queryCache: new QueryCache({
@@ -35,7 +29,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
           if (!isBackgroundPoll && !sessionExpiredToastShown) {
             sessionExpiredToastShown = true
-            try { window.localStorage.setItem('sessionExpired', '1') } catch (_) {}
+            notifySessionExpired()
             try {
               pushToast({ tone: 'error', title: 'Session expired', description: 'Please re-login.' })
             } catch (_) {}
@@ -46,7 +40,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         }
 
         if (error.status === 403 && window.location.pathname !== '/access') {
-          try { window.localStorage.setItem('accessDenied', '1') } catch (_) {}
+          notifyAccessDenied()
           try {
             pushToast({ tone: 'error', title: 'Access denied', description: 'You no longer have access.' })
           } catch (_) {}
@@ -62,8 +56,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
         // FIX: Only use placeholder data for non-financial queries
         // Financial data (P&L, trades) should show loading state, not stale numbers
         placeholderData: (prev: any, query: any) => {
-          const firstKey = query?.queryKey?.[0]
-          if (typeof firstKey === 'string' && FINANCIAL_QUERY_KEYS.has(firstKey)) {
+          if (isFinancialQueryKey(query?.queryKey)) {
             return undefined  // Show loading skeleton for financial data
           }
           return prev  // Keep stale data for UI state (bot status, configs)

@@ -1,7 +1,26 @@
 type ApiError = Error & { status?: number; data?: any }
 
-export async function apiFetch<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
-  const res = await fetch(input, init)
+export async function apiFetch<T>(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
+  const upstreamSignal = init?.signal
+
+  if (upstreamSignal) {
+    if (upstreamSignal.aborted) controller.abort()
+    else upstreamSignal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+
+  let res: Response
+  try {
+    res = await fetch(input, { ...init, signal: controller.signal })
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s`)
+    }
+    throw error
+  } finally {
+    clearTimeout(timeoutId)
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))

@@ -53,10 +53,10 @@ export default function AccessPage() {
   // Replaced inline style object with Tailwind classes for consistency
 
   return (
-    <div className="min-h-screen bg-[#030712] flex items-center justify-center p-4 font-sans">
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4 font-sans">
       <div className="w-full max-w-[420px]">
         <div className="flex items-center justify-center gap-2.5 mb-8">
-          <div className="w-9 h-9 rounded-lg bg-[#1D9E75] flex items-center justify-center flex-shrink-0">
+          <div className="w-9 h-9 rounded-lg bg-brand-500 flex items-center justify-center flex-shrink-0">
             <svg width="18" height="18" fill="none" stroke="white" strokeWidth={2.5} viewBox="0 0 24 24">
               <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/>
               <polyline points="16 7 22 7 22 13"/>
@@ -65,19 +65,19 @@ export default function AccessPage() {
           <span className="text-[20px] font-semibold text-gray-100">UpBot</span>
         </div>
 
-        <div className="bg-[#111827] border border-[#1f2937] rounded-xl p-6">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
           <div className="flex items-center gap-1.5 mb-1">
-            <svg width="13" height="13" fill="none" stroke="#f59e0b" strokeWidth={2} viewBox="0 0 24 24">
+            <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" className="text-amber-500">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             </svg>
-            <span className="text-[11px] text-[#f59e0b] font-semibold uppercase tracking-[0.06em]">Private Access</span>
+            <span className="text-[11px] text-amber-500 font-semibold uppercase tracking-[0.06em]">Private Access</span>
           </div>
 
           <h1 className="text-[20px] font-semibold text-gray-100 mb-1">Enter access code</h1>
           <p className="text-sm text-gray-400 mb-5">Single-use code required. Expires in {mins}:{secs}</p>
 
-          <div className="h-3 bg-[#1f2937] rounded-full mb-5 overflow-hidden">
-            <div style={{ width: `${timerPct}%` }} className={`h-full rounded-full transition-all ${timeLeft < 120 ? 'bg-red-500' : 'bg-[#1D9E75]'}`} />
+          <div className="h-3 bg-gray-800 rounded-full mb-5 overflow-hidden">
+            <div style={{ width: `${timerPct}%` }} className={`h-full rounded-full transition-all ${timeLeft < 120 ? 'bg-red-500' : 'bg-brand-500'}`} />
           </div>
 
           <form onSubmit={handleSubmit}>
@@ -86,7 +86,7 @@ export default function AccessPage() {
                   <div className="flex items-center gap-1.5">
                     <span className="text-[11px] text-gray-500">Attempts:</span>
                     {[0,1,2].map(i => (
-                      <div key={i} className={`w-2 h-2 rounded-full ${i < remaining ? 'bg-red-500' : 'bg-[#374151]'}`} />
+                      <div key={i} className={`w-2 h-2 rounded-full ${i < remaining ? 'bg-red-500' : 'bg-gray-700'}`} />
                     ))}
                   </div>
                 </div>
@@ -99,7 +99,7 @@ export default function AccessPage() {
               maxLength={14}
               disabled={locked || loading}
               autoComplete="off"
-              className="w-full px-4 py-3 mb-3 bg-[#1f2937] border border-[#374151] rounded-lg text-gray-100 text-lg font-mono text-center tracking-widest outline-none"
+              className="w-full px-4 py-3 mb-3 bg-gray-800 border border-gray-700 rounded-lg text-gray-100 text-lg font-mono text-center tracking-widest outline-none"
             />
 
             {error && (
@@ -115,24 +115,24 @@ export default function AccessPage() {
             <button
               type="submit"
               disabled={loading || locked || !code.trim()}
-              className={`w-full py-3 rounded-lg text-white font-semibold flex items-center justify-center gap-2 ${loading || locked || !code.trim() ? 'bg-[#374151]' : 'bg-[#1D9E75]'}`}
+              className={`w-full py-3 rounded-lg text-white font-semibold flex items-center justify-center gap-2 ${loading || locked || !code.trim() ? 'bg-gray-700' : 'bg-brand-500'}`}
             >
               {loading ? 'Verifying…' : locked ? '🔒 Access Locked' : 'Verify Code'}
             </button>
           </form>
 
           <div className="mt-4 text-sm text-gray-400 text-center">
-            Already have an account? <a href="/login" className="text-[#1D9E75] underline">Sign in</a>
+            Already have an account? <a href="/login" className="text-brand-500 underline">Sign in</a>
           </div>
 
-          <div className="mt-5 pt-4 border-t border-[#1f2937]">
+          <div className="mt-5 pt-4 border-t border-gray-800">
             {[
-              { dot:'#1D9E75', text:'Single-use — code is burned on entry' },
-              { dot:'#1D9E75', text:'Expires 15 minutes after generation' },
-              { dot:'#ef4444', text:'3 wrong attempts locks your IP for 30 minutes' },
+              { danger: false, text:'Single-use — code is burned on entry' },
+              { danger: false, text:'Expires 15 minutes after generation' },
+              { danger: true, text:'3 wrong attempts locks your IP for 30 minutes' },
             ].map((item, i) => (
               <div key={i} className="flex items-start gap-2.5 mb-2">
-                <div className={`w-1.5 h-1.5 rounded-full mt-1 ${item.dot === '#ef4444' ? 'bg-red-500' : 'bg-[#1D9E75]'}`} />
+                <div className={`w-1.5 h-1.5 rounded-full mt-1 ${item.danger ? 'bg-red-500' : 'bg-brand-500'}`} />
                 <span className="text-sm text-gray-400">{item.text}</span>
               </div>
             ))}

@@ -64,10 +64,6 @@ type StrategyConfigDataResponse = {
 export function BotControls() {
   const pushToast = useToastStore((s) => s.push);
   const modalsRef = useRef<BotControlsModalsRef | null>(null);
-
-  // FIX: Use ref for firing state (no re-render on toggle)
-  const isFiringRef = useRef(false);
-  // Action lock helpers (extracted)
   const { lockAction, unlockAction, isLocked } = useActionLocks();
 
   const { data, dataUpdatedAt } = useBotStatusQuery();
@@ -116,7 +112,6 @@ export function BotControls() {
   const { syncMutation, stopAllMutation, stopMarketMutation } =
     useBotControlMutations({
       modalsRef,
-      isFiringRef,
       unlockAction,
       pushToast,
     });
@@ -148,7 +143,6 @@ export function BotControls() {
   const handleMarketClick = useCallback(
     (marketId: string) => {
       if (
-        isFiringRef.current ||
         syncMutation.isPending ||
         stopAllMutation.isPending ||
         stopMarketMutation.isPending ||
@@ -177,7 +171,6 @@ export function BotControls() {
     const actionId = `start-market:${marketId}`;
     if (isLocked(actionId)) return;
     lockAction(actionId);
-    isFiringRef.current = true;
     const nextMarkets = [...activeMarkets, marketId];
     syncMutation.mutate({ markets: nextMarkets });
   }
@@ -189,7 +182,6 @@ export function BotControls() {
     const actionId = `stop-market:${marketId}`;
     if (isLocked(actionId)) return;
     lockAction(actionId);
-    isFiringRef.current = true;
     stopMarketMutation.mutate({ marketType: marketId, mode });
   }
 
@@ -197,7 +189,6 @@ export function BotControls() {
     const actionId = `stop-all:${mode}`;
     if (isLocked(actionId)) return;
     lockAction(actionId);
-    isFiringRef.current = true;
     stopAllMutation.mutate(mode);
   }
 

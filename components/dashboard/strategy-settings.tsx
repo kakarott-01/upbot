@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Layers3, Loader2 } from "lucide-react";
@@ -9,6 +9,7 @@ import { QUERY_KEYS } from "@/lib/query-keys";
 import { apiFetch } from "@/lib/api-client";
 import { useToastStore } from "@/lib/toast-store";
 import { InlineAlert } from "@/components/ui/inline-alert";
+import { SectionErrorBoundary } from "@/components/ui/section-error-boundary";
 import MarketSection from "@/components/dashboard/strategy-settings/MarketSection";
 import { configFromMarket, createDefaultConfig, defaultStrategySettings, RuntimeConfig, toStrategyPayload } from "@/components/dashboard/strategy-settings/helpers";
 import { useStrategySettings } from "@/components/dashboard/strategy-settings/useStrategySettings";
@@ -23,17 +24,47 @@ const MARKETS = [
 ] as const;
 
 type MarketId = (typeof MARKETS)[number]["id"];
+const DEFAULT_CONFIGS: Record<MarketId, RuntimeConfig> = {
+  crypto: createDefaultConfig(),
+  indian: createDefaultConfig(),
+  global: createDefaultConfig(),
+  commodities: createDefaultConfig(),
+};
 
 export function StrategySettings() {
   const qc = useQueryClient();
   const pushToast = useToastStore((state) => state.push);
-  const [overrides, setOverrides] = useState<Record<string, RuntimeConfig>>({});
+  const [cryptoOverride, setCryptoOverride] = useState<RuntimeConfig | null>(null);
+  const [indianOverride, setIndianOverride] = useState<RuntimeConfig | null>(null);
+  const [globalOverride, setGlobalOverride] = useState<RuntimeConfig | null>(null);
+  const [commoditiesOverride, setCommoditiesOverride] = useState<RuntimeConfig | null>(null);
   const [savingMarket, setSavingMarket] = useState<string | null>(null);
   const [expandedMarkets, setExpandedMarkets] = useState<Set<string>>(new Set());
   const [pendingAggressiveSave, setPendingAggressiveSave] = useState<null | { marketType: MarketId; config: RuntimeConfig }>(null);
   const { strategyData, strategiesLoading, configData, configsLoading, riskData, botData } = useStrategySettings();
 
   const serverConfigs = useMemo(() => Object.fromEntries((configData?.markets ?? []).map((market: any) => [market.marketType, configFromMarket(market)])), [configData]);
+  const overrides = useMemo<Record<MarketId, RuntimeConfig | null>>(() => ({
+    crypto: cryptoOverride,
+    indian: indianOverride,
+    global: globalOverride,
+    commodities: commoditiesOverride,
+  }), [cryptoOverride, indianOverride, globalOverride, commoditiesOverride]);
+  const overridesRef = useRef(overrides);
+  const serverConfigsRef = useRef(serverConfigs);
+  useEffect(() => {
+    overridesRef.current = overrides;
+    serverConfigsRef.current = serverConfigs;
+  }, [overrides, serverConfigs]);
+  const setOverride = useCallback((marketType: MarketId, value: RuntimeConfig | null) => {
+    const setters = {
+      crypto: setCryptoOverride,
+      indian: setIndianOverride,
+      global: setGlobalOverride,
+      commodities: setCommoditiesOverride,
+    };
+    setters[marketType](value);
+  }, []);
 
   const saveMutation = useMutation({
     mutationFn: ({ marketType, config, aggressiveConfirmed }: { marketType: MarketId; config: RuntimeConfig; aggressiveConfirmed: boolean }) =>
@@ -54,11 +85,7 @@ export function StrategySettings() {
         return { ...old, markets: old.markets.map((market: any) => (market.marketType === marketType ? { ...market, ...config, marketType } : market)) };
       });
       qc.invalidateQueries({ queryKey: QUERY_KEYS.STRATEGY_CONFIGS });
-      setOverrides((prev) => {
-        const copy = { ...prev };
-        delete copy[marketType];
-        return copy;
-      });
+      setOverride(marketType, null);
       pushToast({ tone: "success", title: `${MARKETS.find((item) => item.id === marketType)?.label ?? marketType} saved`, description: "Strategy allocation and market controls are updated." });
     },
     onError: (error: Error, _vars, context: any) => {
@@ -78,8 +105,8 @@ export function StrategySettings() {
   const strategiesByMarket = strategyData?.strategiesByMarket ?? {};
 
   const updateMarket = useCallback((marketType: MarketId, updater: (current: RuntimeConfig) => RuntimeConfig) => {
-    setOverrides((previous) => ({ ...previous, [marketType]: updater(previous[marketType] ?? serverConfigs[marketType] ?? createDefaultConfig()) }));
-  }, [serverConfigs]);
+    setOverride(marketType, updater(overridesRef.current[marketType] ?? serverConfigsRef.current[marketType] ?? DEFAULT_CONFIGS[marketType]));
+  }, [setOverride]);
 
   const toggleStrategy = useCallback((marketType: MarketId, strategyKey: string) => {
     updateMarket(marketType, (current) => {
@@ -106,14 +133,14 @@ export function StrategySettings() {
 
   return (
     <>
-      {pendingAggressiveSave ? <AggressiveModeModal market={MARKETS.find((item) => item.id === pendingAggressiveSave.marketType)?.label ?? pendingAggressiveSave.marketType} onCancel={() => setPendingAggressiveSave(null)} onConfirm={() => saveMutation.mutate({ marketType: pendingAggressiveSave.marketType, config: pendingAggressiveSave.config, aggressiveConfirmed: true })} /> : null}
+      {pendingAggressiveSave ? <SectionErrorBoundary><AggressiveModeModal market={MARKETS.find((item) => item.id === pendingAggressiveSave.marketType)?.label ?? pendingAggressiveSave.marketType} onCancel={() => setPendingAggressiveSave(null)} onConfirm={() => saveMutation.mutate({ marketType: pendingAggressiveSave.marketType, config: pendingAggressiveSave.config, aggressiveConfirmed: true })} /></SectionErrorBoundary> : null}
       <div className="card space-y-5 overflow-hidden">
         <div className="flex items-center gap-2 border-b border-gray-800 pb-3"><Layers3 className="h-4 w-4 text-brand-500" /><div><h2 className="text-sm font-medium text-gray-200">Strategy Engine</h2><p className="mt-0.5 text-xs text-gray-500">GLOBAL hard limits live in Bot Settings. MARKET and STRATEGY controls below guide allocation inside those boundaries.</p></div></div>
         <InlineAlert tone="info" title="Capital hierarchy">Global Risk Controls are hard limits. Strategy Allocation is a soft layer per market, and AGGRESSIVE mode enforces per-strategy capital splits before global checks approve the final order.</InlineAlert>
         {activeMarkets.length > 0 ? <InlineAlert tone="info" title={`Bot running on: ${activeMarkets.join(", ")}`}>Active markets are locked. You can freely edit strategies for idle markets below.</InlineAlert> : null}
         <div className="space-y-3">
           {MARKETS.map((market) => (
-            <MarketSection key={market.id} market={market} isExpanded={expandedMarkets.has(market.id)} config={overrides[market.id] ?? serverConfigs[market.id] ?? createDefaultConfig()} isBotActiveHere={activeMarkets.includes(market.id)} totalCapital={totalCapital} strategies={strategiesByMarket[market.id] ?? []} updateMarket={updateMarket} toggleStrategy={toggleStrategy} handleSave={handleSave} savingMarket={savingMarket} isSavePending={saveMutation.isPending} toggleMarket={toggleMarket} />
+            <MarketSection key={market.id} market={market} isExpanded={expandedMarkets.has(market.id)} config={overrides[market.id] ?? serverConfigs[market.id] ?? DEFAULT_CONFIGS[market.id]} isBotActiveHere={activeMarkets.includes(market.id)} totalCapital={totalCapital} strategies={strategiesByMarket[market.id] ?? []} updateMarket={updateMarket} toggleStrategy={toggleStrategy} handleSave={handleSave} savingMarket={savingMarket} isSavePending={saveMutation.isPending} toggleMarket={toggleMarket} />
           ))}
         </div>
       </div>

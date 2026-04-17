@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query'
 import { QUERY_KEYS } from '@/lib/query-keys'
 import { apiFetch } from '@/lib/api-client'
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { POLL_INTERVALS } from '@/lib/polling-config'
 
 export type Trade = {
@@ -64,8 +64,6 @@ export default function useTrades({ market = 'all', status = 'all', mode = 'all'
     queryKey: QUERY_KEYS.TRADES({ market, status, mode, page }),
     queryFn:  () => apiFetch<TradesResponse>(`/api/trades?${buildParams(page)}`),
     staleTime: POLL_INTERVALS.BOT_IDLE,
-    // Limit re-renders while paginated data updates or optimistic edits occur
-    placeholderData: (prev: any) => prev,
   })
 
   const prefetchPage = useCallback((p: number) => {
@@ -75,6 +73,13 @@ export default function useTrades({ market = 'all', status = 'all', mode = 'all'
       staleTime: POLL_INTERVALS.BOT_IDLE,
     })
   }, [qc, market, status, mode, buildParams])
+
+  useEffect(() => {
+    if (!data?.pagination) return
+    const { page: currentPage, pages } = data.pagination
+    if (currentPage > 1) prefetchPage(currentPage - 1)
+    if (currentPage < pages) prefetchPage(currentPage + 1)
+  }, [data?.pagination, prefetchPage])
 
   return { data, isLoading, refetch, prefetchPage }
 }
