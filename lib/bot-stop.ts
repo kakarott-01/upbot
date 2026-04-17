@@ -1,15 +1,11 @@
-// lib/bot-stop.ts — v3
+// lib/bot-stop.ts — v4
 // ================
-// FIX (500 on stop): The for-loop over runningSessions previously had no
-// per-iteration error handling. A single DB failure (Neon connection timeout,
-// intermittent network blip) would throw out of _doImmediateStop entirely,
-// propagating up through _handleStop to the route and causing an unhandled
-// 500. Now each session update is wrapped individually — one failed update
-// is logged but does NOT abort the rest of the cleanup.
-//
-// F6 FIX (from v2): DB-level idempotency guard on _doImmediateStop still
-// in place — only one concurrent caller can claim the stop via the
-// conditional UPDATE WHERE status IN ('stopping','running').
+// FIX: Added activeMarkets: [] to _doImmediateStop.
+// ROOT CAUSE: Previously the update never cleared activeMarkets.
+// buildSessions() in status-snapshot.ts checks activeMarkets.includes(market)
+// to decide if a session shows as 'running'. With activeMarkets still containing
+// ['crypto'] after stop, the UI showed Crypto as "Running" even though
+// bot_statuses.status = 'stopped'. One-line fix, critical impact.
 
 import { db } from '@/lib/db'
 import { botStatuses, botSessions, trades } from '@/lib/schema'
@@ -17,15 +13,16 @@ import { eq, and, sql } from 'drizzle-orm'
 import { postToBotEngine } from '@/lib/bot-engine-client'
 
 export async function _doImmediateStop(userId: string, now: Date) {
-  // ── F6: Atomic claim — only one concurrent call succeeds ──────────────────
+  // ── Atomic claim — only one concurrent call succeeds ──────────────────
   const claimed = await db
     .update(botStatuses)
     .set({
-      status:     'stopped',
-      stoppedAt:  now,
-      updatedAt:  now,
-      stopMode:   null,
-      stoppingAt: null,
+      status:       'stopped',
+      stoppedAt:    now,
+      updatedAt:    now,
+      stopMode:     null,
+      stoppingAt:   null,
+      activeMarkets: [],   // FIX: must clear so buildSessions() stops showing markets as running
     })
     .where(
       and(
@@ -40,10 +37,10 @@ export async function _doImmediateStop(userId: string, now: Date) {
     return
   }
 
-  // ── We claimed the stop — notify engine (best-effort) ────────────────────
+  // ── Notify engine (best-effort) ────────────────────────────────────────
   postToBotEngine('/bot/stop', { user_id: userId }, 8_000).catch(() => null)
 
-  // ── Find all sessions that are still running ──────────────────────────────
+  // ── Find all sessions that are still running ───────────────────────────
   let runningSessions: Awaited<ReturnType<typeof db.query.botSessions.findMany>>
   try {
     runningSessions = await db.query.botSessions.findMany({
@@ -53,16 +50,11 @@ export async function _doImmediateStop(userId: string, now: Date) {
       ),
     })
   } catch (e) {
-    // If we can't even query sessions, log and return — bot_statuses is
-    // already marked stopped which is the critical state.
     console.error(`[bot-stop] Failed to query running sessions for user=${userId}:`, e)
     return
   }
 
-  // ── Update each session with final trade stats ────────────────────────────
-  // FIX: Each session is updated independently. A failure on one session
-  // is logged but does NOT prevent the others from being updated, and does
-  // NOT throw out of _doImmediateStop (which was the root cause of the 500).
+  // ── Update each session with final trade stats ─────────────────────────
   for (const s of runningSessions) {
     try {
       const stats = await db
@@ -76,10 +68,11 @@ export async function _doImmediateStop(userId: string, now: Date) {
         .where(and(
           eq(trades.userId, userId),
           eq(trades.marketType, s.market as any),
-          // Guard against null startedAt to avoid null comparison in SQL
           s.startedAt
             ? sql`${trades.openedAt} >= ${s.startedAt}`
             : sql`true`,
+          // Upper bound: only count trades opened before this session ended
+          sql`${trades.openedAt} <= ${now}`,
         ))
 
       const row = stats[0]
@@ -94,7 +87,6 @@ export async function _doImmediateStop(userId: string, now: Date) {
         })
         .where(eq(botSessions.id, s.id))
     } catch (sessionErr) {
-      // Log but continue — don't let one session's failure abort the rest
       console.error(
         `[bot-stop] Failed to update session ${s.id} for user=${userId}:`,
         sessionErr

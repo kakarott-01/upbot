@@ -1,14 +1,22 @@
 'use client'
 
 import React from 'react'
-import { Square, X, Shield } from 'lucide-react'
+import { Square, X, Shield, Zap } from 'lucide-react'
 import { InlineAlert } from '@/components/ui/inline-alert'
 
-export default function MarketStopModal({ market, isLive, openTradeCount, onDrain, onClose }: {
+export default function MarketStopModal({
+  market,
+  isLive,
+  openTradeCount,
+  onDrain,
+  onCloseAll,
+  onClose,
+}: {
   market: string
   isLive: boolean
   openTradeCount: number
   onDrain: () => void
+  onCloseAll: () => void
   onClose: () => void
 }) {
   return (
@@ -24,13 +32,11 @@ export default function MarketStopModal({ market, isLive, openTradeCount, onDrai
           <div className="min-w-0">
             <p className="text-sm font-semibold text-gray-100">Stop {market}</p>
             <p className="text-xs text-gray-500 mt-0.5">
-              {openTradeCount === -1 ? (
-                'Fetching latest positions...'
-              ) : openTradeCount > 0 ? (
-                `${openTradeCount} open position${openTradeCount !== 1 ? 's' : ''} · other markets continue running`
-              ) : (
-                'No open positions · other markets continue running'
-              )}
+              {openTradeCount === -1
+                ? 'Fetching latest positions...'
+                : openTradeCount > 0
+                  ? `${openTradeCount} open position${openTradeCount !== 1 ? 's' : ''} · other markets continue`
+                  : 'No open positions · other markets continue'}
             </p>
           </div>
           <button onClick={onClose} className="ml-auto text-gray-600 hover:text-gray-300 transition-colors flex-shrink-0">
@@ -40,20 +46,47 @@ export default function MarketStopModal({ market, isLive, openTradeCount, onDrai
 
         <div className="px-5 py-5 space-y-3">
           {isLive && openTradeCount > 0 && (
-            <InlineAlert tone="danger" title="Live positions need manual supervision if unmonitored.">
-              After stopping, open positions will not have automated SL/TP until you restart or close them.
+            <InlineAlert tone="danger" title="Live positions will be unmonitored if you stop immediately.">
+              Stopping removes automated SL/TP supervision. Use drain to let positions exit naturally.
             </InlineAlert>
           )}
 
-          <button type="button" onClick={onDrain}
-            className="w-full rounded-2xl border border-brand-500/25 bg-brand-500/10 px-4 py-4 text-left transition hover:bg-brand-500/15 cursor-pointer">
+          {/* Drain option — waits for natural exit */}
+          <button
+            type="button"
+            onClick={onDrain}
+            className="w-full rounded-2xl border border-brand-500/25 bg-brand-500/10 px-4 py-4 text-left transition hover:bg-brand-500/15 cursor-pointer"
+          >
             <div className="flex items-start gap-3">
               <div className="rounded-2xl bg-brand-500/15 p-2">
                 <Shield className="h-4 w-4 text-brand-400" />
               </div>
               <div>
                 <p className="text-sm font-semibold text-brand-300">Drain &amp; stop</p>
-                <p className="mt-1 text-xs text-gray-300/80">Stop new entries for {market}. Existing positions close on their own exit signals.</p>
+                <p className="mt-1 text-xs text-gray-300/80">
+                  No new entries for {market}. Existing positions exit on their own signals.
+                </p>
+              </div>
+            </div>
+          </button>
+
+          {/* Close all / stop immediately */}
+          <button
+            type="button"
+            onClick={onCloseAll}
+            className="w-full rounded-2xl border border-red-500/25 bg-red-500/10 px-4 py-4 text-left transition hover:bg-red-500/15 cursor-pointer"
+          >
+            <div className="flex items-start gap-3">
+              <div className="rounded-2xl bg-red-500/15 p-2">
+                <Zap className="h-4 w-4 text-red-400" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-red-300">Stop immediately</p>
+                <p className="mt-1 text-xs text-gray-300/80">
+                  {openTradeCount > 0
+                    ? `Stops monitoring now. Close ${openTradeCount} open position${openTradeCount !== 1 ? 's' : ''} manually on the exchange.`
+                    : 'Stops monitoring immediately.'}
+                </p>
               </div>
             </div>
           </button>

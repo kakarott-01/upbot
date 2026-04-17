@@ -8,7 +8,11 @@ const BOT_MARKETS = ['crypto', 'indian', 'global', 'commodities'] as const
 type BotStatusRow = Awaited<ReturnType<typeof db.query.botStatuses.findFirst>>
 type BotSessionRow = Awaited<ReturnType<typeof db.query.botSessions.findMany>>[number]
 
-function buildSessions(statusRow: BotStatusRow, sessionRows: BotSessionRow[]) {
+function buildSessions(
+  statusRow: BotStatusRow,
+  sessionRows: BotSessionRow[],
+  activeMarketsSet: Set<string>,
+) {
   const latestSessionByMarket = new Map<string, BotSessionRow>()
 
   for (const row of sessionRows) {
@@ -19,7 +23,7 @@ function buildSessions(statusRow: BotStatusRow, sessionRows: BotSessionRow[]) {
 
   return BOT_MARKETS.map((market) => {
     const row = latestSessionByMarket.get(market)
-    const isActive = (statusRow?.activeMarkets ?? []).includes(market)
+    const isActive = activeMarketsSet.has(market)
 
     return {
       market,
@@ -51,7 +55,15 @@ export async function getBotStatusSnapshot(userId: string) {
     }),
   ])
 
-  const sessions = buildSessions(statusRow, sessionRows)
+  // Derive active markets from sessions to avoid duplicated/racy state
+  const activeMarketsSet = new Set<string>()
+  for (const s of sessionRows) {
+    if (s.status === 'running' || s.status === 'stopping') {
+      activeMarketsSet.add(s.market)
+    }
+  }
+
+  const sessions = buildSessions(statusRow, sessionRows, activeMarketsSet)
 
   if (!statusRow) {
     return {
@@ -118,7 +130,7 @@ export async function getBotStatusSnapshot(userId: string) {
     snapshot: {
       status: statusRow.status,
       stopMode: statusRow.stopMode ?? null,
-      activeMarkets: statusRow.activeMarkets ?? [],
+      activeMarkets: Array.from(activeMarketsSet),
       started_at: toUtcIsoString(statusRow.startedAt),
       stopped_at: toUtcIsoString(statusRow.stoppedAt),
       stopping_at: toUtcIsoString(statusRow.stoppingAt),

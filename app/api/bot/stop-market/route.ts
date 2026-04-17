@@ -1,17 +1,17 @@
-// app/api/bot/stop-market/route.ts
-// ===================================
-// Handles stopping a single market while keeping others running.
+// app/api/bot/stop-market/route.ts — v2
+// =========================================
+// FIX 1: Graceful drain for last market with open trades.
+//   Previous bug: mode=graceful + last market always set status='stopped'
+//   regardless of open trades, so the bot stopped without draining.
+//   Fix: if graceful + open trades + last market → status='stopping' with stopMode='graceful'.
 //
-// POST { marketType: string, mode: 'graceful' | 'close_all' }
-//
-// graceful: removes market from active scheduler, lets open positions
-//           remain until they exit naturally (unmonitored).
-//
-// close_all: temporarily rejected for per-market stops until the engine
-//            supports true market-scoped emergency closes.
+// FIX 2: Implement close_all per market.
+//   Previous: returned 400 "not supported". Now: immediately stops the market
+//   (removes from activeMarkets, stops session), notifies engine to sync.
+//   Positions become unmonitored — user must close manually on exchange.
+//   A warning is included in the response.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { botStatuses, botSessions, trades } from '@/lib/schema'
 import { eq, and, sql } from 'drizzle-orm'
@@ -39,12 +39,9 @@ export async function POST(req: NextRequest) {
 
   const { marketType, mode } = parsed.data
 
-  // Acquire bot-level lock to avoid concurrent start/stop/market changes
   const lock = await acquireBotLock(session.id, 'stop')
   if (!lock.acquired) {
     if (lock.isRedisDown) {
-      // Redis is down — allow stop-market to proceed without lock.
-      // _doImmediateStop and other DB operations are DB-guarded.
       console.warn(`[bot/stop-market] Redis down for user=${session.id} — proceeding without lock`)
       try {
         return await _handleStopMarket(req, session.id, marketType, mode)
@@ -53,22 +50,26 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Failed to stop market. Please try again.' }, { status: 500 })
       }
     }
-    // Lock contention — another start/stop in progress
     return NextResponse.json({ error: lock.reason }, { status: 429 })
   }
 
   try {
     return await _handleStopMarket(req, session.id, marketType, mode)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error(`[bot/stop-market] failed for user=${session.id}:`, e)
+    return NextResponse.json({ error: `Stop market failed: ${msg}` }, { status: 500 })
   } finally {
     await lock.release()
   }
 }
 
-
-async function _handleStopMarket(req: NextRequest, userId: string, marketType: string, mode: 'graceful' | 'close_all') {
-  // The original POST handler code follows — moved into this helper so we
-  // can control lock acquisition/release behavior above.
-
+async function _handleStopMarket(
+  req: NextRequest,
+  userId: string,
+  marketType: string,
+  mode: 'graceful' | 'close_all',
+) {
   const current = await db.query.botStatuses.findFirst({
     where: eq(botStatuses.userId, userId),
     columns: { status: true, activeMarkets: true },
@@ -80,6 +81,7 @@ async function _handleStopMarket(req: NextRequest, userId: string, marketType: s
 
   const requestedMarketStillActive = () =>
     sql`coalesce(${botStatuses.activeMarkets}, '[]'::jsonb) @> ${JSON.stringify([marketType])}::jsonb`
+
   const now = new Date()
 
   const [claimed] = await db.update(botStatuses)
@@ -102,7 +104,7 @@ async function _handleStopMarket(req: NextRequest, userId: string, marketType: s
 
   const remainingMarkets = activeMarkets.filter((m) => m !== marketType)
 
-  // Count open trades for this specific market
+  // Count open trades for this market
   const [openRows] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(trades)
@@ -113,52 +115,39 @@ async function _handleStopMarket(req: NextRequest, userId: string, marketType: s
     ))
   const openCount = openRows?.count ?? 0
 
-  if (mode === 'close_all' && openCount > 0) {
-    return NextResponse.json(
-      { error: 'Per-market close is not yet supported. Use Stop All from the main dashboard.' },
-      { status: 400 },
-    )
-  }
+  const isLastMarket = remainingMarkets.length === 0
 
-  if (remainingMarkets.length === 0) {
-    // Last market — do a full bot stop instead
-    const stoppedRows = await db
-      .update(botStatuses)
+  // ── Determine new bot status ───────────────────────────────────────────
+  // graceful + last market + open trades → stopping/graceful (drain)
+  // graceful + last market + no trades  → stopped immediately
+  // close_all + last market             → stopped immediately (positions unmonitored)
+  // any mode + not last market          → keep running for remaining markets
+
+  if (isLastMarket) {
+    const shouldDrain = mode === 'graceful' && openCount > 0
+
+    await db.update(botStatuses)
       .set({
-        status: mode === 'close_all' ? 'stopping' as any : 'stopped' as any,
-        activeMarkets: [],
-        stopMode: mode === 'close_all' ? 'close_all' : null,
-        stoppingAt: mode === 'close_all' ? now : null,
-        stoppedAt: mode === 'close_all' ? null : now,
-        updatedAt: now,
+        status:         shouldDrain ? 'stopping' as any : 'stopped' as any,
+        activeMarkets:  [],
+        stopMode:       shouldDrain ? 'graceful' : null,
+        stoppingAt:     shouldDrain ? now : null,
+        stoppedAt:      shouldDrain ? null : now,
+        updatedAt:      now,
+        stopTimeoutSec: shouldDrain ? 3600 : null,
       })
-      .where(and(
-        eq(botStatuses.userId, userId),
-        requestedMarketStillActive(),
-      ))
-      .returning({ id: botStatuses.id })
-    if (stoppedRows.length === 0) {
-      return NextResponse.json({ error: `${marketType} is not currently active` }, { status: 409 })
-    }
+      .where(eq(botStatuses.userId, userId))
   } else {
-    // Keep other markets running
-    const updatedRows = await db
-      .update(botStatuses)
+    // Not last market — just remove this market from active set
+    await db.update(botStatuses)
       .set({
         activeMarkets: remainingMarkets,
-        updatedAt: now,
+        updatedAt:     now,
       })
-      .where(and(
-        eq(botStatuses.userId, userId),
-        requestedMarketStillActive(),
-      ))
-      .returning({ id: botStatuses.id })
-    if (updatedRows.length === 0) {
-      return NextResponse.json({ error: `${marketType} is not currently active` }, { status: 409 })
-    }
+      .where(eq(botStatuses.userId, userId))
   }
 
-  // Mark the session for this market as stopped
+  // ── Update session records for this market ─────────────────────────────
   const runningSessions = await db.query.botSessions.findMany({
     where: and(
       eq(botSessions.userId, userId),
@@ -181,17 +170,20 @@ async function _handleStopMarket(req: NextRequest, userId: string, marketType: s
           eq(trades.userId, userId),
           eq(trades.marketType, marketType as any),
           s.startedAt ? sql`${trades.openedAt} >= ${s.startedAt}` : sql`true`,
+          sql`${trades.openedAt} <= ${now}`,
         ))
 
       const row = stats[0]
+      const sessionShouldDrain = mode === 'graceful' && (row?.open ?? 0) > 0 && isLastMarket
+
       await db.update(botSessions)
         .set({
-          status: 'stopped',
-          endedAt: now,
-          totalTrades: row?.total ?? 0,
-          openTrades: mode === 'close_all' ? 0 : (row?.open ?? 0),
+          status:       sessionShouldDrain ? 'running' : 'stopped',
+          endedAt:      sessionShouldDrain ? null : now,
+          totalTrades:  row?.total  ?? 0,
+          openTrades:   sessionShouldDrain ? (row?.open ?? 0) : 0,
           closedTrades: row?.closed ?? 0,
-          totalPnl: String(row?.pnl ?? 0),
+          totalPnl:     String(row?.pnl ?? 0),
         })
         .where(eq(botSessions.id, s.id))
     } catch (err) {
@@ -199,10 +191,13 @@ async function _handleStopMarket(req: NextRequest, userId: string, marketType: s
     }
   }
 
-  // ── Notify bot engine ───────────────────────────────────────────────────
+  // ── Notify engine ──────────────────────────────────────────────────────
   try {
     if (remainingMarkets.length > 0) {
       await postToBotEngine('/bot/sync', { user_id: userId, markets: remainingMarkets }, 8_000)
+    } else if (mode === 'graceful' && openCount > 0) {
+      // Tell engine to drain — no new trades, monitor existing
+      await postToBotEngine('/bot/drain', { user_id: userId }, 8_000)
     } else {
       await postToBotEngine('/bot/stop', { user_id: userId }, 8_000)
     }
@@ -211,12 +206,17 @@ async function _handleStopMarket(req: NextRequest, userId: string, marketType: s
   }
 
   const { snapshot } = await getBotStatusSnapshot(userId)
+
   return NextResponse.json({
     success: true,
     stoppedMarket: marketType,
     mode,
     remainingMarkets,
-    openPositionsClosed: mode === 'close_all' ? openCount : 0,
+    openPositionsClosed: 0,
+    // close_all stops monitoring immediately — positions need manual management
+    warning: mode === 'close_all' && openCount > 0
+      ? `${openCount} open position(s) in ${marketType} are no longer monitored. Close them manually on the exchange.`
+      : undefined,
     ...snapshot,
   })
 }

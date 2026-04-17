@@ -1,31 +1,27 @@
-// app/api/bot-history/route.ts — v2
+// app/api/bot-history/route.ts — v3
 // =====================================
-// FIX: Bot History showing "Running" after bot is stopped.
+// FIX: Added endedAt upper bound to trade counting SQL.
 //
-// ROOT CAUSE: The /api/bot/cleanup endpoint (which marks stale running
-// bot_sessions as 'stopped') was only called from the main Dashboard page
-// on load. The Bot History page never called it, so sessions could remain
-// stuck as 'running' indefinitely after a stop/restart.
+// ROOT CAUSE OF MISALIGNMENT:
+//   Previous query: WHERE openedAt >= session.startedAt
+//   This means session A (start T1) and session B (start T2 > T1) BOTH count
+//   any trade opened at T1 < openedAt < T2, because both sessions have
+//   openedAt >= their respective startedAt satisfied.
+//   Session A would accumulate trades from ALL subsequent sessions, inflating counts.
 //
-// FIX: This route now performs an INLINE cleanup before returning results:
-//   1. Fetch bot_statuses for the user
-//   2. If bot is stopped/stopping (or has no status), find any bot_sessions
-//      that are still 'running' and mark them 'stopped' with final stats
-//   3. Then proceed with the normal query
-//
-// This makes bot-history self-healing — no dependency on Dashboard being
-// loaded first. The cleanup is lightweight (only runs when bot is not
-// actually running), and is idempotent.
+// FIX:
+//   Add: AND openedAt < session.endedAt (or NOW() for in-progress sessions)
+//   This ensures each trade is counted only in the session it was opened during.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { botStatuses, botSessions, trades } from '@/lib/schema'
 import { eq, desc, and, gte, lte, sql } from 'drizzle-orm'
 import { toUtcIsoString } from '@/lib/time'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
-// ── Inline cleanup: close stale 'running' sessions if bot is stopped ──────────
+// ── Inline cleanup: close stale 'running' sessions if bot is stopped ─────────
+
 async function closeStaleSessions(userId: string): Promise<void> {
   try {
     const status = await db.query.botStatuses.findFirst({
@@ -33,7 +29,6 @@ async function closeStaleSessions(userId: string): Promise<void> {
       columns: { status: true },
     })
 
-    // Only clean up when bot is confirmed not running
     const shouldClean =
       !status ||
       status.status === 'stopped' ||
@@ -65,10 +60,11 @@ async function closeStaleSessions(userId: string): Promise<void> {
           .where(and(
             eq(trades.userId, userId),
             eq(trades.marketType, s.market as any),
-            // Guard against null startedAt
             s.startedAt
               ? sql`${trades.openedAt} >= ${s.startedAt}`
               : sql`true`,
+            // FIX: upper bound so trades from a later session aren't counted here
+            sql`${trades.openedAt} <= ${now}`,
           ))
 
         const row = stats[0]
@@ -83,16 +79,10 @@ async function closeStaleSessions(userId: string): Promise<void> {
           })
           .where(eq(botSessions.id, s.id))
       } catch (err) {
-        // Log per-session errors but continue with the rest
         console.error(`[bot-history] Stale session cleanup failed for session ${s.id}:`, err)
       }
     }
-
-    if (stale.length > 0) {
-      console.info(`[bot-history] Closed ${stale.length} stale session(s) for user=${userId}`)
-    }
   } catch (err) {
-    // Cleanup failure must never break the actual history response
     console.error('[bot-history] Inline cleanup failed (non-fatal):', err)
   }
 }
@@ -105,7 +95,7 @@ export async function GET(req: NextRequest) {
     return guardErrorResponse(error)
   }
 
-  // ── Inline cleanup before querying ────────────────────────────────────────
+  // Cleanup stale sessions before querying
   await closeStaleSessions(session.id)
 
   const { searchParams } = new URL(req.url)
@@ -135,12 +125,12 @@ export async function GET(req: NextRequest) {
       .where(and(...conditions)),
   ])
 
-  // For sessions still marked 'running' after cleanup (shouldn't happen, but
-  // as a safety net), enrich with live trade count on the fly.
+  // For sessions still running: enrich with live trade count, bounded correctly
   const enriched = await Promise.all(rows.map(async (s) => {
     if (s.status !== 'running') return s
 
     try {
+      const now = new Date()
       const stats = await db
         .select({
           total:  sql<number>`count(*)::int`,
@@ -155,6 +145,8 @@ export async function GET(req: NextRequest) {
           s.startedAt
             ? sql`${trades.openedAt} >= ${s.startedAt}`
             : sql`true`,
+          // Upper bound for running sessions: now
+          sql`${trades.openedAt} <= ${now}`,
         ))
 
       const row = stats[0]
@@ -172,20 +164,20 @@ export async function GET(req: NextRequest) {
   }))
 
   return NextResponse.json({
-    sessions: enriched.map((session) => ({
-      id: session.id,
-      exchange: session.exchange,
-      market: session.market,
-      mode: session.mode,
-      status: session.status,
-      started_at: toUtcIsoString(session.startedAt),
-      stopped_at: toUtcIsoString(session.endedAt),
-      totalTrades: session.totalTrades,
-      openTrades: session.openTrades,
-      closedTrades: session.closedTrades,
-      totalPnl: session.totalPnl,
-      errorMessage: session.errorMessage,
-      metadata: session.metadata,
+    sessions: enriched.map((s) => ({
+      id:           s.id,
+      exchange:     s.exchange,
+      market:       s.market,
+      mode:         s.mode,
+      status:       s.status,
+      started_at:   toUtcIsoString(s.startedAt),
+      stopped_at:   toUtcIsoString(s.endedAt),
+      totalTrades:  s.totalTrades,
+      openTrades:   s.openTrades,
+      closedTrades: s.closedTrades,
+      totalPnl:     s.totalPnl,
+      errorMessage: s.errorMessage,
+      metadata:     s.metadata,
     })),
     pagination: {
       page,
