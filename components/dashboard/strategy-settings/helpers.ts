@@ -29,3 +29,42 @@ export function toStrategyPayload(strategySettings: any) {
     ]),
   )
 }
+
+export type RuntimeConfig = ReturnType<typeof createDefaultConfig>
+
+export function createDefaultConfig() {
+  return {
+    executionMode: 'SAFE' as 'SAFE' | 'AGGRESSIVE',
+    positionMode: 'NET' as 'NET' | 'HEDGE',
+    allowHedgeOpposition: false,
+    conflictBlocking: false,
+    maxPositionsPerSymbol: 2,
+    maxCapitalPerStrategyPct: 25,
+    maxDrawdownPct: 12,
+    strategyKeys: [] as string[],
+    strategySettings: {} as Record<string, ReturnType<typeof defaultStrategySettings>>,
+    conflictWarnings: [] as Array<{ code: string; severity: 'info' | 'warning' | 'blocking'; message: string }>,
+    exchangeCapabilities: null as null | {
+      supportsHedgeMode?: boolean
+      effectivePositionMode?: 'NET' | 'HEDGE'
+      warning?: string
+    },
+  }
+}
+
+export function configFromMarket(market: any): RuntimeConfig {
+  return {
+    ...createDefaultConfig(),
+    executionMode: market.executionMode,
+    positionMode: market.positionMode ?? 'NET',
+    allowHedgeOpposition: market.allowHedgeOpposition ?? false,
+    conflictBlocking: market.conflictBlocking ?? false,
+    maxPositionsPerSymbol: market.maxPositionsPerSymbol ?? 2,
+    maxCapitalPerStrategyPct: market.maxCapitalPerStrategyPct ?? 25,
+    maxDrawdownPct: market.maxDrawdownPct ?? 12,
+    strategyKeys: market.strategyKeys ?? [],
+    strategySettings: market.strategySettings ?? {},
+    conflictWarnings: market.conflictWarnings ?? [],
+    exchangeCapabilities: market.exchangeCapabilities ?? null,
+  }
+}

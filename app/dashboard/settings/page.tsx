@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { QUERY_KEYS } from '@/lib/query-keys'
 import { BOT_STATUS_QUERY_KEY, isValidBotSnapshot } from '@/lib/bot-status-client'
@@ -54,6 +54,26 @@ type RiskSettingsResponse = {
   cooldownSeconds?: number
   trailingStop?: boolean
   paperBalance?: number
+}
+
+type RiskForm = typeof defaults
+
+function normalizeRiskSettings(data: RiskSettingsResponse | null | undefined): RiskForm {
+  if (!data || !Object.keys(data).length) return defaults
+
+  return {
+    maxPositionPct: Number(data.maxPositionPct ?? defaults.maxPositionPct),
+    stopLossPct: Number(data.stopLossPct ?? defaults.stopLossPct),
+    takeProfitPct: Number(data.takeProfitPct ?? defaults.takeProfitPct),
+    maxDailyLossPct: Number(data.maxDailyLossPct ?? defaults.maxDailyLossPct),
+    maxOpenTrades: Number(data.maxOpenTrades ?? defaults.maxOpenTrades),
+    maxTotalExposure: Number(data.maxTotalExposure ?? defaults.maxTotalExposure),
+    maxDailyLoss: Number(data.maxDailyLoss ?? defaults.maxDailyLoss),
+    maxOpenPositions: Number(data.maxOpenPositions ?? defaults.maxOpenPositions),
+    cooldownSeconds: Number(data.cooldownSeconds ?? defaults.cooldownSeconds),
+    trailingStop: data.trailingStop ?? defaults.trailingStop,
+    paperBalance: Number(data.paperBalance ?? defaults.paperBalance),
+  }
 }
 
 function formatCooldown(seconds: number) {
@@ -117,7 +137,7 @@ function RangeField({
 export default function SettingsPage() {
   const qc = useQueryClient()
   const pushToast = useToastStore((state) => state.push)
-  const [form, setForm] = useState(defaults)
+  const [overrides, setOverrides] = useState<Partial<RiskForm>>({})
   const { isRunning } = useTradingGuard()
 
   const { data } = useQuery<RiskSettingsResponse | null>({
@@ -125,24 +145,8 @@ export default function SettingsPage() {
     queryFn: () => apiFetch<RiskSettingsResponse>('/api/risk-settings'),
   })
 
-  useEffect(() => {
-    if (data && Object.keys(data).length) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setForm({
-        maxPositionPct: Number(data.maxPositionPct ?? defaults.maxPositionPct),
-        stopLossPct: Number(data.stopLossPct ?? defaults.stopLossPct),
-        takeProfitPct: Number(data.takeProfitPct ?? defaults.takeProfitPct),
-        maxDailyLossPct: Number(data.maxDailyLossPct ?? defaults.maxDailyLossPct),
-        maxOpenTrades: Number(data.maxOpenTrades ?? defaults.maxOpenTrades),
-        maxTotalExposure: Number(data.maxTotalExposure ?? defaults.maxTotalExposure),
-        maxDailyLoss: Number(data.maxDailyLoss ?? defaults.maxDailyLoss),
-        maxOpenPositions: Number(data.maxOpenPositions ?? defaults.maxOpenPositions),
-        cooldownSeconds: Number(data.cooldownSeconds ?? defaults.cooldownSeconds),
-        trailingStop: data.trailingStop ?? defaults.trailingStop,
-        paperBalance: Number(data.paperBalance ?? defaults.paperBalance),
-      })
-    }
-  }, [data])
+  const serverDefaults = useMemo(() => normalizeRiskSettings(data), [data])
+  const form = useMemo(() => ({ ...serverDefaults, ...overrides }), [serverDefaults, overrides])
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -156,6 +160,8 @@ export default function SettingsPage() {
       return { previous, previousBot }
     },
     onSuccess: () => {
+      qc.setQueryData(QUERY_KEYS.RISK_SETTINGS as any, form)
+      setOverrides({})
       qc.invalidateQueries({ queryKey: QUERY_KEYS.RISK_SETTINGS })
       pushToast({
         tone: 'success',
@@ -184,12 +190,12 @@ export default function SettingsPage() {
     { label: 'Paper capital base', value: `₹${form.paperBalance.toLocaleString('en-IN')}` },
   ]), [form])
 
-  function setField<Key extends keyof typeof form>(key: Key, value: (typeof form)[Key]) {
-    setForm((current) => ({ ...current, [key]: value }))
+  function setField<Key extends keyof RiskForm>(key: Key, value: RiskForm[Key]) {
+    setOverrides((current) => ({ ...current, [key]: value }))
   }
 
   function applyPreset(preset: keyof typeof presets) {
-    setForm((current) => ({ ...current, ...presets[preset].values }))
+    setOverrides((current) => ({ ...current, ...presets[preset].values }))
     pushToast({
       tone: 'success',
       title: `${presets[preset].label} preset applied`,

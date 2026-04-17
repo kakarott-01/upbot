@@ -217,9 +217,7 @@ const BotSessionRow = memo(function BotSessionRow({
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function BotHistoryPage() {
   const qc = useQueryClient()
-  const toasts = useToastStore(s => s.toasts)
   const pushToast = useToastStore(s => s.push)
-  const latestToast = toasts.length ? toasts[toasts.length - 1] : null
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => pushToast({ title: msg, tone: type })
   const [now, setNow] = useState(Date.now())
 
@@ -285,18 +283,6 @@ export default function BotHistoryPage() {
 
   return (
     <div className="space-y-5 max-w-7xl mx-auto">
-
-      {/* Toast */}
-      {latestToast && (
-        <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-2xl text-sm font-medium border transition-all ${
-          latestToast.tone === 'success'
-            ? 'bg-brand-500/15 border-brand-500/30 text-brand-500'
-            : 'bg-red-900/20 border-red-800/30 text-red-400'
-        }`}>
-          {latestToast.tone === 'success' ? '✓' : '✗'} {latestToast.title}
-        </div>
-      )}
-
       {/* Delete Modal */}
       {toDelete && (
         <DeleteSessionModal

@@ -1,39 +1,27 @@
 "use client";
 
-import { useMemo, useRef, useState, useCallback } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useRef, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useBotStatusQuery } from "@/lib/use-bot-status-query";
 import { QUERY_KEYS } from "@/lib/query-keys";
 import {
   AlertTriangle,
   Loader2,
   Power,
-  ShieldAlert,
   Square,
-  X,
-  Zap,
-  Play,
-  Swords,
-  Shield,
 } from "lucide-react";
 import {
   BotControlsModals,
   type BotControlsModalsRef,
 } from "@/components/dashboard/bot-controls-modals";
 import { useActionLocks } from "@/components/dashboard/bot-controls/useActionLocks";
-import MarketButton from "@/components/dashboard/bot-controls/MarketButton";
+import { useBotControlMutations } from "@/components/dashboard/bot-controls/useBotControlMutations";
 import MarketRow from "@/components/dashboard/bot-controls/MarketRow";
 import { POLL_INTERVALS } from "@/lib/polling-config";
 import { Button } from "@/components/ui/button";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { StatusBadge } from "@/components/ui/status-badge";
-import {
-  isValidBotSnapshot,
-  type BotStatusSnapshot,
-  BOT_STATUS_QUERY_KEY,
-} from "@/lib/bot-status-client";
 import { useToastStore } from "@/lib/toast-store";
-import { cn } from "@/lib/utils";
 import { apiFetch } from "@/lib/api-client";
 
 const MARKETS = [
@@ -66,29 +54,6 @@ type StrategyConfigDataResponse = {
   }>;
 };
 
-type StopMarketResponse = {
-  success?: boolean;
-  stoppedMarket: MarketId;
-  mode: "graceful" | "close_all";
-  remainingMarkets?: MarketId[];
-  openPositionsClosed?: number;
-  // snapshot fields (partial)
-  status?: string;
-  stopMode?: string | null;
-  activeMarkets?: MarketId[];
-  openTradeCount?: number;
-  perMarketOpenTrades?: Record<string, number>;
-  sessions?: any[];
-};
-
-async function safeJson(res: Response): Promise<any> {
-  try {
-    return await res.json();
-  } catch {
-    return {};
-  }
-}
-
 // StopAllModal moved to components/modals and lazy-loaded
 
 // StartMarketModal moved to components/modals and lazy-loaded
@@ -97,7 +62,6 @@ async function safeJson(res: Response): Promise<any> {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export function BotControls() {
-  const qc = useQueryClient();
   const pushToast = useToastStore((s) => s.push);
   const modalsRef = useRef<BotControlsModalsRef | null>(null);
 
@@ -124,8 +88,8 @@ export function BotControls() {
   const status: string = data?.status ?? "stopped";
   const openTradeCount: number = data?.openTradeCount ?? 0;
   // FIX: Stable empty arrays — don't use ?? [] inline
-  const sessions: SessionItem[] = data?.sessions ?? [];
-  const activeMarkets: string[] = data?.activeMarkets ?? [];
+  const sessions: SessionItem[] = useMemo(() => data?.sessions ?? [], [data?.sessions]);
+  const activeMarkets: string[] = useMemo(() => data?.activeMarkets ?? [], [data?.activeMarkets]);
   const botErrorMessage: string | null = data?.errorMessage ?? null;
   const isStopping = status === "stopping";
 
@@ -139,8 +103,7 @@ export function BotControls() {
   // FIX: Stable memo — sessions reference only changes when actual data changes
   const sessionByMarket = useMemo(
     () => new Map(sessions.map((s) => [s.market, s])),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [data?.sessions], // Depend on sessions from same source, not derived array
+    [sessions],
   );
 
   // FIX: Stable memo for configByMarket
@@ -150,266 +113,17 @@ export function BotControls() {
     [strategyMarkets],
   );
 
-  // ── Mutations ───────────────────────────────────────────────────────────────
-
-  // ── syncMutation (start/update markets) ─────────────────────────────────────
-  // FIX 1: onMutate now sets started_at so the TopBar timer starts from the right
-  //         moment immediately — before the slow Python-engine call returns.
-  // FIX 2: Toast fires immediately in onMutate (optimistic) instead of waiting
-  //         for onSuccess (which only arrives after the engine call finishes).
-  const syncMutation = useMutation({
-    mutationKey: ["bot-start"],
-    mutationFn: async ({ markets }: { markets: string[] }) => {
-      return apiFetch("/api/bot/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markets }),
-      });
-    },
-    onMutate: async (vars: { markets: string[] }) => {
-      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY });
-      const previous = qc.getQueryData<BotStatusSnapshot>(BOT_STATUS_QUERY_KEY);
-
-      // FIX 1: capture start time NOW so the timer is correct from the first render
-      const optimisticStartedAt = new Date().toISOString();
-
-      qc.setQueryData<BotStatusSnapshot | undefined>(
-        BOT_STATUS_QUERY_KEY,
-        (old) => {
-          const base =
-            old && isValidBotSnapshot(old)
-              ? old
-              : (previous ?? {
-                  status: "running",
-                  stopMode: null,
-                  activeMarkets: [],
-                  started_at: null,
-                  stopped_at: null,
-                  stopping_at: null,
-                  last_heartbeat: null,
-                  errorMessage: null,
-                  openTradeCount: 0,
-                  perMarketOpenTrades: {},
-                  timeoutWarning: false,
-                  sessions: [],
-                });
-          const nextActive = Array.from(
-            new Set([...(base.activeMarkets ?? []), ...vars.markets]),
-          );
-          return {
-            ...base,
-            status: "running",
-            activeMarkets: nextActive,
-            // FIX: Only preserve started_at when the bot is ALREADY running/stopping.
-            // A stopped→running transition MUST use the fresh timestamp — the old
-            // started_at from the previous session would show a wrong elapsed time.
-            started_at:
-              base.status === "running" || base.status === "stopping"
-                ? (base.started_at ?? optimisticStartedAt)
-                : optimisticStartedAt,
-          };
-        },
-      );
-
-      // FIX 2: show the toast immediately on click, not after the engine responds
-      pushToast({
-        tone: "success",
-        title: `Starting ${vars.markets.join(", ")}…`,
-        description: "Connecting to the bot engine.",
-      });
-
-      return { previous };
-    },
-    onError: (err: Error, vars, context: any) => {
-      pushToast({
-        tone: "error",
-        title: "Session update failed",
-        description: err.message,
-      });
-      if (context?.previous && isValidBotSnapshot(context.previous))
-        qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previous);
-    },
-    // FIX 2: onSuccess no longer shows a toast — it already fired in onMutate
-    onSuccess: () => {},
-    onSettled: async (_data, _err, vars: { markets: string[] } | undefined) => {
-      isFiringRef.current = false;
-      if (vars?.markets) {
-        vars.markets.forEach((m) => unlockAction(`start-market:${m}`));
-      }
-      await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY });
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.BOT_HISTORY() });
-    },
-  });
-
-  const stopAllMutation = useMutation({
-    mutationFn: async (mode: "close_all" | "graceful") => {
-      return apiFetch("/api/bot/stop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
-      });
-    },
-    onMutate: async (mode: "close_all" | "graceful") => {
-      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY });
-      const previous = qc.getQueryData<BotStatusSnapshot>(BOT_STATUS_QUERY_KEY);
-      qc.setQueryData<BotStatusSnapshot | undefined>(
-        BOT_STATUS_QUERY_KEY,
-        (old) => {
-          const base =
-            old && isValidBotSnapshot(old)
-              ? old
-              : (previous ?? {
-                  status: "stopping",
-                  stopMode: mode,
-                  activeMarkets: [],
-                  started_at: null,
-                  stopped_at: null,
-                  stopping_at: null,
-                  last_heartbeat: null,
-                  errorMessage: null,
-                  openTradeCount: 0,
-                  perMarketOpenTrades: {},
-                  timeoutWarning: false,
-                  sessions: [],
-                });
-          return { ...base, status: "stopping", stopMode: mode };
-        },
-      );
-      return { previous };
-    },
-    onError: (err: Error, vars, context: any) => {
-      pushToast({
-        tone: "error",
-        title: "Stop request failed",
-        description: err.message,
-      });
-      if (context?.previous && isValidBotSnapshot(context.previous))
-        qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previous);
-    },
-    onSuccess: (_data, mode) => {
-      pushToast({
-        tone: mode === "close_all" ? "warning" : "success",
-        title:
-          mode === "close_all"
-            ? "Emergency stop requested"
-            : "Graceful drain started",
-        description:
-          mode === "close_all"
-            ? "The engine is closing all open positions and stopping."
-            : "No new trades will open while active positions are drained.",
-      });
-    },
-    onSettled: async (
-      _data,
-      _err,
-      vars: "close_all" | "graceful" | undefined,
-    ) => {
-      isFiringRef.current = false;
-      modalsRef.current?.closeAll?.();
-      if (vars) unlockAction(`stop-all:${vars}`);
-      await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY });
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.BOT_HISTORY() });
-    },
-  });
-
-  const stopMarketMutation = useMutation({
-    mutationFn: async ({
-      marketType,
-      mode,
-    }: {
-      marketType: MarketId;
-      mode: "graceful" | "close_all";
-    }) => {
-      return apiFetch<StopMarketResponse>("/api/bot/stop-market", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ marketType, mode }),
-      });
-    },
-    onMutate: async (vars: {
-      marketType: MarketId;
-      mode: "graceful" | "close_all";
-    }) => {
-      await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY });
-      const previous = qc.getQueryData<BotStatusSnapshot>(BOT_STATUS_QUERY_KEY);
-      qc.setQueryData<BotStatusSnapshot | undefined>(
-        BOT_STATUS_QUERY_KEY,
-        (old) => {
-          const base =
-            old && isValidBotSnapshot(old)
-              ? old
-              : (previous ?? {
-                  status: "running",
-                  stopMode: null,
-                  activeMarkets: [],
-                  started_at: null,
-                  stopped_at: null,
-                  stopping_at: null,
-                  last_heartbeat: null,
-                  errorMessage: null,
-                  openTradeCount: 0,
-                  perMarketOpenTrades: {},
-                  timeoutWarning: false,
-                  sessions: [],
-                });
-          const nextActive = (base.activeMarkets ?? []).filter(
-            (m) => m !== vars.marketType,
-          );
-          return {
-            ...base,
-            status: nextActive.length > 0 ? base.status : "stopping",
-            activeMarkets: nextActive,
-          };
-        },
-      );
-      return { previous };
-    },
-    onError: (err: Error, vars, context: any) => {
-      pushToast({
-        tone: "error",
-        title: `Failed to stop ${vars.marketType}`,
-        description: err.message,
-      });
-      if (context?.previous && isValidBotSnapshot(context.previous))
-        qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previous);
-    },
-    onSuccess: (data: StopMarketResponse) => {
-      const label =
-        MARKETS.find((m) => m.id === data.stoppedMarket)?.label ??
-        data.stoppedMarket;
-      pushToast({
-        tone: data.mode === "close_all" ? "warning" : "success",
-        title:
-          data.mode === "close_all"
-            ? `${label} — closing positions`
-            : `${label} drained`,
-        description:
-          data.mode === "close_all"
-            ? `Closing ${data.openPositionsClosed} position${data.openPositionsClosed !== 1 ? "s" : ""}.`
-            : "Market stopped, existing positions remain open.",
-      });
-    },
-    onSettled: async (
-      _data,
-      _err,
-      vars: { marketType: MarketId } | undefined,
-    ) => {
-      if (vars) unlockAction(`stop-market:${vars.marketType}`);
-      modalsRef.current?.closeStopModal?.();
-      isFiringRef.current = false;
-      await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY });
-      qc.invalidateQueries({ queryKey: QUERY_KEYS.BOT_HISTORY() });
-    },
-  });
+  const { syncMutation, stopAllMutation, stopMarketMutation } =
+    useBotControlMutations({
+      modalsRef,
+      isFiringRef,
+      unlockAction,
+      pushToast,
+    });
 
   const isStarting = syncMutation.isPending && status !== "running";
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
-
-  function marketWarnings(marketId: MarketId) {
-    const cfg = configByMarket.get(marketId) as any;
-    return (cfg?.conflictWarnings ?? []).map((w: any) => w.message);
-  }
 
   function isMarketLive(marketId: MarketId): boolean {
     const market = (modeData?.markets ?? []).find(
@@ -418,17 +132,15 @@ export function BotControls() {
     return market?.mode === "live";
   }
 
-  function marketStrategyKeys(marketId: MarketId): string[] {
-    const cfg = configByMarket.get(marketId) as any;
-    return cfg?.strategyKeys ?? [];
-  }
-
   function marketOpenTrades(marketId: MarketId): number {
     return perMarketOpenTrades[marketId] ?? 0;
   }
 
   const marketWarningsMap = useMemo(() => {
-    return new Map(MARKETS.map((m) => [m.id, marketWarnings(m.id)]));
+    return new Map(MARKETS.map((m) => {
+      const cfg = configByMarket.get(m.id) as any;
+      return [m.id, (cfg?.conflictWarnings ?? []).map((w: any) => w.message)];
+    }));
   }, [configByMarket]);
 
   // ── Click handler ────────────────────────────────────────────────────────────
@@ -529,8 +241,8 @@ export function BotControls() {
             </div>
             <div className="text-xs text-gray-400 mt-1">
               {dataUpdatedAt
-                ? `Last updated: ${Math.max(0, Math.floor((Date.now() - dataUpdatedAt) / 1000))}s ago`
-                : "Last updated: —"}
+                ? `Last updated: ${new Date(dataUpdatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`
+                : "Last updated: -"}
             </div>
           </div>
           <StatusBadge tone={hasLiveMarkets ? "danger" : "info"}>

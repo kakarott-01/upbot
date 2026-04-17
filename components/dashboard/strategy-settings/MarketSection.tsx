@@ -9,6 +9,8 @@ import { InfoTip } from '@/components/ui/tooltip'
 import NumberField from '@/components/dashboard/strategy-settings/NumberField'
 import { defaultStrategySettings } from '@/components/dashboard/strategy-settings/helpers'
 import { Button } from '@/components/ui/button'
+import StrategyCard from '@/components/dashboard/strategy-settings/StrategyCard'
+import PerStrategySettingsCard from '@/components/dashboard/strategy-settings/PerStrategySettingsCard'
 
 type Props = {
   market: any
@@ -21,10 +23,12 @@ type Props = {
   toggleStrategy: (marketType: any, strategyKey: string) => void
   handleSave: (marketType: any, config: any) => void
   savingMarket: string | null
+  isSavePending: boolean
   toggleMarket: (marketId: string) => void
 }
 
-function MarketSection({ market, isExpanded, config, isBotActiveHere, totalCapital, strategies, updateMarket, toggleStrategy, handleSave, savingMarket, toggleMarket }: Props) {
+function MarketSection({ market, isExpanded, config, isBotActiveHere, totalCapital, strategies, updateMarket, toggleStrategy, handleSave, savingMarket, isSavePending, toggleMarket }: Props) {
+  const isAggressive = config.executionMode === 'AGGRESSIVE'
   const capitalCards = (config.strategyKeys ?? []).map((strategyKey: string) => {
     const settings = config.strategySettings?.[strategyKey] ?? defaultStrategySettings()
     const maxActiveCapital = totalCapital * (settings.capitalAllocation.maxActivePercent / 100)
@@ -47,6 +51,8 @@ function MarketSection({ market, isExpanded, config, isBotActiveHere, totalCapit
                 <StatusBadge tone={config.strategyKeys.length > 0 ? 'success' : 'neutral'}>
                   {config.strategyKeys.length > 0 ? `${config.strategyKeys.length} strategy` : 'No strategies'}
                 </StatusBadge>
+                {isAggressive && <StatusBadge tone="danger">AGGRESSIVE</StatusBadge>}
+                {isBotActiveHere && <StatusBadge tone="warning">Bot Active</StatusBadge>}
               </div>
             </div>
             {!isExpanded && config.strategyKeys.length > 0 && (
@@ -96,7 +102,7 @@ function MarketSection({ market, isExpanded, config, isBotActiveHere, totalCapit
             </div>
           </div>
 
-          {config.executionMode === 'AGGRESSIVE' && (
+          {isAggressive && (
             <InlineAlert tone="danger" title="AGGRESSIVE mode is active" className="mb-4">
               Strategies trade independently. Capital splits, priority-based blocking, and hedge behavior now matter market by market.
             </InlineAlert>
@@ -112,7 +118,7 @@ function MarketSection({ market, isExpanded, config, isBotActiveHere, totalCapit
               <div className="grid gap-3 md:grid-cols-3">
                 <label className="space-y-1.5">
                   <span className="flex items-center gap-2 text-xs text-gray-500">Position mode <InfoTip text="NET keeps one net position per symbol. HEDGE allows opposing exposure if the exchange supports it." /></span>
-                  <select disabled={isBotActiveHere || config.executionMode !== 'AGGRESSIVE'} value={config.positionMode} onChange={(event) => updateMarket(market.id, (current: any) => ({ ...current, positionMode: event.target.value }))} className="w-full rounded-xl border border-gray-800 bg-gray-900 px-3 py-2.5 text-sm text-gray-100 disabled:opacity-60">
+                  <select disabled={isBotActiveHere || !isAggressive} value={config.positionMode} onChange={(event) => updateMarket(market.id, (current: any) => ({ ...current, positionMode: event.target.value }))} className="w-full rounded-xl border border-gray-800 bg-gray-900 px-3 py-2.5 text-sm text-gray-100 disabled:opacity-60">
                     <option value="NET">NET</option>
                     <option value="HEDGE">HEDGE</option>
                   </select>
@@ -198,32 +204,38 @@ function MarketSection({ market, isExpanded, config, isBotActiveHere, totalCapit
               {(strategies ?? []).map((strategy: any) => {
                 const selected = (config.strategyKeys ?? []).includes(strategy.strategyKey)
                 return (
-                  <button
+                  <StrategyCard
                     key={strategy.strategyKey}
-                    type="button"
+                    strategy={strategy}
+                    marketId={market.id}
+                    selected={selected}
                     disabled={isBotActiveHere || (!selected && (config.strategyKeys ?? []).length >= 2)}
-                    onClick={() => toggleStrategy(market.id, strategy.strategyKey)}
-                    className={`rounded-2xl border p-4 text-left transition ${selected ? 'border-brand-500/50 bg-brand-500/10' : 'border-gray-800 bg-gray-950/60 hover:border-gray-700'} disabled:cursor-not-allowed disabled:opacity-50`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <span className="text-sm font-medium text-gray-100">{strategy.name}</span>
-                      <StatusBadge tone={strategy.riskLevel === 'HIGH' ? 'danger' : strategy.riskLevel === 'MEDIUM' ? 'warning' : 'success'}>{strategy.riskLevel}</StatusBadge>
-                    </div>
-                    <p className="mt-2 text-xs text-gray-400">{strategy.description}</p>
-                    <div className="mt-3 grid gap-1 text-[11px] text-gray-500">
-                      <div>Win rate {strategy.historicalPerformance.winRate}%</div>
-                      <div>Average return {strategy.historicalPerformance.averageReturn}%</div>
-                      <div>Max drawdown {strategy.historicalPerformance.maxDrawdown}%</div>
-                    </div>
-                  </button>
+                    onToggle={toggleStrategy}
+                  />
                 )
               })}
             </div>
           </div>
 
+          {(config.strategyKeys ?? []).length > 0 ? (
+            <div className="mt-5 space-y-4">
+              {config.strategyKeys.map((strategyKey: string) => (
+                <PerStrategySettingsCard
+                  key={strategyKey}
+                  marketId={market.id}
+                  strategyKey={strategyKey}
+                  settings={config.strategySettings?.[strategyKey] ?? defaultStrategySettings()}
+                  isBotActiveHere={isBotActiveHere}
+                  isAggressive={isAggressive}
+                  updateMarket={updateMarket}
+                />
+              ))}
+            </div>
+          ) : null}
+
           <div className="sticky-actions mt-5">
             <div className="text-xs text-gray-500">Selected: {config.strategyKeys.length ? config.strategyKeys.join(', ') : 'None'}</div>
-            <Button onClick={() => handleSave(market.id, config)} disabled={isBotActiveHere || savingMarket === market.id || (config.strategyKeys ?? []).length === 0}>
+            <Button onClick={() => handleSave(market.id, config)} disabled={isBotActiveHere || isSavePending || (config.strategyKeys ?? []).length === 0}>
               {savingMarket === market.id ? (<><Loader2 className="h-4 w-4 animate-spin" /> Saving…</>) : 'Save market settings'}
             </Button>
           </div>
