@@ -1,6 +1,6 @@
 'use client'
 
-import React, { forwardRef, useImperativeHandle, useState } from 'react'
+import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
@@ -76,17 +76,21 @@ export const BotControlsModals = forwardRef<BotControlsModalsRef, Props>(
     const [showStopAllModal, setShowStopAllModal] = useState(false)
     const [startModal, setStartModal] = useState<{ market: MarketId } | null>(null)
     const [stopModal,  setStopModal]  = useState<{ market: MarketId; openTrades: number } | null>(null)
+    const stopModalRequestRef = useRef(0)
 
     useImperativeHandle(ref, () => ({
       openStartModal(market) {
         setStartModal({ market })
       },
       openStopModal(market) {
+        const requestId = stopModalRequestRef.current + 1
+        stopModalRequestRef.current = requestId
         const currentTrades = botData?.perMarketOpenTrades?.[market] ?? 0
         setStopModal({ market, openTrades: currentTrades })
         // Refresh trade count in background
         ;(async () => {
           await qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY })
+          if (stopModalRequestRef.current !== requestId) return
           const latest = qc.getQueryData<BotStatusSnapshot>(BOT_STATUS_QUERY_KEY)
           const trades = latest?.perMarketOpenTrades?.[market] ?? currentTrades
           setStopModal((prev) => prev?.market === market ? { market, openTrades: trades } : prev)
@@ -96,9 +100,11 @@ export const BotControlsModals = forwardRef<BotControlsModalsRef, Props>(
         setShowStopAllModal(true)
       },
       closeStopModal() {
+        stopModalRequestRef.current += 1
         setStopModal(null)
       },
       closeAll() {
+        stopModalRequestRef.current += 1
         setShowStopAllModal(false)
       },
     }), [botData, qc])
@@ -139,14 +145,19 @@ export const BotControlsModals = forwardRef<BotControlsModalsRef, Props>(
               isLive={isMarketLive(stopModal.market)}
               openTradeCount={stopModal.openTrades}
               onDrain={() => {
+                stopModalRequestRef.current += 1
                 confirmMarketStop(stopModal.market, 'graceful')
                 setStopModal(null)
               }}
               onCloseAll={() => {
+                stopModalRequestRef.current += 1
                 confirmMarketStop(stopModal.market, 'close_all')
                 setStopModal(null)
               }}
-              onClose={() => setStopModal(null)}
+              onClose={() => {
+                stopModalRequestRef.current += 1
+                setStopModal(null)
+              }}
             />
           </SectionErrorBoundary>
         )}

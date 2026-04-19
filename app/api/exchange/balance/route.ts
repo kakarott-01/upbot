@@ -7,6 +7,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
+export const maxDuration = 10
+
 export type LiveBalanceData = {
   markets: Record<string, { balance: number | null; currency: string }>
   running: boolean

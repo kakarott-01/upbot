@@ -3,7 +3,6 @@ import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-qu
 import { useState } from 'react'
 import { ToastViewport } from '@/components/ui/toast-viewport'
 import { useToastStore } from '@/lib/toast-store'
-import { isFinancialQueryKey } from '@/lib/query-keys'
 import { POLL_INTERVALS } from '@/lib/polling-config'
 import { useSessionEventStore } from '@/lib/session-events'
 
@@ -40,21 +39,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
         }
       },
     }),
-      defaultOptions: {
+    defaultOptions: {
       queries: {
         staleTime: POLL_INTERVALS.BOT_IDLE,
         // Disable global polling by default — enable polling per-query where needed
         refetchInterval: false,
         refetchOnWindowFocus: false,
-        // FIX: Only use placeholder data for non-financial queries
-        // Financial data (P&L, trades) should show loading state, not stale numbers
-        placeholderData: (prev: any, query: any) => {
-          if (isFinancialQueryKey(query?.queryKey)) {
-            return undefined  // Show loading skeleton for financial data
-          }
-          return prev  // Keep stale data for UI state (bot status, configs)
+        retry: (failureCount, error: Error & { status?: number }) => {
+          if (error.status === 401 || error.status === 403) return false
+          return failureCount < 1
         },
-        retry: 1,
       },
     },
   }))

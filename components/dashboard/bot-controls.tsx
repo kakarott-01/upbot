@@ -38,8 +38,6 @@ type MarketId = (typeof MARKETS)[number]["id"];
 type SessionItem = {
   market: string;
   status: "running" | "stopping" | "stopped" | "error";
-  mode?: "paper" | "live" | null;
-  openTrades?: number;
 };
 
 type ModeDataResponse = {
@@ -70,7 +68,10 @@ export const BotControls = memo(function BotControls() {
     select: (snapshot) => ({
       status: snapshot.status,
       openTradeCount: snapshot.openTradeCount,
-      sessions: snapshot.sessions,
+      sessions: snapshot.sessions.map((session) => ({
+        market: session.market,
+        status: session.status,
+      })),
       activeMarkets: snapshot.activeMarkets,
       errorMessage: snapshot.errorMessage,
       perMarketOpenTrades: snapshot.perMarketOpenTrades,

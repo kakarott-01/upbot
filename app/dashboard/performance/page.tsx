@@ -17,7 +17,6 @@ import {
   formatPnlAmount,
   type MarketCurrency,
 } from '@/lib/currency'
-import { useBotStatusQuery } from '@/lib/use-bot-status-query'
 import { BOT_STATUS_QUERY_KEY } from '@/lib/bot-status-client'
 import type { LiveBalanceData } from '@/app/api/exchange/balance/route'
 import { SectionErrorBoundary } from '@/components/ui/section-error-boundary'
@@ -113,22 +112,18 @@ function getPreferredMarket(activeMarkets?: readonly string[]): MarketFilter {
 
 export default function PerformancePage() {
   const queryClient = useQueryClient()
-  const { data: activeMarkets } = useBotStatusQuery({
-    select: (data) => data.activeMarkets,
-  })
 
   const [market, setMarket] = useState<MarketFilter>(() => {
     const cachedBotData = queryClient.getQueryData<{ activeMarkets?: string[] }>(BOT_STATUS_QUERY_KEY)
     return getPreferredMarket(cachedBotData?.activeMarkets)
   })
   const [mode,   setMode]   = useState<ModeFilter>('paper')
-  const selectedMarket = market ?? getPreferredMarket(activeMarkets)
 
-  const params = new URLSearchParams({ mode, market: selectedMarket })
+  const params = new URLSearchParams({ mode, market })
   const perfPath = `/api/performance?${params.toString()}`
 
   const { data, isLoading } = useQuery<PerformanceResponse>({
-    queryKey: QUERY_KEYS.PERFORMANCE({ mode, market: selectedMarket }),
+    queryKey: QUERY_KEYS.PERFORMANCE({ mode, market }),
     queryFn:  () => apiFetch<PerformanceResponse>(perfPath),
     select: (response) => ({
       summary: response.summary,
@@ -157,12 +152,12 @@ export default function PerformancePage() {
   })
 
   const liveMktBalance = mode === 'live'
-    ? (liveBalanceData?.markets?.[selectedMarket]?.balance ?? null)
+    ? (liveBalanceData?.markets?.[market]?.balance ?? null)
     : null
   const liveBalanceAvailable = liveMktBalance !== null && liveBalanceData?.running === true
-  const liveBalanceCurrency   = liveBalanceData?.markets?.[selectedMarket]?.currency ?? null
+  const liveBalanceCurrency   = liveBalanceData?.markets?.[market]?.currency ?? null
 
-  const displayCurrency: MarketCurrency = getMarketCurrency(selectedMarket)
+  const displayCurrency: MarketCurrency = getMarketCurrency(market)
 
   const s            = data?.summary
   const dailyRows    = data?.dailyPnl ?? []
@@ -245,7 +240,7 @@ export default function PerformancePage() {
       label: liveBalanceAvailable ? 'Exchange Balance' : 'Current Balance',
       value: formatAmount(effectiveCurrentBalance, displayCurrency),
       sub:   liveBalanceAvailable
-        ? `Live ${selectedMarket} · ${liveBalanceCurrency ?? displayCurrency} available`
+        ? `Live ${market} · ${liveBalanceCurrency ?? displayCurrency} available`
         : effectiveBalanceChangePct !== null
           ? `${effectiveBalanceChangePct >= 0 ? '+' : ''}${effectiveBalanceChangePct.toFixed(2)}% · ${formatPnlAmount(todayPnl, displayCurrency)} today`
           : `${formatPnlAmount(todayPnl, displayCurrency)} today`,
@@ -271,7 +266,7 @@ export default function PerformancePage() {
         <div>
           <h1 className="text-xl font-semibold text-gray-100">Performance</h1>
           <p className="text-xs text-gray-500 mt-1">
-            {`${MARKET_LABELS[selectedMarket]} · ${mode === 'paper' ? '🟡 Paper' : '🔴 Live'}`}
+            {`${MARKET_LABELS[market]} · ${mode === 'paper' ? '🟡 Paper' : '🔴 Live'}`}
           </p>
         </div>
 
@@ -312,7 +307,7 @@ export default function PerformancePage() {
                 key={m}
                 onClick={() => setMarket(m)}
                 className={`px-3 py-1.5 text-xs rounded-lg border capitalize transition-colors ${
-                  selectedMarket === m
+                  market === m
                     ? 'bg-brand-500/15 border-brand-500/30 text-brand-500'
                     : 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
                 }`}
@@ -339,7 +334,7 @@ export default function PerformancePage() {
           }
           <p className={`text-sm ${liveBalanceAvailable ? 'text-emerald-300' : 'text-amber-300'}`}>
             {liveBalanceAvailable
-              ? `Exchange balance fetched live from ${selectedMarket} connector`
+              ? `Exchange balance fetched live from ${market} connector`
               : liveBalanceLoading
                 ? 'Fetching exchange balance…'
                 : 'Bot is not running — showing calculated balance. Start the bot to see live exchange balance.'
@@ -378,7 +373,7 @@ export default function PerformancePage() {
           cumPnl={cumPnl}
           daily={dailyRows}
           byMarket={byMarket}
-          marketFilter={selectedMarket}
+          marketFilter={market}
         />
       </SectionErrorBoundary>
 
@@ -387,7 +382,7 @@ export default function PerformancePage() {
         <div>
           <h2 className="text-sm font-medium text-gray-300">Daily Balance</h2>
           <p className="mt-1 text-xs text-gray-500">
-            Day-by-day outcomes for {MARKET_LABELS[selectedMarket]} · {mode} mode.
+            Day-by-day outcomes for {MARKET_LABELS[market]} · {mode} mode.
             Values in {displayCurrency === 'INR' ? '₹ INR' : displayCurrency === 'USDT' ? '$ USDT' : '$ USD'}.
           </p>
         </div>
@@ -416,7 +411,7 @@ export default function PerformancePage() {
                 ) : dailyRows.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="text-center py-14 text-sm text-gray-600">
-                      No closed trades found for {MARKET_LABELS[selectedMarket]} in {mode} mode
+                      No closed trades found for {MARKET_LABELS[market]} in {mode} mode
                     </td>
                   </tr>
                 ) : (

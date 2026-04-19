@@ -41,7 +41,6 @@ function overrideReducer(
   state: Record<MarketId, RuntimeConfig | null>,
   action: { marketType: MarketId; value: RuntimeConfig | null },
 ) {
-  if (state[action.marketType] === action.value) return state;
   return { ...state, [action.marketType]: action.value };
 }
 
@@ -109,6 +108,7 @@ export function StrategySettings() {
       qc.invalidateQueries({ queryKey: BOT_STATUS_QUERY_KEY });
     },
   });
+  const { mutate: saveMutate, isPending: isSavePending } = saveMutation;
 
   const activeMarkets: string[] = botData?.activeMarkets ?? [];
   const totalCapital = Number(riskData?.paperBalance ?? 10000);
@@ -128,8 +128,8 @@ export function StrategySettings() {
 
   const handleSave = useCallback((marketType: MarketId, config: RuntimeConfig) => {
     if (config.executionMode === "AGGRESSIVE") return setPendingAggressiveSave({ marketType, config });
-    saveMutation.mutate({ marketType, config, aggressiveConfirmed: false });
-  }, [saveMutation]);
+    saveMutate({ marketType, config, aggressiveConfirmed: false });
+  }, [saveMutate]);
 
   const toggleMarket = useCallback((marketId: string) => {
     setExpandedMarkets((prev) => {
@@ -150,7 +150,7 @@ export function StrategySettings() {
         {activeMarkets.length > 0 ? <InlineAlert tone="info" title={`Bot running on: ${activeMarkets.join(", ")}`}>Active markets are locked. You can freely edit strategies for idle markets below.</InlineAlert> : null}
         <div className="space-y-3">
           {MARKETS.map((market) => (
-            <MarketSection key={market.id} market={market} isExpanded={expandedMarkets.has(market.id)} config={overrides[market.id] ?? serverConfigs[market.id] ?? DEFAULT_CONFIGS[market.id]} isBotActiveHere={activeMarkets.includes(market.id)} totalCapital={totalCapital} strategies={strategiesByMarket[market.id] ?? []} updateMarket={updateMarket} toggleStrategy={toggleStrategy} handleSave={handleSave} savingMarket={savingMarket} isSavePending={saveMutation.isPending} toggleMarket={toggleMarket} />
+            <MarketSection key={market.id} market={market} isExpanded={expandedMarkets.has(market.id)} config={overrides[market.id] ?? serverConfigs[market.id] ?? DEFAULT_CONFIGS[market.id]} isBotActiveHere={activeMarkets.includes(market.id)} totalCapital={totalCapital} strategies={strategiesByMarket[market.id] ?? []} updateMarket={updateMarket} toggleStrategy={toggleStrategy} handleSave={handleSave} savingMarket={savingMarket} isSavePending={isSavePending} toggleMarket={toggleMarket} />
           ))}
         </div>
       </div>
