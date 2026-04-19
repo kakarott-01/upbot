@@ -3,7 +3,7 @@ import {
   decimal, jsonb, uuid, varchar, index, uniqueIndex, pgEnum,
   date, primaryKey, doublePrecision
 } from 'drizzle-orm/pg-core'
-import { relations } from 'drizzle-orm'
+import { relations, sql } from 'drizzle-orm'
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 export const marketTypeEnum       = pgEnum('market_type', ['indian', 'crypto', 'commodities', 'global'])
@@ -229,9 +229,10 @@ export const botSessions = pgTable('bot_sessions', {
   errorMessage: text('error_message'),
   metadata:     jsonb('metadata'),
 }, (t) => ({
-  userIdx:    index('bot_sessions_user_idx').on(t.userId),
-  startedIdx: index('bot_sessions_started_idx').on(t.startedAt),
-  statusIdx:  index('bot_sessions_status_idx').on(t.status),
+  userIdx:       index('bot_sessions_user_idx').on(t.userId),
+  startedIdx:    index('bot_sessions_started_idx').on(t.startedAt),
+  statusIdx:     index('bot_sessions_status_idx').on(t.status),
+  userStatusIdx: index('idx_bot_sessions_user_status').on(t.userId, t.status, t.startedAt.desc()).concurrently(),
 }))
 
 // ─── Risk Settings ────────────────────────────────────────────────────────────
@@ -295,6 +296,11 @@ export const trades = pgTable('trades', {
   sessionIdx:   index('trades_session_idx').on(t.sessionId),
   stopLossIdx:  index('idx_trades_stop_loss_order_id').on(t.stopLossOrderId),
   userOpenIdx:  index('idx_trades_user_open').on(t.userId, t.status),
+  userMarketStatusIdx: index('idx_trades_user_market_status').on(t.userId, t.marketType, t.status).concurrently(),
+  userStatusClosedIdx: index('idx_trades_user_status_closed')
+    .on(t.userId, t.status, t.closedAt.desc())
+    .where(sql`${t.status} = 'closed'`)
+    .concurrently(),
   strategyIdx:  index('trades_strategy_idx').on(t.strategyKey),
   scopeIdx:     index('trades_scope_idx').on(t.userId, t.marketType, t.symbol, t.positionScopeKey),
   // NOTE: The active-scope unique partial index is created via raw SQL migration.
