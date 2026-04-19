@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { QUERY_KEYS } from '@/lib/query-keys'
-import { BarChart3, ArrowUpRight, TrendingUp, TrendingDown, Layers } from 'lucide-react'
+import { BarChart3, ArrowUpRight, TrendingUp, TrendingDown, Layers, Calendar } from 'lucide-react'
 import dynamic from 'next/dynamic'
 import { POLL_INTERVALS } from '@/lib/polling-config'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
@@ -25,6 +25,13 @@ type TradesSummaryResponse = {
 
 type TradesResponse = {
   trades?: unknown[]
+}
+
+type MeResponse = {
+  id?: string
+  email?: string
+  name?: string
+  createdAt?: string | null
 }
 
 // ── Stat Card ─────────────────────────────────────────────────────────────────
@@ -131,6 +138,12 @@ export default function DashboardPage() {
   const openTradeCount = botData?.openTradeCount ?? 0
   const winPositive    = summary.winRate >= 50
 
+  const { data: meData } = useQuery<MeResponse | null>({
+    queryKey: QUERY_KEYS.ME,
+    queryFn: () => apiFetch<MeResponse>('/api/me').catch(() => null),
+    staleTime: Infinity,
+  })
+
   return (
     <div className="flex flex-col gap-5 max-w-[1400px] mx-auto">
 
@@ -170,6 +183,8 @@ export default function DashboardPage() {
           icon={BarChart3}
         />
 
+        {/* Account Created card moved below so it appears after Bot Status */}
+
         {/* Open Positions card removed per request */}
 
         {botLoading && !botData ? (
@@ -185,6 +200,14 @@ export default function DashboardPage() {
             openTradeCount={openTradeCount}
           />
         )}
+
+        <StatCard
+          label="Account Created"
+          value={meData?.createdAt ? new Date(meData.createdAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+          sub={meData?.email ?? ''}
+          color="text-gray-200"
+          icon={Calendar}
+        />
       </div>
 
       {/* ... previous code (Header and Stats row) ... */}
