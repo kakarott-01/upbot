@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { exchangeApis, marketConfigs } from '@/lib/schema'
+import { invalidateStrategyContextCache } from '@/lib/strategies/context-cache'
 import { encrypt, encryptJSON } from '@/lib/encryption'
 import { eq, and } from 'drizzle-orm'
 import { z } from 'zod'
@@ -98,6 +99,7 @@ export async function POST(req: NextRequest) {
     })
   }
 
+  await invalidateStrategyContextCache(session.id)
   return NextResponse.json({ success: true })
 }
 

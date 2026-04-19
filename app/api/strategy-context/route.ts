@@ -1,12 +1,6 @@
 import { NextResponse } from 'next/server'
-import { eq } from 'drizzle-orm'
-import { db } from '@/lib/db'
-import { riskSettings } from '@/lib/schema'
-import { PUBLIC_STRATEGY_CATALOG, ensureStrategyCatalogSeeded } from '@/lib/strategies/catalog'
-import { getUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
-
-const MARKETS = ['indian', 'crypto', 'commodities', 'global'] as const
+import { buildStrategyContextResponse, readStrategyContextCache, writeStrategyContextCache } from '@/lib/strategies/context-cache'
 
 export const maxDuration = 10
 
@@ -18,23 +12,12 @@ export async function GET() {
     return guardErrorResponse(error)
   }
 
-  await ensureStrategyCatalogSeeded()
+  const cached = await readStrategyContextCache(session.id)
+  if (cached) {
+    return NextResponse.json(cached)
+  }
 
-  const [markets, riskConfig] = await Promise.all([
-    Promise.all(
-      MARKETS.map(async (market) => ({
-        marketType: market,
-        ...(await getUserMarketStrategyConfig(session.id, market)),
-      })),
-    ),
-    db.query.riskSettings.findFirst({
-      where: eq(riskSettings.userId, session.id),
-    }),
-  ])
-
-  return NextResponse.json({
-    strategies: PUBLIC_STRATEGY_CATALOG,
-    markets,
-    riskSettings: riskConfig ?? {},
-  })
+  const responseData = await buildStrategyContextResponse(session.id)
+  await writeStrategyContextCache(session.id, responseData)
+  return NextResponse.json(responseData)
 }

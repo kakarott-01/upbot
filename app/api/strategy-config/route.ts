@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
 import { getUserMarketStrategyConfig, upsertUserMarketStrategyConfig } from '@/lib/strategies/config-service'
+import { buildStrategyContextResponse, invalidateStrategyContextCache, readStrategyContextCache, writeStrategyContextCache } from '@/lib/strategies/context-cache'
 import { strategyConfigSchema } from '@/lib/strategies/validation'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
@@ -25,14 +26,14 @@ export async function GET(req: NextRequest) {
 
   const marketType = req.nextUrl.searchParams.get('marketType')
   if (!marketType) {
-    const markets = ['indian', 'crypto', 'commodities', 'global'] as const
-    const configs = await Promise.all(
-      markets.map(async (market) => ({
-        marketType: market,
-        ...(await getUserMarketStrategyConfig(session.id, market)),
-      })),
-    )
-    return NextResponse.json({ markets: configs })
+    const cached = await readStrategyContextCache(session.id)
+    if (cached) {
+      return NextResponse.json({ markets: cached.markets })
+    }
+
+    const responseData = await buildStrategyContextResponse(session.id)
+    await writeStrategyContextCache(session.id, responseData)
+    return NextResponse.json({ markets: responseData.markets })
   }
 
   if (!['indian', 'crypto', 'commodities', 'global'].includes(marketType)) {
@@ -119,6 +120,7 @@ export async function PUT(req: NextRequest) {
       strategySettings: parsed.data.strategySettings,
     })
 
+    await invalidateStrategyContextCache(session.id)
     return NextResponse.json({ success: true, config })
   } catch (error) {
     const status = (error as Error & { status?: number }).status ?? 400

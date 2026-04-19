@@ -16,6 +16,7 @@ import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
 import { readCachedBotStatusSnapshot, writeCachedBotStatusSnapshot } from '@/lib/bot/status-cache'
+import { redis } from '@/lib/redis'
 
 export const maxDuration = 10
 
@@ -31,6 +32,14 @@ export async function GET(req: NextRequest) {
     session = await requireAccess()
   } catch (error) {
     return guardErrorResponse(error)
+  }
+
+  const cacheKey = `market_modes:${session.id}`
+  const cached = await redis.get<string>(cacheKey).catch(() => null)
+  if (cached) {
+    try {
+      return NextResponse.json(JSON.parse(cached))
+    } catch {}
   }
 
   const [configs, cachedSnapshot] = await Promise.all([
@@ -52,11 +61,14 @@ export async function GET(req: NextRequest) {
     await writeCachedBotStatusSnapshot(session.id, snapshot)
   }
 
-  return NextResponse.json({
+  const responseData = {
     botRunning:    snapshot.status === 'running' || snapshot.status === 'stopping',
     activeMarkets: snapshot.activeMarkets,
     markets:       configs,
-  })
+  }
+
+  await redis.set(cacheKey, JSON.stringify(responseData), { ex: 15 }).catch(() => null)
+  return NextResponse.json(responseData)
 }
 
 // ── POST ──────────────────────────────────────────────────────────────────────
@@ -158,5 +170,6 @@ export async function POST(req: NextRequest) {
     `[MODE] user=${session.id} market=${marketType} ${fromMode} → ${toMode} ip=${getClientIp(req)}`
   )
 
+  await redis.del(`market_modes:${session.id}`).catch(() => null)
   return NextResponse.json({ success: true, mode: toMode })
 }

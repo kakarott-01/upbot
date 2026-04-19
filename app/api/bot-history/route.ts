@@ -50,42 +50,42 @@ async function closeStaleSessions(userId: string): Promise<void> {
     if (stale.length === 0) return
 
     const now = new Date()
+    const allStats = await db
+      .select({
+        market: trades.marketType,
+        total:  sql<number>`count(*)::int`,
+        open:   sql<number>`count(*) filter (where status = 'open')::int`,
+        closed: sql<number>`count(*) filter (where status = 'closed')::int`,
+        pnl:    sql<number>`coalesce(sum(pnl) filter (where status = 'closed'), 0)::float`,
+      })
+      .from(trades)
+      .where(and(
+        eq(trades.userId, userId),
+        sql`${trades.openedAt} <= ${now}`,
+      ))
+      .groupBy(trades.marketType)
 
-    for (const s of stale) {
+    const statsByMarket = new Map(allStats.map((row) => [row.market, row]))
+    const emptyStats = { total: 0, open: 0, closed: 0, pnl: 0 }
+
+    await Promise.all(stale.map(async (s) => {
+      const row = statsByMarket.get(s.market as (typeof allStats)[number]['market']) ?? emptyStats
+
       try {
-        const stats = await db
-          .select({
-            total:  sql<number>`count(*)::int`,
-            open:   sql<number>`count(*) filter (where status = 'open')::int`,
-            closed: sql<number>`count(*) filter (where status = 'closed')::int`,
-            pnl:    sql<number>`coalesce(sum(pnl) filter (where status = 'closed'), 0)::float`,
-          })
-          .from(trades)
-          .where(and(
-            eq(trades.userId, userId),
-            eq(trades.marketType, s.market as any),
-            s.startedAt
-              ? sql`${trades.openedAt} >= ${s.startedAt}`
-              : sql`true`,
-            // FIX: upper bound so trades from a later session aren't counted here
-            sql`${trades.openedAt} <= ${now}`,
-          ))
-
-        const row = stats[0]
         await db.update(botSessions)
           .set({
             status:       'stopped',
             endedAt:      now,
-            totalTrades:  row?.total  ?? 0,
-            openTrades:   row?.open   ?? 0,
-            closedTrades: row?.closed ?? 0,
-            totalPnl:     String(row?.pnl ?? 0),
+            totalTrades:  row.total,
+            openTrades:   row.open,
+            closedTrades: row.closed,
+            totalPnl:     String(row.pnl),
           })
           .where(eq(botSessions.id, s.id))
       } catch (err) {
         console.error(`[bot-history] Stale session cleanup failed for session ${s.id}:`, err)
       }
-    }
+    }))
   } catch (err) {
     console.error('[bot-history] Inline cleanup failed (non-fatal):', err)
   }
