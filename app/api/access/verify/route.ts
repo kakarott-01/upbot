@@ -1,28 +1,19 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 // app/api/access/verify/route.ts  — FIXED
 // ═══════════════════════════════════════════════════════════════════════════════
-// FIX (medium): Replaced O(n) bcrypt comparison (one bcrypt.compare per code)
-//      with SHA-256 pre-filtering.
 //
-//      How it works:
-//        - When an access code is created (admin side), store both:
-//            code  = bcrypt(rawCode)          ← existing, for security
-//            codeSha256 = SHA-256(rawCode.toUpperCase())  ← NEW, for fast lookup
-//        - On verification:
-//            1. SHA-256 the input → look up by codeSha256 → O(1) DB lookup
-//            2. bcrypt.compare just that one candidate  → O(1) bcrypt
+// BUG FIX 1: Removed hard auth guard. Previously returned 401 for unauthenticated
+//   users, breaking the login-page "Create account" flow entirely.
 //
-//      MIGRATION REQUIRED for existing codes:
-//        UPDATE access_codes SET code_sha256 = encode(sha256(UPPER(plain_code)::bytea), 'hex')
-//        (You'll need to know the plain codes to backfill — or just burn old ones and recreate.)
+// BUG FIX 2: Unauthenticated users now receive a `signup_token` cookie (signed JWT
+//   with accessCodeId) so /api/access/verify-otp can create their account.
+//   Previously this cookie was never set, causing "Access code expired" on OTP step.
 //
-//      SCHEMA MIGRATION (run in Neon console):
-//        ALTER TABLE access_codes ADD COLUMN IF NOT EXISTS code_sha256 varchar(64);
-//        CREATE INDEX IF NOT EXISTS idx_access_codes_sha256 ON access_codes(code_sha256)
-//          WHERE is_burned = false;
-//
-//      FALLBACK: If code_sha256 is not yet populated for a code, we fall back
-//      to the old O(n) loop so nothing breaks during the migration window.
+// TWO PATHS after successful code verification:
+//   A) Authenticated (Google OAuth user on /access page):
+//      → whitelists user in DB + sets user_session cookie with hasAccess:true
+//   B) Unauthenticated (login page "Create account" tab):
+//      → sets signup_token cookie so verify-otp can create the account
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -35,6 +26,7 @@ import { getClientIp }                 from '@/lib/utils'
 import { auth }                        from '@/lib/auth'
 import { redis }                       from '@/lib/redis'
 import { signSession }                 from '@/lib/signed-cookie'
+import { signSignupToken }             from '@/lib/jwt'
 
 const MAX_ATTEMPTS     = 3
 const LOCKOUT_DURATION = 30 * 60
@@ -59,17 +51,15 @@ async function clearRateLimit(ip: string): Promise<void> {
   await redis.del(`access_locked:${ip}`)
 }
 
-/** Compute SHA-256 hex of the normalised code string. */
 function codeSha256(code: string): string {
   return createHash('sha256').update(code.toUpperCase()).digest('hex')
 }
 
 export async function POST(req: NextRequest) {
   try {
+    // FIX: auth() is optional — unauthenticated users are allowed for the
+    // "Create account" flow. Authenticated users (Google OAuth) are handled differently.
     const session = await auth()
-    if (!session?.email) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
 
     const ip     = getClientIp(req)
     const locked = await checkLockout(ip)
@@ -90,12 +80,11 @@ export async function POST(req: NextRequest) {
     const fastMatch = await db.query.accessCodes.findFirst({
       where: and(
         eq(accessCodes.isBurned, false),
-        eq((accessCodes as any).codeSha256, sha),   // new column
+        eq((accessCodes as any).codeSha256, sha),
       ),
     }).catch(() => null)   // column may not exist yet — fall through to O(n)
 
     if (fastMatch) {
-      // Still verify expiry and bcrypt (defence in depth)
       if (fastMatch.expiresAt > new Date()) {
         const isMatch = await bcrypt.compare(code, fastMatch.code)
         if (isMatch) matchedCode = fastMatch
@@ -108,16 +97,13 @@ export async function POST(req: NextRequest) {
         where: eq(accessCodes.isBurned, false),
       })
 
-      // Safety cap: if there are somehow hundreds of codes, refuse rather
-      // than doing hundreds of bcrypt ops in a single serverless invocation.
       if (allValid.length > 50) {
         console.error(`[access/verify] Too many active codes (${allValid.length}) — refusing O(n) scan`)
         return NextResponse.json({ error: 'Server error' }, { status: 500 })
       }
 
       for (const c of allValid) {
-        // Skip codes that have a sha256 (already tried those above)
-        if ((c as any).codeSha256) continue
+        if ((c as any).codeSha256) continue // already tried these above
         if (c.expiresAt < new Date()) continue
         const isMatch = await bcrypt.compare(code, c.code)
         if (isMatch) { matchedCode = c; break }
@@ -132,35 +118,62 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Burn the code
+    // ── Burn the code ─────────────────────────────────────────────────────────
     await db.update(accessCodes)
-      .set({ isBurned: true, burnedAt: new Date(), burnedByIp: ip, usedByEmail: session.email })
+      .set({
+        isBurned:    true,
+        burnedAt:    new Date(),
+        burnedByIp:  ip,
+        usedByEmail: session?.email ?? null,
+      })
       .where(eq(accessCodes.id, matchedCode.id))
 
-    // Whitelist user
-    await db.update(users)
-      .set({ isWhitelisted: true })
-      .where(eq(users.email, session.email))
-
     await clearRateLimit(ip)
-    console.info(`✅ Access granted → ${session.email}`)
 
-    const response = NextResponse.json({ success: true })
-    if (session.id) {
+    // ── PATH A: Authenticated user (Google OAuth on /access page) ─────────────
+    // Whitelist them immediately and update the signed session cookie so
+    // the middleware allows them into /dashboard without waiting for JWT rotation.
+    if (session?.id && session?.email) {
+      await db.update(users)
+        .set({ isWhitelisted: true })
+        .where(eq(users.email, session.email))
+
+      console.info(`✅ Access granted (authenticated) → ${session.email}`)
+
+      const response = NextResponse.json({ success: true })
       response.cookies.set('user_session', signSession({
-        id: session.id,
-        email: session.email,
-        name: session.name ?? session.email.split('@')[0],
+        id:        session.id,
+        email:     session.email,
+        name:      session.name ?? session.email.split('@')[0],
         hasAccess: true,
       }), {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        maxAge: 30 * 24 * 60 * 60,
-        path: '/',
+        secure:   process.env.NODE_ENV === 'production',
+        maxAge:   30 * 24 * 60 * 60,
+        path:     '/',
         sameSite: 'lax',
       })
+      return response
     }
 
+    // ── PATH B: Unauthenticated user (login page "Create account" tab) ────────
+    // Issue a short-lived signup_token JWT so /api/access/verify-otp can verify
+    // that a valid access code was burned and create the account.
+    const signupToken = signSignupToken({
+      accessCodeId: matchedCode.id,
+      expiresAt:    Date.now() + 5 * 60 * 1000, // 5 minutes
+    })
+
+    console.info(`✅ Access code verified (unauthenticated) ip=${ip}`)
+
+    const response = NextResponse.json({ success: true })
+    response.cookies.set('signup_token', signupToken, {
+      httpOnly: true,
+      secure:   process.env.NODE_ENV === 'production',
+      maxAge:   5 * 60,
+      path:     '/',
+      sameSite: 'lax',
+    })
     return response
   } catch (error) {
     console.error('verify-access error:', error)
