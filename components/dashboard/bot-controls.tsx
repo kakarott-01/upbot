@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useCallback } from "react";
+import { memo, useMemo, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useBotStatusQuery } from "@/lib/use-bot-status-query";
 import { QUERY_KEYS } from "@/lib/query-keys";
@@ -61,12 +61,21 @@ type StrategyConfigDataResponse = {
 // MarketStopModal moved to components/modals and lazy-loaded
 
 // ── Main component ────────────────────────────────────────────────────────────
-export function BotControls() {
+export const BotControls = memo(function BotControls() {
   const pushToast = useToastStore((s) => s.push);
   const modalsRef = useRef<BotControlsModalsRef | null>(null);
   const { lockAction, unlockAction, isLocked } = useActionLocks();
 
-  const { data, dataUpdatedAt } = useBotStatusQuery();
+  const { data, dataUpdatedAt } = useBotStatusQuery({
+    select: (snapshot) => ({
+      status: snapshot.status,
+      openTradeCount: snapshot.openTradeCount,
+      sessions: snapshot.sessions,
+      activeMarkets: snapshot.activeMarkets,
+      errorMessage: snapshot.errorMessage,
+      perMarketOpenTrades: snapshot.perMarketOpenTrades,
+    }),
+  });
 
   const { data: modeData } = useQuery({
     queryKey: QUERY_KEYS.MARKET_MODES,
@@ -341,4 +350,6 @@ export function BotControls() {
       </div>
     </>
   );
-}
+});
+
+BotControls.displayName = "BotControls";

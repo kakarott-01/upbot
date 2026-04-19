@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useEffect, type ElementType } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useState, type ElementType } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { QUERY_KEYS } from '@/lib/query-keys'
 import dynamic from 'next/dynamic'
 import { apiFetch } from '@/lib/api-client'
@@ -18,6 +18,7 @@ import {
   type MarketCurrency,
 } from '@/lib/currency'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
+import { BOT_STATUS_QUERY_KEY } from '@/lib/bot-status-client'
 import type { LiveBalanceData } from '@/app/api/exchange/balance/route'
 import { SectionErrorBoundary } from '@/components/ui/section-error-boundary'
 
@@ -102,23 +103,26 @@ const MODES    = ['paper', 'live'] as const
 type MarketFilter = typeof MARKETS[number]
 type ModeFilter   = typeof MODES[number]
 
+function getPreferredMarket(activeMarkets?: readonly string[]): MarketFilter {
+  const activeMarket = activeMarkets?.find((item): item is MarketFilter => (
+    MARKETS.includes(item as MarketFilter)
+  ))
+
+  return activeMarket ?? 'indian'
+}
+
 export default function PerformancePage() {
-  const { data: botData } = useBotStatusQuery()
+  const queryClient = useQueryClient()
+  const { data: activeMarkets } = useBotStatusQuery({
+    select: (data) => data.activeMarkets,
+  })
 
-  const [market, setMarket] = useState<MarketFilter | null>(null)
+  const [market, setMarket] = useState<MarketFilter>(() => {
+    const cachedBotData = queryClient.getQueryData<{ activeMarkets?: string[] }>(BOT_STATUS_QUERY_KEY)
+    return getPreferredMarket(cachedBotData?.activeMarkets)
+  })
   const [mode,   setMode]   = useState<ModeFilter>('paper')
-
-  useEffect(() => {
-    if (market !== null) return
-    const activeMarket = botData?.activeMarkets?.find((item) => MARKETS.includes(item as MarketFilter)) as MarketFilter | undefined
-    if (activeMarket) {
-      setMarket(activeMarket)
-    } else if (botData) {
-      setMarket('indian')
-    }
-  }, [botData, market])
-
-  const selectedMarket = market ?? 'indian'
+  const selectedMarket = market ?? getPreferredMarket(activeMarkets)
 
   const params = new URLSearchParams({ mode, market: selectedMarket })
   const perfPath = `/api/performance?${params.toString()}`
@@ -126,7 +130,16 @@ export default function PerformancePage() {
   const { data, isLoading } = useQuery<PerformanceResponse>({
     queryKey: QUERY_KEYS.PERFORMANCE({ mode, market: selectedMarket }),
     queryFn:  () => apiFetch<PerformanceResponse>(perfPath),
-    enabled: market !== null,
+    select: (response) => ({
+      summary: response.summary,
+      dailyPnl: response.dailyPnl,
+      byMarket: response.byMarket,
+      cumPnl: response.cumPnl,
+      principle: response.principle,
+      currentBalance: response.currentBalance,
+      totalFees: response.totalFees,
+      totalTrades: response.totalTrades,
+    }),
     staleTime: 30_000,
   })
 
@@ -160,7 +173,7 @@ export default function PerformancePage() {
   const totalFees    = data?.totalFees    ?? 0
   const totalTrades  = data?.totalTrades  ?? 0
   const totalPnl     = s?.totalPnl ?? 0
-  const pageLoading = market === null || isLoading
+  const pageLoading = isLoading
 
   const balanceChangePct = principle > 0 ? ((currentBalance - principle) / principle) * 100 : 0
   const todayIso = new Date().toISOString().slice(0, 10)
@@ -258,7 +271,7 @@ export default function PerformancePage() {
         <div>
           <h1 className="text-xl font-semibold text-gray-100">Performance</h1>
           <p className="text-xs text-gray-500 mt-1">
-            {market === null ? 'Loading market...' : `${MARKET_LABELS[selectedMarket]} · ${mode === 'paper' ? '🟡 Paper' : '🔴 Live'}`}
+            {`${MARKET_LABELS[selectedMarket]} · ${mode === 'paper' ? '🟡 Paper' : '🔴 Live'}`}
           </p>
         </div>
 

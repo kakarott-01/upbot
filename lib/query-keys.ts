@@ -23,6 +23,7 @@ export const QUERY_KEYS = {
   MARKET_MODES: ['market-modes'] as const,
   STRATEGY_CONFIGS: ['strategy-configs'] as const,
   STRATEGY_CATALOG: ['strategy-catalog'] as const,
+  STRATEGY_CONTEXT: ['strategy-context'] as const,
   RISK_SETTINGS: ['risk-settings'] as const,
   EXCHANGE_APIS: ['exchange-apis'] as const,
   ME: ['me'] as const,

@@ -109,13 +109,19 @@ export default function DashboardPage() {
   })
 
   const { data: tradesData } = useQuery({
-    queryKey: QUERY_KEYS.TRADES(),
+    queryKey: ['dashboard-open-positions'] as const,
     // Request only trades with an open status so the dashboard shows active positions
     queryFn:  () => apiFetch<TradesResponse>('/api/trades?limit=10&status=open'),
     staleTime: POLL_INTERVALS.BOT_IDLE,
   })
 
-  const { data: botData, isLoading: botLoading } = useBotStatusQuery()
+  const { data: botData, isLoading: botLoading } = useBotStatusQuery({
+    select: (data) => ({
+      status: data.status,
+      activeMarkets: data.activeMarkets,
+      openTradeCount: data.openTradeCount,
+    }),
+  })
 
   const summary        = summaryData ?? { totalPnl: 0, totalFees: 0, winRate: 0, total: 0, closed: 0 }
   // The API now returns only open trades (status=open). Use as-is.

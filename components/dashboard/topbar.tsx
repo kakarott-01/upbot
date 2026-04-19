@@ -2,13 +2,13 @@
 
 import { useMutationState, useQueryClient } from '@tanstack/react-query'
 import { LogOut, Bell, Menu, AlertTriangle, X } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { MobileSidebar } from '@/components/dashboard/sidebar'
 import { useBotStatusQuery } from '@/lib/use-bot-status-query'
-import { formatElapsedDuration, getSessionDurationMs } from '@/lib/time'
 import { apiFetch } from '@/lib/api-client'
 import { QUERY_KEYS } from '@/lib/query-keys'
 import { useSessionEventStore } from '@/lib/session-events'
+import { ElapsedTimer } from '@/components/dashboard/elapsed-timer'
 
 interface TopBarProps {
   user?: {
@@ -24,15 +24,16 @@ export function TopBar({ user }: TopBarProps) {
   const [isSigningOut,  setIsSigningOut]  = useState(false)
   const sessionExpired = useSessionEventStore((s) => s.sessionExpired)
   const dismissSessionExpired = useSessionEventStore((s) => s.dismissSessionExpired)
-
-  // FIX: Live clock — ticks every second so the elapsed timer updates smoothly
-  const [now, setNow] = useState(Date.now())
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [])
-
-  const { data: botData, isLoading: botLoading } = useBotStatusQuery()
+  const { data: botData, isLoading: botLoading } = useBotStatusQuery({
+    select: (data) => ({
+      status: data.status,
+      activeMarkets: data.activeMarkets,
+      stopMode: data.stopMode,
+      openTradeCount: data.openTradeCount,
+      timeoutWarning: data.timeoutWarning,
+      started_at: data.started_at,
+    }),
+  })
 
   const qc = useQueryClient()
 
@@ -55,11 +56,6 @@ export function TopBar({ user }: TopBarProps) {
   ))
   const isStarting = !isRunning && pendingMarkets.length > 0
 
-  // FIX: Use the live `now` state so the timer ticks every second
-  const runTime = isRunning && botData?.started_at
-    ? formatElapsedDuration(getSessionDurationMs(botData.started_at, null, now))
-    : ''
-
   const displayName = user?.name || user?.email?.split('@')[0] || 'User'
   const userInitial = displayName.charAt(0).toUpperCase()
 
@@ -81,16 +77,14 @@ export function TopBar({ user }: TopBarProps) {
       classes: 'bg-brand-500/10 border-brand-500/20 text-brand-500',
       dot:     'bg-brand-500 animate-pulse',
       label:   'Starting bot…',
-      sub:     pendingMarkets.length > 0 ? `· ${pendingMarkets.join(', ')}` : '',
+      sub:     pendingMarkets.length > 0 ? pendingMarkets.join(', ') : '',
     }
     if (botLoading && !botData) return null
     if (isRunning) return {
       classes: 'bg-brand-500/10 border-brand-500/20 text-brand-500',
       dot:     'bg-brand-500 animate-pulse',
       label:   'Bot Running',
-      sub:     activeMarkets.length > 0
-        ? `· ${activeMarkets.join(', ')}${runTime ? ` · ${runTime}` : ''}`
-        : '',
+      sub:     activeMarkets.length > 0 ? activeMarkets.join(', ') : '',
     }
     if (isCloseAll) return {
       classes: 'bg-red-500/10 border-red-500/20 text-red-400',
@@ -104,7 +98,7 @@ export function TopBar({ user }: TopBarProps) {
         : 'bg-amber-500/10 border-amber-500/20 text-amber-400',
       dot:     timeoutWarning ? 'bg-red-400 animate-pulse' : 'bg-amber-400 animate-pulse',
       label:   'Draining…',
-      sub:     openTradeCount > 0 ? `· ${openTradeCount} open` : '',
+      sub:     openTradeCount > 0 ? `${openTradeCount} open` : '',
     }
     return {
       classes: 'bg-gray-800 border-gray-700 text-gray-500',
@@ -147,7 +141,15 @@ export function TopBar({ user }: TopBarProps) {
             <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${pillConfig.dot}`} />
             <span className="truncate">{pillConfig.label}</span>
             {pillConfig.sub && (
-              <span className="hidden truncate opacity-70 sm:block">{pillConfig.sub}</span>
+              <span className="hidden truncate opacity-70 sm:block">
+                {'· '}{pillConfig.sub}
+                {isRunning && botData?.started_at && (
+                  <>
+                    {' · '}
+                    <ElapsedTimer startedAt={botData.started_at} />
+                  </>
+                )}
+              </span>
             )}
             {timeoutWarning && isStopping && (
               <AlertTriangle className="w-3 h-3 ml-0.5" />

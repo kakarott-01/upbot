@@ -20,6 +20,7 @@ import { eq, desc, and, gte, lte, sql } from 'drizzle-orm'
 import { toUtcIsoString } from '@/lib/time'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 import { boundedIntParam, dateParam } from '@/lib/api-params'
+import { redis } from '@/lib/redis'
 
 // ── Inline cleanup: close stale 'running' sessions if bot is stopped ─────────
 
@@ -88,6 +89,21 @@ async function closeStaleSessions(userId: string): Promise<void> {
   }
 }
 
+async function shouldRunCleanup(userId: string): Promise<boolean> {
+  const cleanupKey = `bot_history_cleanup:${userId}`
+
+  try {
+    const recentlyCleaned = await redis.get(cleanupKey)
+    if (recentlyCleaned) return false
+
+    await redis.set(cleanupKey, '1', { ex: 60 })
+    return true
+  } catch (err) {
+    console.error('[bot-history] Cleanup throttle failed; proceeding with cleanup:', err)
+    return true
+  }
+}
+
 export async function GET(req: NextRequest) {
   let session
   try {
@@ -96,8 +112,9 @@ export async function GET(req: NextRequest) {
     return guardErrorResponse(error)
   }
 
-  // Cleanup stale sessions before querying
-  await closeStaleSessions(session.id)
+  if (await shouldRunCleanup(session.id)) {
+    await closeStaleSessions(session.id)
+  }
 
   const { searchParams } = new URL(req.url)
   const mode     = searchParams.get('mode')

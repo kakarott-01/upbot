@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Layers3, Loader2 } from "lucide-react";
@@ -30,26 +30,31 @@ const DEFAULT_CONFIGS: Record<MarketId, RuntimeConfig> = {
   global: createDefaultConfig(),
   commodities: createDefaultConfig(),
 };
+const EMPTY_OVERRIDES: Record<MarketId, RuntimeConfig | null> = {
+  crypto: null,
+  indian: null,
+  global: null,
+  commodities: null,
+};
+
+function overrideReducer(
+  state: Record<MarketId, RuntimeConfig | null>,
+  action: { marketType: MarketId; value: RuntimeConfig | null },
+) {
+  if (state[action.marketType] === action.value) return state;
+  return { ...state, [action.marketType]: action.value };
+}
 
 export function StrategySettings() {
   const qc = useQueryClient();
   const pushToast = useToastStore((state) => state.push);
-  const [cryptoOverride, setCryptoOverride] = useState<RuntimeConfig | null>(null);
-  const [indianOverride, setIndianOverride] = useState<RuntimeConfig | null>(null);
-  const [globalOverride, setGlobalOverride] = useState<RuntimeConfig | null>(null);
-  const [commoditiesOverride, setCommoditiesOverride] = useState<RuntimeConfig | null>(null);
+  const [overrides, dispatchOverride] = useReducer(overrideReducer, EMPTY_OVERRIDES);
   const [savingMarket, setSavingMarket] = useState<string | null>(null);
   const [expandedMarkets, setExpandedMarkets] = useState<Set<string>>(new Set());
   const [pendingAggressiveSave, setPendingAggressiveSave] = useState<null | { marketType: MarketId; config: RuntimeConfig }>(null);
   const { strategyData, strategiesLoading, configData, configsLoading, riskData, botData } = useStrategySettings();
 
   const serverConfigs = useMemo(() => Object.fromEntries((configData?.markets ?? []).map((market: any) => [market.marketType, configFromMarket(market)])), [configData]);
-  const overrides = useMemo<Record<MarketId, RuntimeConfig | null>>(() => ({
-    crypto: cryptoOverride,
-    indian: indianOverride,
-    global: globalOverride,
-    commodities: commoditiesOverride,
-  }), [cryptoOverride, indianOverride, globalOverride, commoditiesOverride]);
   const overridesRef = useRef(overrides);
   const serverConfigsRef = useRef(serverConfigs);
   useEffect(() => {
@@ -57,13 +62,7 @@ export function StrategySettings() {
     serverConfigsRef.current = serverConfigs;
   }, [overrides, serverConfigs]);
   const setOverride = useCallback((marketType: MarketId, value: RuntimeConfig | null) => {
-    const setters = {
-      crypto: setCryptoOverride,
-      indian: setIndianOverride,
-      global: setGlobalOverride,
-      commodities: setCommoditiesOverride,
-    };
-    setters[marketType](value);
+    dispatchOverride({ marketType, value });
   }, []);
 
   const saveMutation = useMutation({
@@ -76,20 +75,31 @@ export function StrategySettings() {
     onMutate: async ({ marketType }) => {
       setSavingMarket(marketType);
       await qc.cancelQueries({ queryKey: BOT_STATUS_QUERY_KEY });
+      await qc.cancelQueries({ queryKey: QUERY_KEYS.STRATEGY_CONTEXT });
       await qc.cancelQueries({ queryKey: QUERY_KEYS.STRATEGY_CONFIGS });
-      return { previous: qc.getQueryData(QUERY_KEYS.STRATEGY_CONFIGS as any), previousBot: qc.getQueryData(BOT_STATUS_QUERY_KEY) };
+      return {
+        previousContext: qc.getQueryData(QUERY_KEYS.STRATEGY_CONTEXT as any),
+        previousConfigs: qc.getQueryData(QUERY_KEYS.STRATEGY_CONFIGS as any),
+        previousBot: qc.getQueryData(BOT_STATUS_QUERY_KEY),
+      };
     },
     onSuccess: (_data, { marketType, config }) => {
+      qc.setQueryData(QUERY_KEYS.STRATEGY_CONTEXT as any, (old: any) => {
+        if (!old?.markets) return old;
+        return { ...old, markets: old.markets.map((market: any) => (market.marketType === marketType ? { ...market, ...config, marketType } : market)) };
+      });
       qc.setQueryData(QUERY_KEYS.STRATEGY_CONFIGS as any, (old: any) => {
         if (!old?.markets) return old;
         return { ...old, markets: old.markets.map((market: any) => (market.marketType === marketType ? { ...market, ...config, marketType } : market)) };
       });
+      qc.invalidateQueries({ queryKey: QUERY_KEYS.STRATEGY_CONTEXT });
       qc.invalidateQueries({ queryKey: QUERY_KEYS.STRATEGY_CONFIGS });
       setOverride(marketType, null);
       pushToast({ tone: "success", title: `${MARKETS.find((item) => item.id === marketType)?.label ?? marketType} saved`, description: "Strategy allocation and market controls are updated." });
     },
     onError: (error: Error, _vars, context: any) => {
-      if (context?.previous) qc.setQueryData(QUERY_KEYS.STRATEGY_CONFIGS as any, context.previous);
+      if (context?.previousContext) qc.setQueryData(QUERY_KEYS.STRATEGY_CONTEXT as any, context.previousContext);
+      if (context?.previousConfigs) qc.setQueryData(QUERY_KEYS.STRATEGY_CONFIGS as any, context.previousConfigs);
       if (context?.previousBot && isValidBotSnapshot(context.previousBot)) qc.setQueryData(BOT_STATUS_QUERY_KEY, context.previousBot);
       pushToast({ tone: "error", title: "Save failed", description: error.message });
     },

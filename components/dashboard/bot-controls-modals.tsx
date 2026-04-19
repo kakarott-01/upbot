@@ -52,7 +52,13 @@ type Props = {
 export const BotControlsModals = forwardRef<BotControlsModalsRef, Props>(
   function BotControlsModals({ confirmStart, confirmMarketStop, handleStopAll }, ref) {
     const qc = useQueryClient()
-    const { data: botData } = useBotStatusQuery()
+    const { data: botData } = useBotStatusQuery({
+      select: (data) => ({
+        perMarketOpenTrades: data.perMarketOpenTrades,
+        openTradeCount: data.openTradeCount,
+        activeMarkets: data.activeMarkets,
+      }),
+    })
 
     const { data: modeData } = useQuery<ModeDataResponse>({
       queryKey: QUERY_KEYS.MARKET_MODES,

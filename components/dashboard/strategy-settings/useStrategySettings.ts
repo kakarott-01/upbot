@@ -9,13 +9,21 @@ type StrategyCatalogResponse = { strategies?: any[] }
 type StrategyCatalogSelected = StrategyCatalogResponse & { strategiesByMarket: Record<string, any[]> }
 type StrategyConfigDataResponse = { markets?: any[] }
 type RiskSettingsResponse = { paperBalance?: number }
+type StrategyContextResponse = StrategyCatalogResponse & {
+  markets?: any[]
+  riskSettings?: RiskSettingsResponse
+}
+type StrategyContextSelected = StrategyContextResponse & {
+  strategiesByMarket: Record<string, any[]>
+}
 
 export function useStrategySettings() {
-  const { data: strategyData, isLoading: strategiesLoading } = useQuery<StrategyCatalogResponse, unknown, StrategyCatalogSelected>({
-    queryKey: QUERY_KEYS.STRATEGY_CATALOG,
-    queryFn: () => apiFetch('/api/strategies'),
+  const { data: strategyContext, isLoading: contextLoading } = useQuery<StrategyContextResponse, unknown, StrategyContextSelected>({
+    queryKey: QUERY_KEYS.STRATEGY_CONTEXT,
+    queryFn: () => apiFetch('/api/strategy-context'),
+    staleTime: POLL_INTERVALS.STRATEGY,
     select: (data) => {
-      const strategies = data?.strategies ?? []
+      const strategies = data.strategies ?? []
       const MARKET_MAP: Record<string, string> = {
         crypto: 'CRYPTO',
         indian: 'STOCKS',
@@ -31,23 +39,37 @@ export function useStrategySettings() {
           }
         }
       }
-      return { strategies, strategiesByMarket }
+      return {
+        ...data,
+        strategies,
+        strategiesByMarket,
+      }
     },
   })
 
-  const { data: configData, isLoading: configsLoading } = useQuery<StrategyConfigDataResponse>({
-    queryKey: QUERY_KEYS.STRATEGY_CONFIGS,
-    queryFn: () => apiFetch('/api/strategy-config'),
-    select: (data: any) => data,
-    staleTime: POLL_INTERVALS.STRATEGY,
+  const { data: botData } = useBotStatusQuery({
+    select: (data) => ({
+      activeMarkets: data.activeMarkets,
+    }),
   })
 
-  const { data: riskData } = useQuery<RiskSettingsResponse>({
-    queryKey: QUERY_KEYS.RISK_SETTINGS,
-    queryFn: () => apiFetch('/api/risk-settings'),
-  })
+  const strategyData: StrategyCatalogSelected | undefined = strategyContext
+    ? {
+        strategies: strategyContext.strategies ?? [],
+        strategiesByMarket: strategyContext.strategiesByMarket,
+      }
+    : undefined
+  const configData: StrategyConfigDataResponse | undefined = strategyContext
+    ? { markets: strategyContext.markets ?? [] }
+    : undefined
+  const riskData: RiskSettingsResponse | undefined = strategyContext?.riskSettings
 
-  const { data: botData } = useBotStatusQuery()
-
-  return { strategyData, strategiesLoading, configData, configsLoading, riskData, botData }
+  return {
+    strategyData,
+    strategiesLoading: contextLoading,
+    configData,
+    configsLoading: contextLoading,
+    riskData,
+    botData,
+  }
 }

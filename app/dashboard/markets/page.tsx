@@ -82,7 +82,12 @@ export default function MarketsPage() {
   });
 
   // Fetch bot status to know which markets are actively running
-  const { data: botData } = useBotStatusQuery();
+  const { data: botData } = useBotStatusQuery({
+    select: (data) => ({
+      status: data.status,
+      activeMarkets: data.activeMarkets,
+    }),
+  });
 
   const botRunning      = botData?.status === 'running';
   const activeMarkets: string[] = botData?.activeMarkets ?? [];

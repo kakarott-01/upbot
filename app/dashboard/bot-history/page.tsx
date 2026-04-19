@@ -107,7 +107,8 @@ function EmptyState() {
 }
 
 // ─── Export to CSV ────────────────────────────────────────────────────────────
-function exportCSV(sessions: BotSession[], now: number) {
+function exportCSV(sessions: BotSession[]) {
+  const now = Date.now()
   const headers = ['Date', 'Start Time', 'End Time', 'Duration', 'Exchange', 'Market', 'Mode', 'Status', 'Total Trades', 'Open', 'Closed', 'P&L']
   const rows = sessions.map(s => [
     format(new Date(s.started_at), 'dd/MM/yyyy'),
@@ -153,13 +154,20 @@ function StatCard({
 
 const BotSessionRow = memo(function BotSessionRow({
   session,
-  now,
   onDelete,
 }: {
   session: BotSession
-  now: number
   onDelete: (session: BotSession) => void
 }) {
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    if (session.status !== 'running') return
+
+    const id = setInterval(() => setNow(Date.now()), 10000)
+    return () => clearInterval(id)
+  }, [session.status])
+
   const pnl = Number(session.totalPnl ?? 0)
   const duration = getDuration(session.started_at, session.stopped_at, now)
 
@@ -220,12 +228,6 @@ export default function BotHistoryPage() {
   const qc = useQueryClient()
   const pushToast = useToastStore(s => s.push)
   const showToast = (msg: string, type: 'success' | 'error' = 'success') => pushToast({ title: msg, tone: type })
-  const [now, setNow] = useState(Date.now())
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 10000)
-    return () => clearInterval(id)
-  }, [])
 
   const [page,        setPage]        = useState(1)
   const [modeFilter,  setModeFilter]  = useState<'all' | 'paper' | 'live'>('all')
@@ -304,7 +306,7 @@ export default function BotHistoryPage() {
           </p>
         </div>
         <button
-          onClick={() => exportCSV(sessions, now)}
+          onClick={() => exportCSV(sessions)}
           disabled={sessions.length === 0}
           className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-gray-400 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
@@ -412,7 +414,6 @@ export default function BotHistoryPage() {
                     <BotSessionRow
                       key={session.id}
                       session={session}
-                      now={now}
                       onDelete={setToDelete}
                     />
                   ))}

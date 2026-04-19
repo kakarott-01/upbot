@@ -59,7 +59,7 @@ function makeTickFormatter(currency: MarketCurrency) {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function PerformanceCharts({
+const PerformanceCharts = React.memo(function PerformanceCharts({
   isLoading,
   cumPnl,
   daily,
@@ -197,4 +197,8 @@ export default function PerformanceCharts({
       </div>
     </>
   )
-}
+})
+
+PerformanceCharts.displayName = 'PerformanceCharts'
+
+export default PerformanceCharts

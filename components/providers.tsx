@@ -21,19 +21,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
         if (typeof window === 'undefined') return
 
         if (error.status === 401 && window.location.pathname !== '/login') {
-          // FIX: Only show session expired for user-initiated queries, not background polling
-          // Check if query was recently active (within last 5s = user-triggered)
-          const isBackgroundPoll = query.state.fetchStatus === 'fetching' &&
-            query.state.dataUpdatedAt > 0 &&
-            Date.now() - query.state.dataUpdatedAt < 30_000
-
-          if (!isBackgroundPoll && !sessionExpiredToastShown) {
+          if (!sessionExpiredToastShown) {
             sessionExpiredToastShown = true
             notifySessionExpired()
             try {
               pushToast({ tone: 'error', title: 'Session expired', description: 'Please re-login.' })
             } catch (_) {}
-            // Reset flag after 10s so it can show again if needed
             setTimeout(() => { sessionExpiredToastShown = false }, 10_000)
           }
           return
