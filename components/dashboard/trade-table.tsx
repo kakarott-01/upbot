@@ -40,7 +40,7 @@ export function TradeTable({ trades, compact }: Props) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-gray-800">
-            {['Symbol', 'Side', 'Market', 'Entry', 'Amount', 'Exit', 'Net P&L', 'Status', 'Date'].map(h => (
+            {['Symbol', 'Side', 'Market', 'Entry', 'Amount', 'Date'].map(h => (
               <th key={h} className="text-left text-xs text-gray-600 font-medium pb-2.5 px-2 first:pl-4 last:pr-4">
                 {h}
               </th>

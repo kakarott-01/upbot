@@ -2,7 +2,7 @@
 
 import React from 'react'
 import type { Trade } from '@/components/dashboard/trade-table'
-import { getMarketCurrency, formatAmount, formatPnlAmount } from '@/lib/currency'
+import { getMarketCurrency, formatAmount } from '@/lib/currency'
 import { format } from 'date-fns'
 import { ArrowUpRight, ArrowDownRight, Trash2, CheckSquare, Square } from 'lucide-react'
 
@@ -26,8 +26,7 @@ function TradeRow({
   showMode = false,
 }: Props) {
   const currency    = getMarketCurrency(trade.marketType, trade.symbol)
-  const pnl         = Number(trade.netPnl ?? trade.pnl ?? 0)
-  const isProfit    = pnl > 0
+  // net P&L column removed for dashboard view; keep fee and amount calculations
   const amountUsed  = Number(trade.quantity ?? 0) * Number(trade.entryPrice ?? 0)
   const feeAmount   = Number(trade.feeAmount ?? 0)
 
@@ -71,35 +70,6 @@ function TradeRow({
         <div className="text-[11px] text-gray-600">qty {Number(trade.quantity ?? 0).toFixed(4)}</div>
       </td>
 
-      {/* Exit price */}
-      <td className="py-2.5 px-2 text-xs text-gray-400 font-mono">
-        {trade.exitPrice ? formatAmount(Number(trade.exitPrice), currency) : '—'}
-      </td>
-
-      {/* Net P&L */}
-      <td className="py-2.5 px-2">
-        {(trade.netPnl != null || trade.pnl != null) ? (
-          <div>
-            <span className={`text-xs font-semibold font-mono ${isProfit ? 'text-emerald-400' : 'text-red-400'}`}>
-              {formatPnlAmount(pnl, currency)}
-            </span>
-            {feeAmount > 0 && (
-              <div className="text-[11px] text-gray-600">
-                fees {formatAmount(feeAmount, currency)}
-              </div>
-            )}
-          </div>
-        ) : <span className="text-gray-600 text-xs">—</span>}
-      </td>
-
-      {/* Status */}
-      <td className="py-2.5 px-2">
-        <span className={`text-xs px-2 py-0.5 rounded-full border ${
-          trade.status === 'closed'  ? 'badge-gray' :
-          trade.status === 'open'   ? 'bg-brand-500/10 border-brand-500/20 text-brand-500' :
-          trade.status === 'failed' ? 'bg-red-900/20 border-red-800/30 text-red-400' : 'badge-gray'
-        }`}>{trade.status}</span>
-      </td>
 
       {/* Mode (optional column) */}
       {showMode ? (
