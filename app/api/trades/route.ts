@@ -10,7 +10,6 @@
 //     ON trades(user_id, status, opened_at DESC);
 
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { trades } from '@/lib/schema'
 import { eq, desc, and, gte, sql } from 'drizzle-orm'
@@ -20,6 +19,8 @@ import { boundedIntParam, dateParam } from '@/lib/api-params'
 const VALID_MARKETS = new Set(['indian', 'crypto', 'commodities', 'global', 'all'])
 const VALID_STATUSES = new Set(['pending', 'open', 'closed', 'cancelled', 'failed', 'all'])
 const VALID_MODES = new Set(['paper', 'live', 'all'])
+
+export const maxDuration = 10
 
 export async function GET(req: NextRequest) {
   let session

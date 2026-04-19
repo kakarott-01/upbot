@@ -21,7 +21,7 @@ interface BotSession {
   exchange:     string
   market:       string
   mode:         'paper' | 'live'
-  status:       'running' | 'stopped' | 'error'
+  status:       'running' | 'stopping' | 'stopped' | 'error'
   started_at:   string
   stopped_at:   string | null
   totalTrades:  number
@@ -50,14 +50,16 @@ const MARKET_LABEL: Record<string, string> = {
 const DeleteSessionModal = dynamic(() => import('@/components/modals/delete-session-modal'), { ssr: false })
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
-function StatusBadge({ status }: { status: 'running' | 'stopped' | 'error' }) {
+function StatusBadge({ status }: { status: 'running' | 'stopping' | 'stopped' | 'error' }) {
   const cfg = {
     running: 'bg-brand-500/15 border-brand-500/30 text-brand-500',
+    stopping: 'bg-amber-500/15 border-amber-500/30 text-amber-400',
     stopped: 'bg-gray-700/50 border-gray-600/30 text-gray-400',
     error:   'bg-red-900/20 border-red-800/30 text-red-400',
   }[status]
   const dot = {
     running: 'bg-brand-500 animate-pulse',
+    stopping: 'bg-amber-400 animate-pulse',
     stopped: 'bg-gray-500',
     error:   'bg-red-500',
   }[status]
@@ -159,10 +161,10 @@ const BotSessionRow = memo(function BotSessionRow({
   session: BotSession
   onDelete: (session: BotSession) => void
 }) {
-  const [now, setNow] = useState(Date.now())
+  const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
-    if (session.status !== 'running') return
+    if (session.status !== 'running' && session.status !== 'stopping') return
 
     const id = setInterval(() => setNow(Date.now()), 10000)
     return () => clearInterval(id)

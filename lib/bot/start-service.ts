@@ -1,6 +1,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db } from '@/lib/db'
 import { botSessions, botStatuses, exchangeApis, marketConfigs, trades } from '@/lib/schema'
+import { invalidateCachedBotStatusSnapshot } from '@/lib/bot/status-cache'
 import { getUserMarketStrategyConfig } from '@/lib/strategies/config-service'
 import type { MarketType } from '@/lib/strategies/types'
 import { toUtcIsoString } from '@/lib/time'
@@ -163,6 +164,8 @@ export async function startBotForUser(
       },
     })
 
+  await invalidateCachedBotStatusSnapshot(userId)
+
   if (markets.length === 0) {
     return {
       success: true,
@@ -179,7 +182,7 @@ export async function startBotForUser(
       markets,
       session_ids: sessionIds,
       started_at: toUtcIsoString(botStartedAt),
-    }, 15_000)
+    }, 8_000)
   } catch (err) {
     if (isRunning) {
       await rollbackBotSync({ userId, createdSessionIds, stoppedSessionIds, marketsToRestore: currentMarkets })
@@ -217,6 +220,7 @@ export async function rollbackBotStart(userId: string, sessionIds: string[]) {
       })
       .where(eq(botStatuses.userId, userId)),
   ])
+  await invalidateCachedBotStatusSnapshot(userId)
 }
 
 export async function rollbackBotSync(params: {
@@ -248,4 +252,5 @@ export async function rollbackBotSync(params: {
   }
 
   await Promise.all(work)
+  await invalidateCachedBotStatusSnapshot(params.userId)
 }

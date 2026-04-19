@@ -37,7 +37,7 @@ type MarketId = (typeof MARKETS)[number]["id"];
 
 type SessionItem = {
   market: string;
-  status: "running" | "stopped" | "error";
+  status: "running" | "stopping" | "stopped" | "error";
   mode?: "paper" | "live" | null;
   openTrades?: number;
 };

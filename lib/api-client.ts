@@ -1,6 +1,6 @@
 type ApiError = Error & { status?: number; data?: any }
 
-export async function apiFetch<T>(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 15_000): Promise<T> {
+export async function apiFetch<T>(input: RequestInfo | URL, init?: RequestInit, timeoutMs = 8_000): Promise<T> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
   const upstreamSignal = init?.signal

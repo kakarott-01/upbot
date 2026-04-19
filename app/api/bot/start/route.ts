@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { acquireBotLock } from '@/lib/bot-lock'
 import { startBotForUser } from '@/lib/bot/start-service'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
+import { writeCachedBotStatusSnapshot } from '@/lib/bot/status-cache'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 type MarketName = 'indian' | 'crypto' | 'commodities' | 'global'
@@ -11,6 +12,8 @@ const VALID_MARKETS = new Set<MarketName>(['indian', 'crypto', 'commodities', 'g
 function isMarketName(value: unknown): value is MarketName {
   return typeof value === 'string' && VALID_MARKETS.has(value as MarketName)
 }
+
+export const maxDuration = 10
 
 export async function POST(req: NextRequest) {
   let session
@@ -49,6 +52,7 @@ export async function POST(req: NextRequest) {
 
     await startBotForUser(session.id, rawMarkets as MarketName[])
     const { snapshot } = await getBotStatusSnapshot(session.id)
+    await writeCachedBotStatusSnapshot(session.id, snapshot)
     return NextResponse.json({
       success: true,
       ...snapshot,

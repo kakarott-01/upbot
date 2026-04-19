@@ -8,11 +8,13 @@
 // AND perMarketOpenTrades (new) so per-market stop modals show correct counts.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { _doImmediateStop } from '@/lib/bot-stop'
-import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
+import { getBotStatusSnapshot, type BotStatusSnapshotData } from '@/lib/bot/status-snapshot'
+import { readCachedBotStatusSnapshot, writeCachedBotStatusSnapshot } from '@/lib/bot/status-cache'
 import { toUtcIsoString } from '@/lib/time'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
+
+export const maxDuration = 10
 
 export async function GET(req: NextRequest) {
   let session
@@ -20,6 +22,16 @@ export async function GET(req: NextRequest) {
     session = await requireAccess()
   } catch (error) {
     return guardErrorResponse(error)
+  }
+
+  const cachedSnapshot = await readCachedBotStatusSnapshot(session.id)
+  if (cachedSnapshot) {
+    return NextResponse.json(cachedSnapshot, {
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-Cache': 'HIT',
+      },
+    })
   }
 
   const { statusRow, snapshot } = await getBotStatusSnapshot(session.id)
@@ -38,7 +50,7 @@ export async function GET(req: NextRequest) {
     }
 
     const nowIso = toUtcIsoString(now)
-    return NextResponse.json({
+    const stoppedSnapshot: BotStatusSnapshotData = {
       ...snapshot,
       status: 'stopped',
       stopMode: null,
@@ -54,8 +66,24 @@ export async function GET(req: NextRequest) {
           ? { ...item, status: 'stopped', stopped_at: nowIso }
           : item,
       ),
+    }
+
+    await writeCachedBotStatusSnapshot(session.id, stoppedSnapshot)
+
+    return NextResponse.json(stoppedSnapshot, {
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-Cache': 'MISS',
+      },
     })
   }
 
-  return NextResponse.json(snapshot)
+  await writeCachedBotStatusSnapshot(session.id, snapshot)
+
+  return NextResponse.json(snapshot, {
+    headers: {
+      'Cache-Control': 'no-store',
+      'X-Cache': 'MISS',
+    },
+  })
 }

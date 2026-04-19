@@ -8,7 +8,7 @@ export const BOT_STATUS_POLL_INTERVAL_MS = 8_000
 
 export type BotStatusSessionSnapshot = {
   market: string
-  status: 'running' | 'stopped' | 'error'
+  status: 'running' | 'stopping' | 'stopped' | 'error'
   sessionId: string | null
   mode: 'paper' | 'live' | null
   started_at: string | null
@@ -21,7 +21,7 @@ export type BotStatusSessionSnapshot = {
 }
 
 export type BotStatusSnapshot = {
-  status: 'running' | 'stopped' | 'stopping' | 'error'
+  status: 'running' | 'stopped' | 'stopping' | 'paused' | 'error'
   stopMode: string | null
   activeMarkets: string[]
   started_at: string | null

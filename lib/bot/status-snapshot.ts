@@ -5,6 +5,33 @@ import { toUtcIsoString } from '@/lib/time'
 
 const BOT_MARKETS = ['crypto', 'indian', 'global', 'commodities'] as const
 
+export type BotStatusSnapshotData = {
+  status: 'running' | 'stopped' | 'stopping' | 'paused' | 'error'
+  stopMode: string | null
+  activeMarkets: string[]
+  started_at: string | null
+  stopped_at: string | null
+  stopping_at: string | null
+  last_heartbeat: string | null
+  errorMessage: string | null
+  openTradeCount: number
+  perMarketOpenTrades: Record<string, number>
+  timeoutWarning: boolean
+  sessions: Array<{
+    market: string
+    status: 'running' | 'stopping' | 'stopped' | 'error'
+    sessionId: string | null
+    mode: 'paper' | 'live' | null
+    started_at: string | null
+    stopped_at: string | null
+    exchange: string | null
+    openTrades: number
+    totalTrades: number
+    totalPnl: string | number | null
+    metadata: unknown
+  }>
+}
+
 type BotStatusRow = Awaited<ReturnType<typeof db.query.botStatuses.findFirst>>
 type BotSessionRow = Awaited<ReturnType<typeof db.query.botSessions.findMany>>[number]
 
@@ -43,7 +70,10 @@ function buildSessions(
   })
 }
 
-export async function getBotStatusSnapshot(userId: string) {
+export async function getBotStatusSnapshot(userId: string): Promise<{
+  statusRow: BotStatusRow
+  snapshot: BotStatusSnapshotData
+}> {
   const [statusRow, sessionRows] = await Promise.all([
     db.query.botStatuses.findFirst({
       where: eq(botStatuses.userId, userId),

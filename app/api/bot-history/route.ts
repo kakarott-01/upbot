@@ -22,6 +22,8 @@ import { guardErrorResponse, requireAccess } from '@/lib/guards'
 import { boundedIntParam, dateParam } from '@/lib/api-params'
 import { redis } from '@/lib/redis'
 
+export const maxDuration = 10
+
 // ── Inline cleanup: close stale 'running' sessions if bot is stopped ─────────
 
 async function closeStaleSessions(userId: string): Promise<void> {

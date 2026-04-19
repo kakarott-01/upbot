@@ -13,6 +13,8 @@ const DEFAULT_HEALTH = {
   lastTradeAt: null as string | null,
 }
 
+export const maxDuration = 10
+
 export async function GET(req: NextRequest) {
   let session
   try {

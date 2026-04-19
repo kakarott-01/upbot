@@ -16,6 +16,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { _doImmediateStop } from '@/lib/bot-stop'
 import { acquireBotLock } from '@/lib/bot-lock'
 
+export const maxDuration = 10
+
 export async function POST(req: NextRequest) {
   // Verify the request is from the bot engine, not a user
   const secret = req.headers.get('x-bot-secret')

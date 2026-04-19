@@ -17,6 +17,10 @@ import { botStatuses, botSessions, trades } from '@/lib/schema'
 import { eq, and, sql } from 'drizzle-orm'
 import { z } from 'zod'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
+import {
+  invalidateCachedBotStatusSnapshot,
+  writeCachedBotStatusSnapshot,
+} from '@/lib/bot/status-cache'
 import { acquireBotLock } from '@/lib/bot-lock'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 import { postToBotEngine } from '@/lib/bot-engine-client'
@@ -25,6 +29,8 @@ const schema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
   mode: z.enum(['graceful', 'close_all']),
 })
+
+export const maxDuration = 10
 
 export async function POST(req: NextRequest) {
   let session
@@ -213,7 +219,9 @@ async function _handleStopMarket(
     console.warn(`[stop-market] Engine notify failed (non-fatal):`, err)
   }
 
+  await invalidateCachedBotStatusSnapshot(userId)
   const { snapshot } = await getBotStatusSnapshot(userId)
+  await writeCachedBotStatusSnapshot(userId, snapshot)
 
   return NextResponse.json({
     success: true,

@@ -21,10 +21,16 @@ import { eq, and, sql } from 'drizzle-orm'
 import { acquireBotLock } from '@/lib/bot-lock'
 import { _doImmediateStop } from '@/lib/bot-stop'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
+import {
+  invalidateCachedBotStatusSnapshot,
+  writeCachedBotStatusSnapshot,
+} from '@/lib/bot/status-cache'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 import { postToBotEngine } from '@/lib/bot-engine-client'
 
 type StopMode = 'close_all' | 'graceful'
+
+export const maxDuration = 10
 
 export async function POST(req: NextRequest) {
   let session
@@ -90,6 +96,7 @@ async function _handleStop(userId: string, mode: StopMode): Promise<NextResponse
   // Already fully stopped — idempotent success
   if (!current || current.status === 'stopped') {
     const { snapshot } = await getBotStatusSnapshot(userId)
+    await writeCachedBotStatusSnapshot(userId, snapshot)
     return NextResponse.json({ success: true, ...snapshot })
   }
 
@@ -98,6 +105,7 @@ async function _handleStop(userId: string, mode: StopMode): Promise<NextResponse
   // Already stopping in same mode — idempotent
   if (current.status === 'stopping' && !escalating) {
     const { snapshot } = await getBotStatusSnapshot(userId)
+    await writeCachedBotStatusSnapshot(userId, snapshot)
     return NextResponse.json({ success: true, ...snapshot })
   }
 
@@ -107,6 +115,7 @@ async function _handleStop(userId: string, mode: StopMode): Promise<NextResponse
   if (openCount === 0) {
     await _doImmediateStop(userId, now)
     const { snapshot } = await getBotStatusSnapshot(userId)
+    await writeCachedBotStatusSnapshot(userId, snapshot)
     return NextResponse.json({ success: true, ...snapshot })
   }
 
@@ -136,7 +145,9 @@ async function _handleStop(userId: string, mode: StopMode): Promise<NextResponse
         },
       })
 
+    await invalidateCachedBotStatusSnapshot(userId)
     const { snapshot } = await getBotStatusSnapshot(userId)
+    await writeCachedBotStatusSnapshot(userId, snapshot)
     return NextResponse.json({ success: true, ...snapshot })
   }
 
@@ -165,7 +176,9 @@ async function _handleStop(userId: string, mode: StopMode): Promise<NextResponse
       },
     })
 
+  await invalidateCachedBotStatusSnapshot(userId)
   const { snapshot } = await getBotStatusSnapshot(userId)
+  await writeCachedBotStatusSnapshot(userId, snapshot)
   return NextResponse.json({ success: true, ...snapshot })
 }
 

@@ -6,7 +6,6 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { NextRequest, NextResponse }           from 'next/server'
-import { auth }                                 from '@/lib/auth'
 import { db }                                   from '@/lib/db'
 import { marketConfigs, modeAuditLogs } from '@/lib/schema'
 import { eq, and }                              from 'drizzle-orm'
@@ -16,6 +15,9 @@ import { verifySecureToken }                    from '@/lib/secure-token'  // FI
 import { assertBotStoppedForSensitiveMutation } from '@/lib/strategies/locks'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
 import { getBotStatusSnapshot } from '@/lib/bot/status-snapshot'
+import { readCachedBotStatusSnapshot, writeCachedBotStatusSnapshot } from '@/lib/bot/status-cache'
+
+export const maxDuration = 10
 
 const switchSchema = z.object({
   marketType: z.enum(['indian', 'crypto', 'commodities', 'global']),
@@ -31,18 +33,24 @@ export async function GET(req: NextRequest) {
     return guardErrorResponse(error)
   }
 
-  const configs = await db.query.marketConfigs.findMany({
-    where: eq(marketConfigs.userId, session.id),
-    columns: {
-      marketType: true,
-      mode:       true,
-      paperMode:  true,
-      isActive:   true,
-      updatedAt:  true,
-    },
-  })
+  const [configs, cachedSnapshot] = await Promise.all([
+    db.query.marketConfigs.findMany({
+      where: eq(marketConfigs.userId, session.id),
+      columns: {
+        marketType: true,
+        mode:       true,
+        paperMode:  true,
+        isActive:   true,
+        updatedAt:  true,
+      },
+    }),
+    readCachedBotStatusSnapshot(session.id),
+  ])
 
-  const { snapshot } = await getBotStatusSnapshot(session.id)
+  const snapshot = cachedSnapshot ?? (await getBotStatusSnapshot(session.id)).snapshot
+  if (!cachedSnapshot) {
+    await writeCachedBotStatusSnapshot(session.id, snapshot)
+  }
 
   return NextResponse.json({
     botRunning:    snapshot.status === 'running' || snapshot.status === 'stopping',

@@ -12,11 +12,13 @@
 //   doesn't block the rest.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { botStatuses, botSessions, trades } from '@/lib/schema'
 import { eq, and, sql } from 'drizzle-orm'
+import { invalidateCachedBotStatusSnapshot } from '@/lib/bot/status-cache'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
+
+export const maxDuration = 10
 
 export async function POST(req: NextRequest) {
   let session
@@ -93,5 +95,8 @@ export async function POST(req: NextRequest) {
   }
 
   console.info(`[cleanup] Closed ${cleaned} stale sessions for user=${session.id}`)
+  if (cleaned > 0) {
+    await invalidateCachedBotStatusSnapshot(session.id)
+  }
   return NextResponse.json({ cleaned })
 }

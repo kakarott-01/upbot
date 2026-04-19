@@ -8,6 +8,8 @@ import { guardErrorResponse, requireAccess } from '@/lib/guards'
 
 const MARKETS = ['indian', 'crypto', 'commodities', 'global'] as const
 
+export const maxDuration = 10
+
 export async function GET() {
   let session
   try {

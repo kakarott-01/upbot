@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { db } from '@/lib/db'
 import { trades } from '@/lib/schema'
 import { eq, and, sql } from 'drizzle-orm'
 import { guardErrorResponse, requireAccess } from '@/lib/guards'
+
+export const maxDuration = 10
 
 export async function GET(req: NextRequest) {
   let session

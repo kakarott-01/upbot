@@ -9,7 +9,7 @@ interface BotSession {
   exchange:     string
   market:       string
   mode:         'paper' | 'live'
-  status:       'running' | 'stopped' | 'error'
+  status:       'running' | 'stopping' | 'stopped' | 'error'
   started_at:   string
   stopped_at:   string | null
   totalTrades:  number

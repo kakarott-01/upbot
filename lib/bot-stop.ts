@@ -9,6 +9,7 @@
 
 import { db } from '@/lib/db'
 import { botStatuses, botSessions, trades } from '@/lib/schema'
+import { invalidateCachedBotStatusSnapshot } from '@/lib/bot/status-cache'
 import { eq, and, sql } from 'drizzle-orm'
 import { postToBotEngine } from '@/lib/bot-engine-client'
 
@@ -36,6 +37,8 @@ export async function _doImmediateStop(userId: string, now: Date) {
     // Another instance already completed the stop, or bot was already stopped.
     return
   }
+
+  await invalidateCachedBotStatusSnapshot(userId)
 
   // ── Notify engine (best-effort) ────────────────────────────────────────
   postToBotEngine('/bot/stop', { user_id: userId }, 8_000).catch(() => null)

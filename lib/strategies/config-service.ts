@@ -166,17 +166,11 @@ export async function upsertUserMarketStrategyConfig(params: {
     params.positionMode,
   )
 
-  const existing = await db.query.marketStrategyConfigs.findFirst({
-    where: and(
-      eq(marketStrategyConfigs.userId, params.userId),
-      eq(marketStrategyConfigs.marketType, params.marketType),
-    ),
-    columns: { id: true },
-  })
-
   const now = new Date()
-  const configId = existing?.id ?? (
-    await db.insert(marketStrategyConfigs).values({
+  await db.transaction(async (tx) => {
+    // Keep the config row and selection replacement atomic so retries or
+    // overlapping saves cannot leave a market with partially deleted selections.
+    const configRows = await tx.insert(marketStrategyConfigs).values({
       userId: params.userId,
       marketType: params.marketType,
       executionMode: params.executionMode,
@@ -190,12 +184,9 @@ export async function upsertUserMarketStrategyConfig(params: {
       conflictWarnings: conflicts,
       exchangeCapabilities,
       updatedAt: now,
-    }).returning({ id: marketStrategyConfigs.id })
-  )[0].id
-
-  if (existing) {
-    await db.update(marketStrategyConfigs)
-      .set({
+    }).onConflictDoUpdate({
+      target: [marketStrategyConfigs.userId, marketStrategyConfigs.marketType],
+      set: {
         executionMode: params.executionMode,
         positionMode: exchangeCapabilities.effectivePositionMode,
         allowHedgeOpposition: params.allowHedgeOpposition && exchangeCapabilities.effectivePositionMode === 'HEDGE',
@@ -207,45 +198,50 @@ export async function upsertUserMarketStrategyConfig(params: {
         conflictWarnings: conflicts,
         exchangeCapabilities,
         updatedAt: now,
-      })
-      .where(eq(marketStrategyConfigs.id, existing.id))
-  }
+      },
+    }).returning({ id: marketStrategyConfigs.id })
 
-  await db.delete(marketStrategySelections).where(eq(marketStrategySelections.configId, configId))
+    const configId = configRows[0]?.id
+    if (!configId) {
+      throw new Error('Failed to persist strategy configuration.')
+    }
 
-  if (strategyRows.length > 0) {
-    const byKey = new Map(strategyRows.map((row) => [row.strategyKey, row.id]))
-    await db.insert(marketStrategySelections).values(
-      params.strategyKeys.map((key, index) => ({
-        ...(params.strategySettings[key] ? {
-          priority: params.strategySettings[key].priority,
-          cooldownAfterTradeSec: params.strategySettings[key].cooldownAfterTradeSec,
-          perTradePercent: params.strategySettings[key].capitalAllocation.perTradePercent.toFixed(2),
-          maxActivePercent: params.strategySettings[key].capitalAllocation.maxActivePercent.toFixed(2),
-          healthMinWinRatePct: params.strategySettings[key].health.minWinRatePct.toFixed(2),
-          healthMaxDrawdownPct: params.strategySettings[key].health.maxDrawdownPct.toFixed(2),
-          healthMaxLossStreak: params.strategySettings[key].health.maxLossStreak,
-          isAutoDisabled: params.strategySettings[key].health.isAutoDisabled,
-          autoDisabledReason: params.strategySettings[key].health.autoDisabledReason ?? null,
-          lastTradeAt: params.strategySettings[key].health.lastTradeAt ? new Date(params.strategySettings[key].health.lastTradeAt) : null,
-        } : {
-          priority: DEFAULT_STRATEGY_SETTINGS.priority,
-          cooldownAfterTradeSec: DEFAULT_STRATEGY_SETTINGS.cooldownAfterTradeSec,
-          perTradePercent: DEFAULT_STRATEGY_SETTINGS.capitalAllocation.perTradePercent.toFixed(2),
-          maxActivePercent: DEFAULT_STRATEGY_SETTINGS.capitalAllocation.maxActivePercent.toFixed(2),
-          healthMinWinRatePct: DEFAULT_STRATEGY_SETTINGS.health.minWinRatePct.toFixed(2),
-          healthMaxDrawdownPct: DEFAULT_STRATEGY_SETTINGS.health.maxDrawdownPct.toFixed(2),
-          healthMaxLossStreak: DEFAULT_STRATEGY_SETTINGS.health.maxLossStreak,
-          isAutoDisabled: false,
-          autoDisabledReason: null,
-          lastTradeAt: null,
-        }),
-        configId,
-        strategyId: byKey.get(key)!,
-        slot: (index === 0 ? 'PRIMARY' : 'SECONDARY') as 'PRIMARY' | 'SECONDARY',
-      })),
-    )
-  }
+    await tx.delete(marketStrategySelections).where(eq(marketStrategySelections.configId, configId))
+
+    if (strategyRows.length > 0) {
+      const byKey = new Map(strategyRows.map((row) => [row.strategyKey, row.id]))
+      await tx.insert(marketStrategySelections).values(
+        params.strategyKeys.map((key, index) => ({
+          ...(params.strategySettings[key] ? {
+            priority: params.strategySettings[key].priority,
+            cooldownAfterTradeSec: params.strategySettings[key].cooldownAfterTradeSec,
+            perTradePercent: params.strategySettings[key].capitalAllocation.perTradePercent.toFixed(2),
+            maxActivePercent: params.strategySettings[key].capitalAllocation.maxActivePercent.toFixed(2),
+            healthMinWinRatePct: params.strategySettings[key].health.minWinRatePct.toFixed(2),
+            healthMaxDrawdownPct: params.strategySettings[key].health.maxDrawdownPct.toFixed(2),
+            healthMaxLossStreak: params.strategySettings[key].health.maxLossStreak,
+            isAutoDisabled: params.strategySettings[key].health.isAutoDisabled,
+            autoDisabledReason: params.strategySettings[key].health.autoDisabledReason ?? null,
+            lastTradeAt: params.strategySettings[key].health.lastTradeAt ? new Date(params.strategySettings[key].health.lastTradeAt) : null,
+          } : {
+            priority: DEFAULT_STRATEGY_SETTINGS.priority,
+            cooldownAfterTradeSec: DEFAULT_STRATEGY_SETTINGS.cooldownAfterTradeSec,
+            perTradePercent: DEFAULT_STRATEGY_SETTINGS.capitalAllocation.perTradePercent.toFixed(2),
+            maxActivePercent: DEFAULT_STRATEGY_SETTINGS.capitalAllocation.maxActivePercent.toFixed(2),
+            healthMinWinRatePct: DEFAULT_STRATEGY_SETTINGS.health.minWinRatePct.toFixed(2),
+            healthMaxDrawdownPct: DEFAULT_STRATEGY_SETTINGS.health.maxDrawdownPct.toFixed(2),
+            healthMaxLossStreak: DEFAULT_STRATEGY_SETTINGS.health.maxLossStreak,
+            isAutoDisabled: false,
+            autoDisabledReason: null,
+            lastTradeAt: null,
+          }),
+          configId,
+          strategyId: byKey.get(key)!,
+          slot: (index === 0 ? 'PRIMARY' : 'SECONDARY') as 'PRIMARY' | 'SECONDARY',
+        })),
+      )
+    }
+  })
 
   return getUserMarketStrategyConfig(params.userId, params.marketType)
 }
