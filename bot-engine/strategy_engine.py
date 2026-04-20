@@ -168,6 +168,12 @@ def _run_single_strategy_backtest(
     trades: List[Dict] = []
     position = None
     settings = (strategy_settings or {}).get(strategy_key or (strategy_keys[0] if strategy_keys else ""), {})
+    configured_position_pct = (
+        settings.get("risk_pct_per_trade")
+        if settings.get("risk_pct_per_trade") is not None
+        else (settings.get("capital_allocation", {}) or {}).get("per_trade_percent", 10.0)
+    )
+    position_size_fraction = max(0.0, min(float(configured_position_pct) / 100.0, 1.0))
     cooldown_after_trade_sec = int(settings.get("cooldown_after_trade_sec", 0) or 0)
     last_trade_time = None
 
@@ -194,8 +200,9 @@ def _run_single_strategy_backtest(
                 execution_price = float(df["open"].iloc[execution_index])
                 exit_price = execution_price * (1 - slippage_pct / 100) if position["side"] == "BUY" else execution_price * (1 + slippage_pct / 100)
                 pnl_pct = _calc_pct(position["side"], position["entry_price"], exit_price)
-                gross_pnl = (equity * (pnl_pct / 100))
-                fees = (equity * fee_rate) + (abs(gross_pnl) * fee_rate)
+                position_notional = float(position.get("position_notional", position["capital_base"] * position_size_fraction))
+                gross_pnl = position_notional * (pnl_pct / 100)
+                fees = (position_notional * fee_rate) * 2
                 net_pnl = gross_pnl - fees
                 equity += net_pnl
                 trades.append({
@@ -222,6 +229,13 @@ def _run_single_strategy_backtest(
                     continue
             signal = executor.evaluate(window, strategy_keys, execution_mode)
             if signal in ("BUY", "SELL"):
+                position_notional = equity * position_size_fraction
+                if position_notional <= 0:
+                    equity_curve.append({
+                        "timestamp": ts.isoformat(),
+                        "equity": round(equity, 2),
+                    })
+                    continue
                 execution_index = min(idx + execution_delay_bars, len(df) - 1)
                 execution_price = float(df["open"].iloc[execution_index])
                 entry_price = execution_price * (1 + slippage_pct / 100) if signal == "BUY" else execution_price * (1 - slippage_pct / 100)
@@ -231,6 +245,7 @@ def _run_single_strategy_backtest(
                     "entry_index": idx,
                     "entry_time": ts,
                     "capital_base": equity,
+                    "position_notional": position_notional,
                 }
 
         equity_curve.append({

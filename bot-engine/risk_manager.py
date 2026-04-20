@@ -203,7 +203,7 @@ class RiskManager:
         balance: float,
         position_count_for_symbol: int,
         strategy_capital_pct: float,
-        drawdown_pct: float,
+        daily_loss_pct: float,
     ) -> tuple[bool, str]:
         ok, reason = self.can_trade(balance)
         if not ok:
@@ -218,11 +218,10 @@ class RiskManager:
                 f"{self.cfg.max_capital_per_strategy_pct:.2f}%"
             )
 
-        # Hedge mode can offset directional risk, but it also increases
-        # operational complexity and margin usage. We hard-stop new entries
-        # once the strategy drawdown breaches the configured threshold.
-        if drawdown_pct >= self.cfg.max_drawdown_pct:
-            return False, f"Drawdown limit ({self.cfg.max_drawdown_pct:.2f}%) reached"
+        # This acts as an intraday circuit breaker based on realized daily loss %.
+        # It is separate from true peak-to-trough drawdown tracking.
+        if daily_loss_pct >= self.cfg.max_drawdown_pct:
+            return False, f"Daily loss circuit breaker ({self.cfg.max_drawdown_pct:.2f}%) reached"
 
         return True, "ok"
 

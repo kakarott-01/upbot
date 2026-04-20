@@ -1291,11 +1291,12 @@ class BaseAlgo(ABC):
                 )
                 proposed_notional = float(trade_plan["actual_notional"])
                 strategy_capital_pct = ((strategy_exposure + proposed_notional) / balance * 100) if balance > 0 else 0.0
+                daily_loss_pct = max(0.0, abs(self.risk.daily_loss) / balance * 100) if balance > 0 else 0.0
                 can_trade, reason = self.risk.can_open_position(
                     balance=balance,
                     position_count_for_symbol=len(open_trades_for_symbol),
                     strategy_capital_pct=strategy_capital_pct,
-                    drawdown_pct=max(0.0, abs(self.risk.daily_loss) / balance * 100) if balance > 0 else 0.0,
+                    daily_loss_pct=daily_loss_pct,
                 )
                 if not can_trade:
                     if hasattr(self, "_discard_staged_open"):

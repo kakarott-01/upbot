@@ -69,6 +69,16 @@ class LeverageMixin:
         qty         = round(notional / max(price, 1e-10), 8)
         sl_dist_pct = risk_amount / max(notional, 1e-10)  # = 1/leverage
 
+        liq_dist = max((1.0 / leverage) - 0.005, 0.001)
+        if sl_dist_pct >= liq_dist:
+            logger.warning(
+                "LeverageMixin: sl_dist_pct=%.4f >= liq_dist=%.4f at %dx leverage. "
+                "SL is at or beyond liquidation. Use _build_level_plan instead.",
+                sl_dist_pct,
+                liq_dist,
+                leverage,
+            )
+
         logger.debug(
             "LeverageMixin: balance=%.2f risk_pct=%.3f risk_amount=%.4f "
             "leverage=%d× notional=%.4f qty=%.8f sl_dist_pct=%.6f",

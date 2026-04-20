@@ -476,7 +476,11 @@ class Database:
         pool = await self.pool()
         open_row = await pool.fetchrow(
             """SELECT
-                 COALESCE(SUM(COALESCE(remaining_quantity, quantity) * entry_price), 0) AS total_exposure,
+                                 COALESCE(SUM(
+                                     COALESCE(remaining_quantity, quantity)
+                                     * entry_price
+                                     * COALESCE(NULLIF(metadata->>'leverage', '')::numeric, 1)
+                                 ), 0) AS total_exposure,
                  COUNT(*)::int AS open_positions
                FROM trades
                WHERE user_id=$1 AND status='open'""",
