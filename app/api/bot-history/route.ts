@@ -43,7 +43,7 @@ async function closeStaleSessions(userId: string): Promise<void> {
     const stale = await db.query.botSessions.findMany({
       where: and(
         eq(botSessions.userId, userId),
-        eq(botSessions.status, 'running'),
+        sql`${botSessions.status} IN ('running', 'stopping')`,
       ),
     })
 
@@ -72,10 +72,13 @@ async function closeStaleSessions(userId: string): Promise<void> {
       const row = statsByMarket.get(s.market as (typeof allStats)[number]['market']) ?? emptyStats
 
       try {
+        const shouldFinalizeStopped = !status || status.status === 'stopped' || row.open === 0
+        const nextStatus = shouldFinalizeStopped ? 'stopped' : 'stopping'
+
         await db.update(botSessions)
           .set({
-            status:       'stopped',
-            endedAt:      now,
+            status:       nextStatus,
+            endedAt:      shouldFinalizeStopped ? now : null,
             totalTrades:  row.total,
             openTrades:   row.open,
             closedTrades: row.closed,
@@ -157,7 +160,7 @@ export async function GET(req: NextRequest) {
 
   // For sessions still running: enrich with live trade count, bounded correctly
   const enriched = await Promise.all(rows.map(async (s) => {
-    if (s.status !== 'running') return s
+    if (s.status !== 'running' && s.status !== 'stopping') return s
 
     try {
       const now = new Date()
@@ -180,8 +183,11 @@ export async function GET(req: NextRequest) {
         ))
 
       const row = stats[0]
+      const shouldMarkStopped = s.status === 'stopping' && (row?.open ?? 0) === 0
       return {
         ...s,
+        status: shouldMarkStopped ? 'stopped' : s.status,
+        endedAt: shouldMarkStopped ? now : s.endedAt,
         totalTrades:  row?.total  ?? 0,
         openTrades:   row?.open   ?? 0,
         closedTrades: row?.closed ?? 0,

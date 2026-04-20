@@ -36,12 +36,20 @@ export async function GET(req: NextRequest) {
 
   const { statusRow, snapshot } = await getBotStatusSnapshot(session.id)
 
-  // ── Auto-detect graceful drain completion ─────────────────────────────────
-  if (
-    statusRow?.status === 'stopping' &&
-    statusRow.stopMode === 'graceful' &&
-    snapshot.openTradeCount === 0
-  ) {
+  // ── Auto-detect stop completion ───────────────────────────────────────────
+  // 1) stopping + no open trades => fully stopped
+  // 2) running + no active markets + no open trades => stale running row
+  const shouldCompleteStop =
+    Boolean(statusRow) && (
+      (statusRow?.status === 'stopping' && snapshot.openTradeCount === 0) ||
+      (
+        statusRow?.status === 'running' &&
+        snapshot.activeMarkets.length === 0 &&
+        snapshot.openTradeCount === 0
+      )
+    )
+
+  if (shouldCompleteStop) {
     const now = new Date()
     try {
       await _doImmediateStop(session.id, now)
@@ -62,7 +70,7 @@ export async function GET(req: NextRequest) {
       perMarketOpenTrades: {},
       timeoutWarning: false,
       sessions: snapshot.sessions.map((item) =>
-        item.status === 'running'
+        item.status === 'running' || item.status === 'stopping'
           ? { ...item, status: 'stopped', stopped_at: nowIso }
           : item,
       ),

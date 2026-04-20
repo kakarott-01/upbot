@@ -51,10 +51,11 @@ function buildSessions(
   return BOT_MARKETS.map((market) => {
     const row = latestSessionByMarket.get(market)
     const isActive = activeMarketsSet.has(market)
+    const sessionStatus = row?.status ?? (isActive ? 'running' : 'stopped')
 
     return {
       market,
-      status: isActive ? 'running' : row?.status ?? 'stopped',
+      status: sessionStatus,
       sessionId: row?.id ?? null,
       mode: row?.mode ?? null,
       started_at: toUtcIsoString(
@@ -85,10 +86,11 @@ export async function getBotStatusSnapshot(userId: string): Promise<{
     }),
   ])
 
-  // Derive active markets from sessions to avoid duplicated/racy state
+  // Treat only explicitly running sessions as active markets.
+  // Stopping sessions are draining and should not be shown as running markets.
   const activeMarketsSet = new Set<string>()
   for (const s of sessionRows) {
-    if (s.status === 'running' || s.status === 'stopping') {
+    if (s.status === 'running') {
       activeMarketsSet.add(s.market)
     }
   }

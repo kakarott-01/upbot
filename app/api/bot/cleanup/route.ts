@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
   const stale = await db.query.botSessions.findMany({
     where: and(
       eq(botSessions.userId, session.id),
-      eq(botSessions.status, 'running'),
+      sql`${botSessions.status} IN ('running', 'stopping')`,
     ),
   })
 
@@ -77,10 +77,13 @@ export async function POST(req: NextRequest) {
         ))
 
       const row = stats[0]
+      const shouldFinalizeStopped = !status || status.status === 'stopped' || (row?.open ?? 0) === 0
+      const nextStatus = shouldFinalizeStopped ? 'stopped' : 'stopping'
+
       await db.update(botSessions)
         .set({
-          status:       'stopped',
-          endedAt:      now,
+          status:       nextStatus,
+          endedAt:      shouldFinalizeStopped ? now : null,
           totalTrades:  row?.total  ?? 0,
           openTrades:   row?.open   ?? 0,
           closedTrades: row?.closed ?? 0,
