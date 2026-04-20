@@ -10,7 +10,7 @@ Changes from v1:
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from algorithms.base_algo import BaseAlgo
@@ -143,7 +143,7 @@ class ConfiguredMultiStrategyAlgo(LeverageMixin, BaseAlgo):
             if open_row and symbol not in self._open_positions:
                 opened_at = open_row["opened_at"]
                 if hasattr(opened_at, "tzinfo") and opened_at.tzinfo is not None:
-                    opened_at = opened_at.replace(tzinfo=None)
+                    opened_at = opened_at.astimezone(timezone.utc).replace(tzinfo=None)
                 metadata = open_row.get("metadata") or {}
                 self._open_positions[symbol] = {
                     "signal":      open_row["side"].upper(),
@@ -265,11 +265,20 @@ class ConfiguredMultiStrategyAlgo(LeverageMixin, BaseAlgo):
                 self._close(symbol)
                 return "BUY" if side == "SELL" else "SELL"
 
+        confidence = float(pos.get("confidence", 50.0))
+        from confidence_engine import hold_hours_from_score
+        hold_hours = hold_hours_from_score(confidence)
+
+        timed_out = (datetime.utcnow() - opened_at) > timedelta(hours=hold_hours)
         reverse = (side == "BUY" and decision == "SELL") or \
                   (side == "SELL" and decision == "BUY")
-        timed_out = (datetime.utcnow() - opened_at) > timedelta(hours=6)
 
         if reverse or timed_out:
+            logger.info(
+                f"[{self.name}] ⏱ EXIT {symbol}: "
+                f"reason={'REVERSE' if reverse else 'TIMEOUT'} "
+                f"hold={hold_hours}h conf={confidence:.1f}"
+            )
             self._close(symbol)
             return "BUY" if side == "SELL" else "SELL"
         return None

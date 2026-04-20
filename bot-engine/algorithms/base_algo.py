@@ -519,6 +519,13 @@ class BaseAlgo(ABC):
                 raise ValueError(
                     f"SL too close to liquidation (entry={entry_price:.8f} liq={liquidation_price:.8f} sl={level_plan['stop_loss']:.8f})"
                 )
+        logger.info(
+            f"[{self.name}] 📐 TRADE PLAN: {symbol} {side} "
+            f"lev={leverage}× | margin={risk_amount:.4f} | "
+            f"notional={notional:.4f} | qty={quantity:.8f} | "
+            f"entry={entry_price:.4f} | "
+            f"SL={level_plan['stop_loss']:.4f} | TP={level_plan['take_profit']:.4f}"
+        )
         return {
             "risk_amount": risk_amount,
             "margin_used": risk_amount,
@@ -1115,7 +1122,24 @@ class BaseAlgo(ABC):
         )
 
         if self._paper_mode:
-            balance = await self.db.get_paper_balance(self.user_id)
+            raw_balance = await self.db.get_paper_balance(self.user_id)
+            open_trades = await self.db.get_all_open_trades(
+                self.user_id, self.market_type, self.position_scope_key
+            )
+            margin_in_use = 0.0
+            for t in open_trades:
+                meta = t.get("metadata") or {}
+                lev = int(meta.get("leverage", 1)) if isinstance(meta, dict) else 1
+                entry = float(t.get("entry_price", 0))
+                qty = float(t.get("remaining_quantity") or t.get("quantity") or 0)
+                margin_in_use += (entry * qty) / max(lev, 1)
+            balance = max(0.0, raw_balance - margin_in_use)
+            if balance <= 0:
+                logger.warning(
+                    f"[{self.name}] ⚠️ Paper capital fully deployed "
+                    f"(margin_in_use={margin_in_use:.2f})"
+                )
+                return
         else:
             balance = await self.connector.fetch_available_margin(
                 self.config.get("quote_currency", "USDT")
@@ -1224,6 +1248,13 @@ class BaseAlgo(ABC):
                 staged = getattr(self, "_staged_open", {}).get(symbol, {})
                 if staged:
                     leverage = int(staged.get("leverage", 1) or 1)
+                    confidence = float(staged.get("confidence", 0.0))
+                    risk_amount = balance * self._risk_pct_fraction()
+                    logger.info(
+                        f"[{self.name}] ⚡ LEVERAGE: {symbol} "
+                        f"conf={confidence:.1f} → {leverage}× | "
+                        f"risk={risk_amount:.2f} → notional={risk_amount * leverage:.2f}"
+                    )
                 trade_plan = await self._build_trade_plan(symbol, signal, balance, price, leverage)
                 quantity = float(trade_plan["quantity"])
 
